@@ -1,0 +1,30 @@
+# E2E Dockerfile — builds pm-controller-aggregator from repo root context.
+# Usage: docker build -t pm-controller-aggregator:e2e -f controller/Dockerfile.aggregator.e2e .
+FROM golang:1.22 AS builder
+
+WORKDIR /workspace
+
+# Copy go mod files from controller subdirectory
+COPY controller/go.mod controller/go.sum ./
+
+# Copy the local api module (required by replace directive in go.mod)
+COPY api/ ../api/
+
+RUN go mod download
+
+# Copy source code from controller subdirectory
+COPY controller/cmd/ cmd/
+COPY controller/internal/ internal/
+COPY controller/pkg/ pkg/
+
+# Build the aggregator controller
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-aggregator ./cmd/aggregator/
+
+# Runtime stage
+FROM gcr.io/distroless/static:nonroot
+
+WORKDIR /
+COPY --from=builder /workspace/pm-controller-aggregator .
+USER 65532:65532
+
+ENTRYPOINT ["/pm-controller-aggregator"]

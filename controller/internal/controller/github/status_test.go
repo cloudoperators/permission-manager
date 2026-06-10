@@ -1,0 +1,505 @@
+package github
+
+import (
+	"context"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	pmv1 "github.com/cloudoperators/permission-manager/api/v1"
+)
+
+func newStatusTestScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(s)
+	_ = pmv1.AddToScheme(s)
+	_ = AddToScheme(s)
+	return s
+}
+
+func TestMapTeamStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		teamStatus     string
+		expectedStatus string
+		expectMessage  bool
+	}{
+		{
+			name:           "complete maps to Success",
+			teamStatus:     "complete",
+			expectedStatus: targetStatusSuccess,
+			expectMessage:  false,
+		},
+		{
+			name:           "failed maps to Error",
+			teamStatus:     "failed",
+			expectedStatus: targetStatusError,
+			expectMessage:  true,
+		},
+		{
+			name:           "pending maps to Pending",
+			teamStatus:     "pending",
+			expectedStatus: targetStatusPending,
+			expectMessage:  true,
+		},
+		{
+			name:           "ratelimited maps to Pending",
+			teamStatus:     "ratelimited",
+			expectedStatus: targetStatusPending,
+			expectMessage:  true,
+		},
+		{
+			name:           "empty string maps to Pending",
+			teamStatus:     "",
+			expectedStatus: targetStatusPending,
+			expectMessage:  true,
+		},
+		{
+			name:           "unknown value maps to Pending",
+			teamStatus:     "unknown-xyz",
+			expectedStatus: targetStatusPending,
+			expectMessage:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, message := mapTeamStatus(tt.teamStatus)
+			if status != tt.expectedStatus {
+				t.Errorf("expected status %q, got %q", tt.expectedStatus, status)
+			}
+			if tt.expectMessage && message == "" {
+				t.Error("expected non-empty message")
+			}
+			if !tt.expectMessage && message != "" {
+				t.Errorf("expected empty message, got %q", message)
+			}
+		})
+	}
+}
+
+func TestComputeProviderStatus_NoTargets(t *testing.T) {
+	scheme := newStatusTestScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+	desired := &DesiredState{Teams: nil, TeamRepos: nil}
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	if !status.Ready {
+		t.Error("expected Ready=true for no targets")
+	}
+	if status.Message != "no targets" {
+		t.Errorf("expected message 'no targets', got %q", status.Message)
+	}
+	if len(status.Targets) != 0 {
+		t.Errorf("expected 0 targets, got %d", len(status.Targets))
+	}
+}
+
+func TestComputeProviderStatus_AllComplete(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("test-asr", "github.example.com", "my-org")},
+			{Instance: "github.com", Org: "other-org", CRName: TeamCRName("test-asr", "github.com", "other-org")},
+		},
+	}
+
+	// Create GithubTeam CRs with "complete" status
+	team1 := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "complete"},
+	}
+	team1.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	team2 := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.com", "other-org"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "complete"},
+	}
+	team2.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team1, team2).
+		Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	if !status.Ready {
+		t.Errorf("expected Ready=true, got false; message=%q", status.Message)
+	}
+	if len(status.Targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(status.Targets))
+	}
+	for _, target := range status.Targets {
+		if target.Status != targetStatusSuccess {
+			t.Errorf("target %q: expected Success, got %q", target.TargetID, target.Status)
+		}
+	}
+}
+
+func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "org-a", CRName: TeamCRName("test-asr", "github.example.com", "org-a")},
+			{Instance: "github.example.com", Org: "org-b", CRName: TeamCRName("test-asr", "github.example.com", "org-b")},
+			{Instance: "github.example.com", Org: "org-c", CRName: TeamCRName("test-asr", "github.example.com", "org-c")},
+		},
+	}
+
+	teamComplete := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "org-a"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "complete"},
+	}
+	teamComplete.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	teamFailed := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "org-b"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "failed"},
+	}
+	teamFailed.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	teamRatelimited := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "org-c"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "ratelimited"},
+	}
+	teamRatelimited.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(teamComplete, teamFailed, teamRatelimited).
+		Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	if status.Ready {
+		t.Error("expected Ready=false for mixed statuses")
+	}
+	if len(status.Targets) != 3 {
+		t.Fatalf("expected 3 targets, got %d", len(status.Targets))
+	}
+
+	// Targets are sorted by instance/org
+	expectStatuses := map[string]string{
+		SanitizeInstance("github.example.com") + "/org-a": targetStatusSuccess,
+		SanitizeInstance("github.example.com") + "/org-b": targetStatusError,
+		SanitizeInstance("github.example.com") + "/org-c": targetStatusPending,
+	}
+
+	for _, target := range status.Targets {
+		expected, ok := expectStatuses[target.TargetID]
+		if !ok {
+			t.Errorf("unexpected target ID %q", target.TargetID)
+			continue
+		}
+		if target.Status != expected {
+			t.Errorf("target %q: expected %q, got %q", target.TargetID, expected, target.Status)
+		}
+	}
+}
+
+func TestComputeProviderStatus_MissingTeamCR(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("test-asr", "github.example.com", "my-org")},
+		},
+	}
+
+	// No GithubTeam CRs exist
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	if status.Ready {
+		t.Error("expected Ready=false when team CR is missing")
+	}
+	if len(status.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(status.Targets))
+	}
+	if status.Targets[0].Status != targetStatusPending {
+		t.Errorf("expected Pending, got %q", status.Targets[0].Status)
+	}
+}
+
+func TestComputeProviderStatus_TargetIDFormat(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("test-asr", "github.example.com", "my-org")},
+		},
+	}
+
+	team := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "complete"},
+	}
+	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team).
+		Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	expectedTargetID := "github-example-com/my-org"
+	if len(status.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(status.Targets))
+	}
+	if status.Targets[0].TargetID != expectedTargetID {
+		t.Errorf("expected targetID %q, got %q", expectedTargetID, status.Targets[0].TargetID)
+	}
+}
+
+func TestComputeProviderStatus_DeduplicatesInstanceOrg(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	// Same instance/org in both Teams and TeamRepos
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("test-asr", "github.example.com", "my-org")},
+		},
+		TeamRepos: []DesiredTeamRepo{
+			{Instance: "github.example.com", Org: "my-org", Permission: "push",
+				Repositories: []string{"repo1"}, CRName: TeamRepoCRName("test-asr", "github.example.com", "my-org", "push")},
+		},
+	}
+
+	team := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "complete"},
+	}
+	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team).
+		Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	// Should only have 1 target even though the same instance/org appears in both slices
+	if len(status.Targets) != 1 {
+		t.Errorf("expected 1 deduplicated target, got %d", len(status.Targets))
+	}
+}
+
+func TestComputeProviderStatus_PendingStatus(t *testing.T) {
+	scheme := newStatusTestScheme()
+
+	asr := &pmv1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-asr", Namespace: "default"},
+	}
+
+	desired := &DesiredState{
+		Teams: []DesiredTeam{
+			{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("test-asr", "github.example.com", "my-org")},
+		},
+	}
+
+	// Team exists but has "pending" status
+	team := &GithubTeam{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "test-asr",
+			},
+		},
+		Spec:   GithubTeamSpec{TeamName: "test-asr"},
+		Status: GithubTeamStatus{TeamStatus: "pending"},
+	}
+	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team).
+		Build()
+
+	status := computeProviderStatus(context.Background(), c, asr, desired)
+
+	if status.Ready {
+		t.Error("expected Ready=false for pending status")
+	}
+	if len(status.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(status.Targets))
+	}
+	if status.Targets[0].Status != targetStatusPending {
+		t.Errorf("expected Pending, got %q", status.Targets[0].Status)
+	}
+}
+
+func TestMapGithubTeamToASR(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		expected []client.ObjectKey
+	}{
+		{
+			name: "valid labels return ASR request",
+			labels: map[string]string{
+				LabelManagedByKey:    LabelManagedByGithub,
+				LabelSourceASR:       "my-asr",
+				LabelSourceNamespace: "pm-system",
+			},
+			expected: []client.ObjectKey{{Name: "my-asr", Namespace: "pm-system"}},
+		},
+		{
+			name: "missing managed-by returns empty",
+			labels: map[string]string{
+				LabelSourceASR:       "my-asr",
+				LabelSourceNamespace: "pm-system",
+			},
+			expected: nil,
+		},
+		{
+			name: "wrong managed-by value returns empty",
+			labels: map[string]string{
+				LabelManagedByKey:    "other-provider",
+				LabelSourceASR:       "my-asr",
+				LabelSourceNamespace: "pm-system",
+			},
+			expected: nil,
+		},
+		{
+			name: "missing source-asr returns empty",
+			labels: map[string]string{
+				LabelManagedByKey:    LabelManagedByGithub,
+				LabelSourceNamespace: "pm-system",
+			},
+			expected: nil,
+		},
+		{
+			name: "missing source-namespace returns empty",
+			labels: map[string]string{
+				LabelManagedByKey: LabelManagedByGithub,
+				LabelSourceASR:    "my-asr",
+			},
+			expected: nil,
+		},
+		{
+			name:     "nil labels returns empty",
+			labels:   nil,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			team := &GithubTeam{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "some-team",
+					Namespace: "default",
+					Labels:    tt.labels,
+				},
+			}
+
+			result := extractASRFromGithubTeam(team)
+			if len(tt.expected) == 0 {
+				if len(result) != 0 {
+					t.Errorf("expected empty result, got %v", result)
+				}
+			} else {
+				if len(result) != len(tt.expected) {
+					t.Fatalf("expected %d results, got %d", len(tt.expected), len(result))
+				}
+				for i, exp := range tt.expected {
+					if result[i] != exp {
+						t.Errorf("result[%d]: expected %v, got %v", i, exp, result[i])
+					}
+				}
+			}
+		})
+	}
+}
