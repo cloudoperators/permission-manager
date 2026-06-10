@@ -1,0 +1,24 @@
+# Example: FunctionalRole bundling multiple ASRs
+# A FunctionalRole groups ASRs into a requestable profile with approval workflows.
+apiVersion: permission-manager.cloudoperators.dev/v1
+kind: FunctionalRole
+metadata:
+  name: team-platform-engineer
+  namespace: permission-manager
+spec:
+  name: "Platform Engineer - Production"
+  type: access
+  description: "Standard access bundle for platform engineers"
+  roles:
+    - name: team-platform-monitoring-viewer
+    - name: team-backend-repos-write
+  approvers:
+    - userID: "team-lead-1"
+      step: 10
+    - userID: "security-reviewer"
+      step: 20
+  validity:
+    default: P6M
+    maximum: P12M
+  tags:
+    - prod

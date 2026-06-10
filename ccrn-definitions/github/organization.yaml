@@ -1,0 +1,66 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    name: githuborganizations.github.{{ .Values.ccrn.apiGroup }}
+    annotations:
+        description: |
+            Represents a GitHub organization as an access target for permission management.
+            Used by Permission Manager ASRs to express organization-level access
+            (e.g., org owner) on GitHub Enterprise organizations managed via repo-guard.
+        ccrn/v1.examples: |
+            The cc organization on the WDF GitHub Enterprise:
+
+            (URN FORMAT) urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/github.example.com/cc
+            OR
+            (CCRN FORMAT) ccrn=organization.github.ccrn.cloudoperators.dev/v1, instance=github.example.com, organization=cc
+
+            The cloudoperators organization on github.com:
+
+            (URN FORMAT) urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/github.com/cloudoperators
+            OR
+            (CCRN FORMAT) ccrn=organization.github.ccrn.cloudoperators.dev/v1, instance=github.com, organization=cloudoperators
+        ccrn/resource-criticality: "high"
+        ccrn/v1.urn-template: "urn:ccrn:<ccrn>/<instance>/<organization>"
+        ccrn/v1.url-template: "https://<instance>/<organization>"
+spec:
+    group: github.{{ .Values.ccrn.apiGroup }}
+    names:
+        kind: GithubOrganization
+        listKind: GithubOrganizationList
+        plural: githuborganizations
+        singular: githuborganization
+    scope: Namespaced
+    versions:
+        -   name: v1
+            served: true
+            storage: true
+            schema:
+                openAPIV3Schema:
+                    type: object
+                    required: [ "ccrn", "instance", "organization" ]
+                    properties:
+                        ccrn:
+                            type: string
+                            enum: [ "organization.github.{{ .Values.ccrn.apiGroup }}/v1" ]
+                        instance:
+                            type: string
+                            description: "GitHub Enterprise instance hostname"
+                            enum: [ "github.com", "github.example.com" ]
+                        organization:
+                            type: string
+                            description: "GitHub organization name"
+                            enum: [ "my-org", "cloudoperators", "example-team", "*" ]
+                            maxLength: 63
+            additionalPrinterColumns:
+                -   name: CCRN
+                    type: string
+                    jsonPath: .ccrn
+                -   name: Instance
+                    type: string
+                    jsonPath: .instance
+                -   name: Organization
+                    type: string
+                    jsonPath: .organization
+                -   name: Age
+                    type: date
+                    jsonPath: .metadata.creationTimestamp

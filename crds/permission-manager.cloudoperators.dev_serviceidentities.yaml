@@ -1,0 +1,106 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: serviceidentities.permission-manager.cloudoperators.dev
+spec:
+  group: permission-manager.cloudoperators.dev
+  names:
+    kind: ServiceIdentity
+    listKind: ServiceIdentityList
+    plural: serviceidentities
+    singular: serviceidentity
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: ServiceIdentity defines a technical user or service account template
+          provisioned through a connector.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ServiceIdentitySpec defines the desired state of ServiceIdentity.
+            properties:
+              advancedConfig:
+                description: AdvancedConfig is implementation-specific configuration
+                  passed through to the connector.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              approvers:
+                description: Approvers for this service identity.
+                items:
+                  description: ServiceIdentityApprover defines an approver for a service
+                    identity.
+                  properties:
+                    step:
+                      description: Step is the approval step number.
+                      type: integer
+                    userID:
+                      description: UserID is the ID of the approving user.
+                      type: string
+                  type: object
+                type: array
+              connectorRefs:
+                description: ConnectorRefs are references to ConnectorBinding names
+                  that provide tool configuration.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              description:
+                description: Description is a human-readable description.
+                type: string
+              displayName:
+                description: DisplayName is the human-readable service identity name
+                  displayed in the CAM UI.
+                type: string
+              name:
+                description: Name is the unique slugified identifier used as metadata.name.
+                type: string
+              roles:
+                description: Roles are ApplicationSpecificRoles associated with this
+                  service identity.
+                items:
+                  description: RoleReference is a reference to an ApplicationSpecificRole
+                    (access level).
+                  properties:
+                    name:
+                      description: Name is the name of the ApplicationSpecificRole.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              tags:
+                description: Tags for environment filtering (e.g., qa, prod).
+                items:
+                  type: string
+                type: array
+            required:
+            - connectorRefs
+            - name
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

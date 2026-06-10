@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pm-controller-greenhouse-teams
+  namespace: permission-manager
+  labels:
+    app: pm-controller-greenhouse-teams
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pm-controller-greenhouse-teams
+  template:
+    metadata:
+      labels:
+        app: pm-controller-greenhouse-teams
+    spec:
+      serviceAccountName: pm-controller
+      containers:
+        - name: manager
+          image: pm-controller-greenhouse-teams:e2e
+          imagePullPolicy: Never
+          args:
+            - --metrics-bind-address=:8084
+            - --health-probe-bind-address=:8085
+          ports:
+            - name: metrics
+              containerPort: 8084
+              protocol: TCP
+            - name: health
+              containerPort: 8085
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi

@@ -1,0 +1,98 @@
+{{- if .Values.greenhouseTeams.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pm-controller.fullname" . }}-greenhouse-teams
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: greenhouse-teams
+rules:
+  # Permission Manager CRDs
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - connectorbindings
+    verbs:
+      - get
+      - list
+      - watch
+  # Greenhouse CRDs
+  - apiGroups:
+      - greenhouse.sap
+    resources:
+      - teams
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - greenhouse.sap
+    resources:
+      - teamrolebindings
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Leader election
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pm-controller.fullname" . }}-greenhouse-teams
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: greenhouse-teams
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pm-controller.fullname" . }}-greenhouse-teams
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pm-controller.fullname" . }}-greenhouse-teams
+    namespace: {{ .Release.Namespace }}
+{{- end }}

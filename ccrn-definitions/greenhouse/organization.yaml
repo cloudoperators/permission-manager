@@ -1,0 +1,55 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    name: greenhouseorganizations.greenhouse.{{ .Values.ccrn.apiGroup }}
+    annotations:
+        description: |
+          Describes an organization within Greenhouse. A organization is a virtual container that seperates tennants on Greenhouse from each other.
+          For more information see the [Greenhouse documentation](https://github.com/cloudoperators/greenhouse).
+        ccrn/v1.examples: |
+          All organizations on a greenhouse global instance:
+
+          (URN FORMAT) urn:ccrn:organization.greenhouse.ccrn.cloudoperators.dev/v1/greenhouse.example.com/*
+          OR
+          (CCRN FORMAT) ccrn=organization.greenhouse.ccrn.cloudoperators.dev/v1, instance=greenhouse.example.com, organization=*
+
+          A organization called my-org on a greenhouse qa instance:
+
+          (URN FORMAT) urn:ccrn:organization.greenhouse.ccrn.cloudoperators.dev/v1/greenhouse.example.com/my-org
+          OR
+          (CCRN FORMAT) ccrn=organization.greenhouse.ccrn.cloudoperators.dev/v1, instance=greenhouse.example.com, organization=my-org
+
+        ccrn/resource-criticality: "high"
+        ccrn/v1.urn-template: "urn:ccrn:<ccrn>/<instance>/<organization>"
+        ccrn/v1.url-template: "https://<ccrn>/<instance>/<organization>"
+
+spec:
+    group: greenhouse.{{ .Values.ccrn.apiGroup }}
+    names:
+        kind: GreenhouseOrganization
+        listKind: GreenhouseOrganizationList
+        plural: greenhouseorganizations
+        singular: greenhouseorganization
+    scope: Namespaced
+    versions:
+        -   name: v1
+            served: true
+            storage: true
+            schema:
+                openAPIV3Schema:
+                    type: object
+                    required: [ "ccrn", "instance", "organization"]
+                    properties:
+                        # Required
+                        ccrn:
+                            type: string
+                            enum: [ "organization.greenhouse.{{ .Values.ccrn.apiGroup }}/v1" ]
+                        instance:
+                            type: string
+                            description: "Vault Instance"
+                            enum: [ "greenhouse.example.com", "greenhouse.example.com" ]
+                        organization:
+                            type: string
+                            description: "The name of the organization"
+                            pattern: "^([a-z0-9]([a-z0-9_-]*[a-z0-9])?|\\*)$"
+                            maxLength: 63

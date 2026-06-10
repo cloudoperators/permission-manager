@@ -1,0 +1,90 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pm-controller.fullname" . }}-kubernetes
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kubernetes
+rules:
+  # Permission Manager CRDs - full access for finalizer management
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - connectorbindings
+    verbs:
+      - get
+      - list
+      - watch
+  # Greenhouse Cluster CRDs - read access for cluster discovery
+  - apiGroups:
+      - greenhouse.sap
+    resources:
+      - clusters
+    verbs:
+      - get
+      - list
+      - watch
+  # Secrets - read access for cluster kubeconfig retrieval
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  # Leader election
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Events for status reporting
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pm-controller.fullname" . }}-kubernetes
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kubernetes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pm-controller.fullname" . }}-kubernetes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pm-controller.fullname" . }}-kubernetes
+    namespace: {{ .Release.Namespace }}

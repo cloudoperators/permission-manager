@@ -1,38 +1,80 @@
-# Contributing
+# Contributing to Permission Manager Controller
 
-## Code of Conduct
+Thank you for your interest in contributing! This document provides guidelines for contributing to the Permission Manager Controller project.
 
-All members of the project community must abide by the [SAP Open Source Code of Conduct](https://github.com/SAP/.github/blob/main/CODE_OF_CONDUCT.md).
-Only by respecting each other we can develop a productive, collaborative community.
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting [a project maintainer](.reuse/dep5).
+## Getting Started
 
-## Engaging in Our Project
+### Prerequisites
 
-We use GitHub to manage reviews of pull requests.
+- Go 1.22+
+- Docker (for container builds)
+- [kind](https://kind.sigs.k8s.io/) (for E2E tests)
+- [Helm](https://helm.sh/) (for chart rendering)
+- kubectl
 
-* If you are a new contributor, see: [Steps to Contribute](#steps-to-contribute)
+### Development Setup
 
-* Before implementing your change, create an issue that describes the problem you would like to solve or the code that should be enhanced. Please note that you are willing to work on that issue.
+```bash
+# Clone the repository
+git clone https://github.com/cloudoperators/permission-manager.git
+cd permission-manager
 
-* The team will review the issue and decide whether it should be implemented as a pull request. In that case, they will assign the issue to you. If the team decides against picking up the issue, the team will post a comment with an explanation.
+# Build
+cd controller && make build
 
-## Steps to Contribute
+# Run tests
+cd controller && make test
 
-Should you wish to work on an issue, please claim it first by commenting on the GitHub issue that you want to work on. This is to prevent duplicated efforts from other contributors on the same issue.
+# Run E2E tests (creates kind clusters)
+cd controller && make e2e
+```
 
-If you have questions about one of the issues, please comment on them, and one of the maintainers will clarify.
+## How to Contribute
 
-## Contributing Code or Documentation
+### Reporting Issues
 
-You are welcome to contribute code in order to fix a bug or to implement a new feature that is logged as an issue.
+- Use GitHub Issues for bug reports and feature requests
+- Include reproduction steps, expected vs actual behavior, and environment details
 
-The following rule governs code contributions:
+### Pull Requests
 
-* Contributions must be licensed under the [Apache 2.0 License](./LICENSE)
-* Due to legal reasons, contributors will be asked to accept a Developer Certificate of Origin (DCO) when they create the first pull request to this project. This happens in an automated fashion during the submission process. SAP uses [the standard DCO text of the Linux Foundation](https://developercertificate.org/).
+1. Fork the repository
+2. Create a feature branch from `main`
+3. Make your changes
+4. Ensure tests pass: `cd controller && make test`
+5. Submit a pull request
 
-## Issues and Planning
+### Code Style
 
-* We use GitHub issues to track bugs and enhancement requests.
+- Follow standard Go conventions (`gofmt`, `go vet`)
+- Write tests for new functionality
+- Update documentation for user-facing changes
+- Add ADRs for architectural decisions (see `docs/adr/`)
 
-* Please provide as much context as possible when you open an issue. The information you provide must be comprehensive enough to reproduce that issue for the assignee.
+### Commit Messages
+
+Use conventional commits:
+- `feat:` — new feature
+- `fix:` — bug fix
+- `docs:` — documentation
+- `refactor:` — code change that neither fixes a bug nor adds a feature
+- `test:` — adding or updating tests
+- `chore:` — maintenance
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design. Key areas:
+
+- **`api/`** — CRD type definitions (shared module)
+- **`controller/internal/controller/`** — Provider reconciler implementations
+- **`controller/pkg/`** — Shared packages (CCRN parser, audit, metrics)
+
+## Testing
+
+- **Unit tests**: `go test ./pkg/... ./internal/...`
+- **E2E tests**: `make e2e` (creates multi-cluster kind environment)
+- New providers should include both unit and E2E test coverage
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the Apache License 2.0.

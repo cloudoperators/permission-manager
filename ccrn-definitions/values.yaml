@@ -1,0 +1,6 @@
+# CCRN (Common Cloud Resource Name) chart values
+# The apiGroup defines the domain suffix used in CCRN URNs and CRD API groups.
+# Default: ccrn.cloudoperators.dev (open-source)
+# Override for SAP internal use: ccrn.cloud.sap
+ccrn:
+  apiGroup: ccrn.cloudoperators.dev

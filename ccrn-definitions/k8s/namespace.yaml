@@ -1,0 +1,67 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    name: k8snamespaces.k8s.{{ .Values.ccrn.apiGroup }}
+    annotations:
+        description: |
+            Represents a Kubernetes namespace as an access target for RBAC generation.
+            Used by Permission Manager ASRs to express namespace-scoped or cluster-wide
+            access on Greenhouse-managed clusters.
+        ccrn/v1.examples: |
+            Access to the kube-monitoring namespace on cluster eu-de-1:
+
+            (URN FORMAT) urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/eu-de-1/kube-monitoring
+            OR
+            (CCRN FORMAT) ccrn=namespace.k8s.ccrn.cloudoperators.dev/v1, cluster=eu-de-1, namespace=kube-monitoring
+
+            Cluster-wide access (all namespaces) on eu-de-1:
+
+            (URN FORMAT) urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/eu-de-1/*
+            OR
+            (CCRN FORMAT) ccrn=namespace.k8s.ccrn.cloudoperators.dev/v1, cluster=eu-de-1, namespace=*
+        ccrn/resource-criticality: "high"
+        ccrn/v1.urn-template: "urn:ccrn:<ccrn>/<cluster>/<namespace>"
+        ccrn/v1.url-template: "https://<ccrn>/<cluster>/<namespace>"
+spec:
+    group: k8s.{{ .Values.ccrn.apiGroup }}
+    names:
+        kind: K8sNamespace
+        listKind: K8sNamespaceList
+        plural: k8snamespaces
+        singular: k8snamespace
+    scope: Namespaced
+    versions:
+        -   name: v1
+            served: true
+            storage: true
+            schema:
+                openAPIV3Schema:
+                    type: object
+                    required: [ "ccrn", "cluster", "namespace" ]
+                    properties:
+                        ccrn:
+                            type: string
+                            enum: [ "namespace.k8s.{{ .Values.ccrn.apiGroup }}/v1" ]
+                        cluster:
+                            type: string
+                            description: "Target cluster name (matches Greenhouse Cluster.metadata.name), prefix wildcard (e.g. rt-*), or * for all clusters"
+                            pattern: "^([a-z0-9]([a-z0-9-]*[a-z0-9])?|[a-z0-9][a-z0-9-]*\\*|\\*)$"
+                            maxLength: 63
+                        namespace:
+                            type: string
+                            description: "Kubernetes namespace name, prefix wildcard (e.g. shoot--wireapi--*), or * for cluster-wide access"
+                            pattern: "^([a-z0-9]([a-z0-9-]*[a-z0-9])?|[a-z0-9][a-z0-9-]*\\*|\\*)$"
+                            maxLength: 63
+            additionalPrinterColumns:
+                -   name: CCRN
+                    type: string
+                    jsonPath: .ccrn
+                -   name: Cluster
+                    type: string
+                    jsonPath: .cluster
+                -   name: Namespace
+                    type: string
+                    jsonPath: .namespace
+                -   name: Age
+                    type: date
+                    jsonPath: .metadata.creationTimestamp

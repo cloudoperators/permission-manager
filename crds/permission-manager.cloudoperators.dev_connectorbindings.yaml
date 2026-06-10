@@ -1,0 +1,72 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: connectorbindings.permission-manager.cloudoperators.dev
+spec:
+  group: permission-manager.cloudoperators.dev
+  names:
+    kind: ConnectorBinding
+    listKind: ConnectorBindingList
+    plural: connectorbindings
+    singular: connectorbinding
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: ConnectorBinding defines a connection to an external identity
+          provider.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ConnectorBindingSpec defines the desired state of ConnectorBinding.
+            properties:
+              definition:
+                description: Definition is the provider-specific connection configuration.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              name:
+                description: Name is the unique connector name referenced by ApplicationSpecificRole
+                  connectorRefs.
+                type: string
+              provider:
+                description: Provider is the provider identifier.
+                type: string
+              serviceIdentityDefaults:
+                description: ServiceIdentityDefaults are default values applied to
+                  ServiceIdentity resources using this connector.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              supportsServiceIdentities:
+                description: SupportsServiceIdentities indicates whether this connector
+                  supports ServiceIdentity resources.
+                type: boolean
+            required:
+            - definition
+            - name
+            - provider
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

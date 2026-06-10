@@ -1,0 +1,74 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    name: githubrepositories.github.{{ .Values.ccrn.apiGroup }}
+    annotations:
+        description: |
+            Represents a GitHub repository as an access target for permission management.
+            Used by Permission Manager ASRs to express repository-level access on
+            GitHub Enterprise organizations managed via repo-guard.
+        ccrn/v1.examples: |
+            All repositories in the cc organization:
+
+            (URN FORMAT) urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/github.example.com/cc/*
+            OR
+            (CCRN FORMAT) ccrn=repository.github.ccrn.cloudoperators.dev/v1, instance=github.example.com, owner=cc, repo=*
+
+            A specific repo "greenhouse" in my-org:
+
+            (URN FORMAT) urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/greenhouse
+            OR
+            (CCRN FORMAT) ccrn=repository.github.ccrn.cloudoperators.dev/v1, instance=github.example.com, owner=my-org, repo=greenhouse
+        ccrn/resource-criticality: "medium"
+        ccrn/v1.urn-template: "urn:ccrn:<ccrn>/<instance>/<owner>/<repo>"
+        ccrn/v1.url-template: "https://<instance>/<owner>/<repo>"
+spec:
+    group: github.{{ .Values.ccrn.apiGroup }}
+    names:
+        kind: GithubRepository
+        listKind: GithubRepositoryList
+        plural: githubrepositories
+        singular: githubrepository
+    scope: Namespaced
+    versions:
+        -   name: v1
+            served: true
+            storage: true
+            schema:
+                openAPIV3Schema:
+                    type: object
+                    required: [ "ccrn", "instance", "owner", "repo" ]
+                    properties:
+                        ccrn:
+                            type: string
+                            enum: [ "repository.github.{{ .Values.ccrn.apiGroup }}/v1" ]
+                        instance:
+                            type: string
+                            description: "GitHub Enterprise instance hostname"
+                            enum: [ "github.com", "github.example.com" ]
+                        owner:
+                            type: string
+                            description: "GitHub organization name"
+                            enum: [ "my-org", "cloudoperators", "example-team", "*" ]
+                            maxLength: 63
+                        repo:
+                            type: string
+                            description: "Repository name or * for all repos in the org"
+                            pattern: "^[a-zA-Z0-9*]([a-zA-Z0-9._-]{0,98}[a-zA-Z0-9])?$"
+                            maxLength: 100
+            additionalPrinterColumns:
+                -   name: CCRN
+                    type: string
+                    jsonPath: .ccrn
+                -   name: Instance
+                    type: string
+                    jsonPath: .instance
+                -   name: Owner
+                    type: string
+                    jsonPath: .owner
+                -   name: Repo
+                    type: string
+                    jsonPath: .repo
+                -   name: Age
+                    type: date
+                    jsonPath: .metadata.creationTimestamp

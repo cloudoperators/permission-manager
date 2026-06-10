@@ -1,0 +1,29 @@
+{{- if and .Values.alerts.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- $components := list "aggregator" "kubernetes" }}
+{{- if .Values.github.enabled }}
+{{- $components = append $components "github" }}
+{{- end }}
+{{- if .Values.greenhouseTeams.enabled }}
+{{- $components = append $components "greenhouse-teams" }}
+{{- end }}
+{{- range $component := $components }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pm-controller.fullname" $ }}-{{ $component }}-metrics
+  labels:
+    {{- include "pm-controller.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  clusterIP: None
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "pm-controller.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+{{- end }}
+{{- end }}

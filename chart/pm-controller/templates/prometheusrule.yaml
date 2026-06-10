@@ -1,0 +1,14 @@
+{{- if and .Values.alerts.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- $root := . -}}
+{{- range $path, $bytes := .Files.Glob "alerts/*.yaml" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-%s" (include "pm-controller.fullname" $root) ($path | base | trimSuffix ".yaml") | trunc 63 }}
+  labels:
+    {{- include "pm-controller.labels" $root | nindent 4 }}
+spec:
+{{ tpl ($bytes | toString) $root | indent 2 }}
+{{- end }}
+{{- end }}

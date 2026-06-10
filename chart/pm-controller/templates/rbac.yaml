@@ -1,0 +1,91 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pm-controller.fullname" . }}
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+rules:
+  # Permission Manager CRDs
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles
+      - connectorbindings
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - applicationspecificroles/finalizers
+    verbs:
+      - update
+  # Secrets (kubeconfig access for remote cluster clients)
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  # Greenhouse Cluster CRDs
+  - apiGroups:
+      - greenhouse.sap
+    resources:
+      - clusters
+    verbs:
+      - get
+      - list
+      - watch
+  # Leader election
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pm-controller.fullname" . }}
+  labels:
+    {{- include "pm-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pm-controller.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pm-controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

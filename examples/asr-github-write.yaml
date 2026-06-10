@@ -1,0 +1,21 @@
+# Example: GitHub repository WRITE access
+# This ASR grants push access to specific repositories in a GitHub organization.
+apiVersion: permission-manager.cloudoperators.dev/v1
+kind: ApplicationSpecificRole
+metadata:
+  name: team-backend-repos-write
+  namespace: permission-manager
+spec:
+  name: TEAM_BACKEND_REPOS_WRITE
+  description: "Push access to backend team repositories"
+  connectorRefs:
+    - github-connector
+  permissions:
+    - resource: "urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/github.com/my-org/service-api"
+      capability: WRITE
+    - resource: "urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/github.com/my-org/service-worker"
+      capability: WRITE
+    - resource: "urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/github.com/my-org"
+      capability: READ
+  tags:
+    - prod

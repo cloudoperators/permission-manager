@@ -1,0 +1,30 @@
+groups:
+  - name: permission-manager.cr-health
+    rules:
+    - alert: PermissionManagerASRDegraded
+      expr: |
+        permission_manager_asr_condition{condition="Degraded",status="True"} == 1
+      for: 15m
+      labels:
+        {{- include "pm-controller.alertLabels" . | nindent 8 }}
+        asr: '{{`{{ $labels.name }}`}}'
+        namespace: '{{`{{ $labels.namespace }}`}}'
+        playbook: https://github.com/cloudoperators/permission-manager/tree/main/pm-controller/docs/playbooks/asr-degraded.md
+      annotations:
+        summary: 'ASR {{`{{ $labels.name }}`}} is Degraded'
+        description: 'ApplicationSpecificRole {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}} has been in Degraded condition for more than 15 minutes'
+
+    - alert: PermissionManagerASRNotReady
+      expr: |
+        permission_manager_asr_condition{condition="Ready",status="True"} == 0
+          and
+        permission_manager_asr_condition{condition="Ready",status="Unknown"} == 0
+      for: 30m
+      labels:
+        {{- include "pm-controller.alertLabels" . | nindent 8 }}
+        asr: '{{`{{ $labels.name }}`}}'
+        namespace: '{{`{{ $labels.namespace }}`}}'
+        playbook: https://github.com/cloudoperators/permission-manager/tree/main/pm-controller/docs/playbooks/asr-not-ready.md
+      annotations:
+        summary: 'ASR {{`{{ $labels.name }}`}} is NotReady'
+        description: 'ApplicationSpecificRole {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}} has not been Ready for more than 30 minutes'
