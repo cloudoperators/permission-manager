@@ -32,10 +32,10 @@ Split the controller into **four independent binaries**:
 
 | Binary | Package | Leader Election ID |
 |--------|---------|-------------------|
-| `pm-controller-kubernetes` | `cmd/kubernetes/` | `pm-controller-kubernetes.permission-manager.cloudoperators.dev` |
-| `github-provider` | `cmd/github/` | `github-provider.permission-manager.cloudoperators.dev` |
-| `greenhouse-teams` | `cmd/greenhouse-teams/` | `greenhouse-teams.permission-manager.cloudoperators.dev` |
-| `pm-status-aggregator` | `cmd/aggregator/` | `pm-status-aggregator.permission-manager.cloudoperators.dev` |
+| `pm-controller-kubernetes` | `controller/cmd/kubernetes/` | `pm-controller-kubernetes.permission-manager.cloudoperators.dev` |
+| `github-provider` | `controller/cmd/github/` | `github-provider.permission-manager.cloudoperators.dev` |
+| `greenhouse-teams` | `controller/cmd/greenhouse-teams/` | `greenhouse-teams.permission-manager.cloudoperators.dev` |
+| `pm-status-aggregator` | `controller/cmd/aggregator/` | `pm-status-aggregator.permission-manager.cloudoperators.dev` |
 
 Each binary:
 - Registers only the schemes it needs.
