@@ -55,9 +55,9 @@ flowchart LR
     CB -->|"provider: greenhouse-teams"| GH["🌿 GreenhouseTeams Provider"]
     CB -->|"provider: github"| GIT["🐙 GitHub Provider"]
 
-    click K8S "controller/internal/controller/kubernetes/reconciler.go" "Kubernetes reconciler entry point"
-    click GH "controller/internal/controller/greenhouseteams/reconciler.go" "GreenhouseTeams reconciler entry point"
-    click GIT "controller/internal/controller/github/reconciler.go" "GitHub reconciler entry point"
+    click K8S "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go" "Kubernetes reconciler entry point"
+    click GH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go" "GreenhouseTeams reconciler entry point"
+    click GIT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go" "GitHub reconciler entry point"
 ```
 
 ### Output: What each provider creates
@@ -105,12 +105,12 @@ flowchart TD
     FINALIZER --> STAGE2(["→ Stage 2: Build Plan"])
 
     %% Code links
-    click FETCH "controller/internal/controller/kubernetes/reconciler.go#L82" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "controller/internal/controller/kubernetes/reconciler.go#L91" "r.CBIndex.HasAnyKubernetesRef(asr.Spec.ConnectorRefs)"
-    click STALE "controller/internal/controller/kubernetes/reconciler.go#L94" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
-    click CLEANUP_STALE "controller/internal/controller/kubernetes/reconciler.go#L96-L134" "Cleanup RBAC + remove finalizer"
-    click DELETED "controller/internal/controller/kubernetes/reconciler.go#L148" "!asr.DeletionTimestamp.IsZero()"
-    click FINALIZER "controller/internal/controller/kubernetes/reconciler.go#L200-L207" "controllerutil.AddFinalizer + Patch"
+    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L82" "r.Get(ctx, req.NamespacedName, &asr)"
+    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L91" "r.CBIndex.HasAnyKubernetesRef(asr.Spec.ConnectorRefs)"
+    click STALE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L94" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
+    click CLEANUP_STALE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L96" "Cleanup RBAC + remove finalizer"
+    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L148" "!asr.DeletionTimestamp.IsZero()"
+    click FINALIZER "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L200" "controllerutil.AddFinalizer + Patch"
 
     style GONE fill:#f5f5f5,stroke:#999
     style SKIP fill:#f5f5f5,stroke:#999
@@ -139,11 +139,11 @@ flowchart TD
     PLAN_OUT --> STAGE3(["→ Stage 3: Execute"])
 
     %% Code links
-    click PARSE "controller/internal/controller/kubernetes/reconciler.go#L210" "buildClusterScopes(&asr, r.ClusterInventory.MatchingNames)"
-    click RESOLVE "controller/internal/controller/kubernetes/cluster_inventory.go" "ClusterInventory.MatchingNames"
-    click MAP_CAPS "controller/internal/controller/kubernetes/reconciler.go#L30-L36" "CapabilityVerbs map"
-    click DIFF "controller/internal/controller/kubernetes/reconcile_plan.go#L34-L49" "planReconcile(asr, scopes, prevStatuses)"
-    click PLAN_OUT "controller/internal/controller/kubernetes/reconcile_plan.go#L19-L29" "ReconcilePlan struct"
+    click PARSE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L210" "buildClusterScopes(&asr, r.ClusterInventory.MatchingNames)"
+    click RESOLVE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/cluster_inventory.go" "ClusterInventory.MatchingNames"
+    click MAP_CAPS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L30" "CapabilityVerbs map"
+    click DIFF "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L34" "planReconcile(asr, scopes, prevStatuses)"
+    click PLAN_OUT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L19" "ReconcilePlan struct"
 
     style STAGE2 fill:#e8f5e9,stroke:#2e7d32
     style STAGE3 fill:#e8f5e9,stroke:#2e7d32
@@ -190,15 +190,15 @@ flowchart TD
     RESULT -->|"No"| DONE["✅ Done"]
 
     %% Code links
-    click LOOP "controller/internal/controller/kubernetes/reconcile_plan.go#L69" "for clusterName, scope := range plan.ClustersToProvision"
-    click CLIENT "controller/internal/controller/kubernetes/reconcile_plan.go#L76" "factory.ClientForCluster(ctx, clusterName)"
-    click UNREACH "controller/internal/controller/kubernetes/reconcile_plan.go#L79-L86" "ClusterUnreachableError handling"
-    click EXPAND "controller/internal/controller/kubernetes/reconcile_plan.go#L101-L117" "expandNamespaceWildcards"
-    click BUILD_RBAC "controller/internal/controller/kubernetes/rbac_generator.go" "buildRBACPlan(plan.ASRName, plan.SpecName, scope)"
-    click APPLY "controller/internal/controller/kubernetes/reconcile_plan.go#L122" "applyRBACPlan(ctx, clusterClient, rbacPlan, ...)"
-    click ORPHANS "controller/internal/controller/kubernetes/reconcile_plan.go#L172" "r.Cleaner.CleanupOrphans(ctx, asr.Name, plan.OrphanClusters)"
-    click CLEAN_ORPHAN "controller/internal/controller/kubernetes/orphan_cleanup.go" "CleanupOrphans implementation"
-    click PATCH "controller/internal/controller/kubernetes/reconciler.go#L271-L321" "r.patchStatus(ctx, &asr, statuses)"
+    click LOOP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L69" "for clusterName, scope := range plan.ClustersToProvision"
+    click CLIENT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L76" "factory.ClientForCluster(ctx, clusterName)"
+    click UNREACH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L79" "ClusterUnreachableError handling"
+    click EXPAND "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L101" "expandNamespaceWildcards"
+    click BUILD_RBAC "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_generator.go" "buildRBACPlan(plan.ASRName, plan.SpecName, scope)"
+    click APPLY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L122" "applyRBACPlan(ctx, clusterClient, rbacPlan, ...)"
+    click ORPHANS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L172" "r.Cleaner.CleanupOrphans(ctx, asr.Name, plan.OrphanClusters)"
+    click CLEAN_ORPHAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/orphan_cleanup.go" "CleanupOrphans implementation"
+    click PATCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L271" "r.patchStatus(ctx, &asr, statuses)"
 
     style rbac fill:#f1f8e9,stroke:#558b2f
     style DONE fill:#e8f5e9,stroke:#2e7d32
@@ -246,13 +246,13 @@ flowchart TD
     EMIT_WARN --> REQUEUE["Requeue after delay<br/><i>30s initially, escalates to 5m</i>"]
 
     %% Code links
-    click HAS_FIN "controller/internal/controller/kubernetes/reconciler.go#L149" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
-    click TARGETS "controller/internal/controller/kubernetes/reconcile_plan.go#L209-L223" "extractTargetClusterNames(asr, inventory)"
-    click CLEANUP "controller/internal/controller/kubernetes/rbac_cleaner.go" "r.Cleaner.CleanupAll(ctx, asr.Name, clusters)"
-    click FILTER "controller/internal/controller/kubernetes/reconciler.go#L160" "filterOrphanedClusters(skipped, r.ClusterInventory)"
-    click ABANDON "controller/internal/controller/kubernetes/reconciler.go#L164" "hasAbandonAnnotation(&asr)"
-    click HOLD "controller/internal/controller/kubernetes/reconciler.go#L170-L183" "Hold finalizer, patch status, emit event, requeue"
-    click REMOVE_FIN "controller/internal/controller/kubernetes/reconciler.go#L189-L193" "controllerutil.RemoveFinalizer + Patch"
+    click HAS_FIN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L149" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
+    click TARGETS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L209" "extractTargetClusterNames(asr, inventory)"
+    click CLEANUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_cleaner.go" "r.Cleaner.CleanupAll(ctx, asr.Name, clusters)"
+    click FILTER "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L160" "filterOrphanedClusters(skipped, r.ClusterInventory)"
+    click ABANDON "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L164" "hasAbandonAnnotation(&asr)"
+    click HOLD "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L170" "Hold finalizer, patch status, emit event, requeue"
+    click REMOVE_FIN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L189" "controllerutil.RemoveFinalizer + Patch"
 
     %% Styling
     style DELETED fill:#e8f5e9,stroke:#2e7d32
@@ -326,21 +326,21 @@ flowchart TD
     STATUS --> DONE["✅ Done"]
 
     %% Code links
-    click FETCH "controller/internal/controller/greenhouseteams/reconciler.go#L43" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "controller/internal/controller/greenhouseteams/reconciler.go#L52" "r.CBIndex.HasAnyProviderRef(asr.Spec.ConnectorRefs)"
-    click STALE_CHECK "controller/internal/controller/greenhouseteams/reconciler.go#L55" "controllerutil.ContainsFinalizer(&asr, FinalizerGreenhouseTeams)"
-    click STALE_CLEAN "controller/internal/controller/greenhouseteams/reconciler.go#L57" "r.cleanup(ctx, &asr)"
-    click DELETED "controller/internal/controller/greenhouseteams/reconciler.go#L70" "!asr.DeletionTimestamp.IsZero()"
-    click DEL_CLEAN "controller/internal/controller/greenhouseteams/reconciler.go#L71-L86" "cleanup + RemoveFinalizer"
-    click SETUP "controller/internal/controller/greenhouseteams/reconciler.go#L89-L126" "Finalizer + CB parse + advancedConfig"
-    click RESOLVE_NS "controller/internal/controller/greenhouseteams/reconciler.go#L129" "ResolveTargetNamespaces(advCfg, cbDef)"
-    click COMPUTE "controller/internal/controller/greenhouseteams/reconciler.go#L142-L143" "ComputeDesiredState(&asr, teamName, capMapping)"
-    click CONFLICT "controller/internal/controller/greenhouseteams/conflict.go#L87" "DetermineMode(ctx, r.Client, &asr, log)"
-    click FULL "controller/internal/controller/greenhouseteams/reconciler.go#L192-L195" "ReconcileAllTRBs"
-    click TEAM_ONLY "controller/internal/controller/greenhouseteams/conflict.go#L62-L72" "ModeTeamOnly"
-    click RECONCILE_TRBS "controller/internal/controller/greenhouseteams/teamrolebinding.go" "ReconcileAllTRBs"
-    click CLEANUP_TRBS "controller/internal/controller/greenhouseteams/conflict.go#L106" "CleanupTRBs(ctx, c, asr, log, al)"
-    click STATUS "controller/internal/controller/greenhouseteams/status.go" "PatchASRProviderStatus"
+    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L43" "r.Get(ctx, req.NamespacedName, &asr)"
+    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L52" "r.CBIndex.HasAnyProviderRef(asr.Spec.ConnectorRefs)"
+    click STALE_CHECK "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L55" "controllerutil.ContainsFinalizer(&asr, FinalizerGreenhouseTeams)"
+    click STALE_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L57" "r.cleanup(ctx, &asr)"
+    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L70" "!asr.DeletionTimestamp.IsZero()"
+    click DEL_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L71" "cleanup + RemoveFinalizer"
+    click SETUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L89" "Finalizer + CB parse + advancedConfig"
+    click RESOLVE_NS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L129" "ResolveTargetNamespaces(advCfg, cbDef)"
+    click COMPUTE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L142" "ComputeDesiredState(&asr, teamName, capMapping)"
+    click CONFLICT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L87" "DetermineMode(ctx, r.Client, &asr, log)"
+    click FULL "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L192" "ReconcileAllTRBs"
+    click TEAM_ONLY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L62" "ModeTeamOnly"
+    click RECONCILE_TRBS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/teamrolebinding.go" "ReconcileAllTRBs"
+    click CLEANUP_TRBS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L106" "CleanupTRBs(ctx, c, asr, log, al)"
+    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/status.go" "PatchASRProviderStatus"
 
     style modes fill:#e3f2fd,stroke:#1565c0
     style ns_resolution fill:#fff8e1,stroke:#f9a825
@@ -380,19 +380,19 @@ flowchart TD
     STATUS --> DONE["✅ Done"]
 
     %% Code links
-    click FETCH "controller/internal/controller/github/reconciler.go#L46" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "controller/internal/controller/github/reconciler.go#L55" "r.CBIndex.FindGithubRef(asr.Spec.ConnectorRefs)"
-    click STALE_CHECK "controller/internal/controller/github/reconciler.go#L59" "controllerutil.ContainsFinalizer(&asr, FinalizerGithub)"
-    click STALE_CLEAN "controller/internal/controller/github/reconciler.go#L60-L93" "Label-based cleanup + cleanupOrgEntries"
-    click DELETED "controller/internal/controller/github/reconciler.go#L97" "!asr.DeletionTimestamp.IsZero()"
-    click DEL_CLEAN "controller/internal/controller/github/reconciler.go#L99-L113" "cleanupOwnedResources + cleanupOrgEntries"
-    click SETUP "controller/internal/controller/github/reconciler.go#L117-L137" "Finalizer + ParseAdvancedConfig + ParseConnectorDefinition"
-    click RESOLVE_NS "controller/internal/controller/github/reconciler.go#L140" "ResolveTargetNamespace(advConfig, cbDef, &asr)"
-    click BUILD "controller/internal/controller/github/desired_state.go" "BuildDesiredState(&asr, cbDef.CapabilityMapping)"
-    click RECONCILE_TEAMS "controller/internal/controller/github/github_team.go" "ReconcileTeams(ctx, r.Client, desired.Teams, ...)"
-    click RECONCILE_REPOS "controller/internal/controller/github/github_team_repo.go" "ReconcileTeamRepos(ctx, r.Client, desired.TeamRepos, ...)"
-    click RECONCILE_ORGS "controller/internal/controller/github/github_org.go" "r.reconcileOrganizations(ctx, &asr, cbDef, targetNamespace)"
-    click STATUS "controller/internal/controller/github/status.go" "computeProviderStatus + patchProviderStatus"
+    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L46" "r.Get(ctx, req.NamespacedName, &asr)"
+    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L55" "r.CBIndex.FindGithubRef(asr.Spec.ConnectorRefs)"
+    click STALE_CHECK "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L59" "controllerutil.ContainsFinalizer(&asr, FinalizerGithub)"
+    click STALE_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L60" "Label-based cleanup + cleanupOrgEntries"
+    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L97" "!asr.DeletionTimestamp.IsZero()"
+    click DEL_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L99" "cleanupOwnedResources + cleanupOrgEntries"
+    click SETUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L117" "Finalizer + ParseAdvancedConfig + ParseConnectorDefinition"
+    click RESOLVE_NS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L140" "ResolveTargetNamespace(advConfig, cbDef, &asr)"
+    click BUILD "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/desired_state.go" "BuildDesiredState(&asr, cbDef.CapabilityMapping)"
+    click RECONCILE_TEAMS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team.go" "ReconcileTeams(ctx, r.Client, desired.Teams, ...)"
+    click RECONCILE_REPOS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team_repo.go" "ReconcileTeamRepos(ctx, r.Client, desired.TeamRepos, ...)"
+    click RECONCILE_ORGS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_org.go" "r.reconcileOrganizations(ctx, &asr, cbDef, targetNamespace)"
+    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/status.go" "computeProviderStatus + patchProviderStatus"
 
     style DONE fill:#e8f5e9,stroke:#2e7d32
 ```
@@ -431,12 +431,12 @@ flowchart TD
     WRITE --> DONE["✅ Done"]
 
     %% Code links
-    click READ "controller/internal/controller/aggregator/reconciler.go#L51" "computeConditions(asr.Status.Providers)"
-    click EMPTY "controller/internal/controller/aggregator/reconciler.go#L102" "if len(providers) == 0"
-    click EVAL "controller/internal/controller/aggregator/reconciler.go#L127" "switch allReady / anyReady"
-    click CHANGED "controller/internal/controller/aggregator/reconciler.go#L54" "conditionsMatch(asr.Status.Conditions, desired)"
-    click NOOP "controller/internal/controller/aggregator/reconciler.go#L56" "return ctrl.Result{}, nil"
-    click WRITE "controller/internal/controller/aggregator/reconciler.go#L61-L63" "meta.SetStatusCondition + Status().Update"
+    click READ "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L51" "computeConditions(asr.Status.Providers)"
+    click EMPTY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L102" "if len(providers) == 0"
+    click EVAL "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L127" "switch allReady / anyReady"
+    click CHANGED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L54" "conditionsMatch(asr.Status.Conditions, desired)"
+    click NOOP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L56" "return ctrl.Result{}, nil"
+    click WRITE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L61" "meta.SetStatusCondition + Status().Update"
 
     style DONE fill:#e8f5e9,stroke:#2e7d32
     style NOOP fill:#f5f5f5,stroke:#999
@@ -476,18 +476,18 @@ Quick reference for the implementation files behind each diagram:
 
 | Diagram | Primary Source | Key Functions |
 |---------|---------------|---------------|
-| **K8s Provider — Stage 1** | [`kubernetes/reconciler.go`](controller/internal/controller/kubernetes/reconciler.go) | `Reconcile` (L77), `SetupWithManager` (L360) |
-| **K8s Provider — Stage 2** | [`kubernetes/reconcile_plan.go`](controller/internal/controller/kubernetes/reconcile_plan.go) | `planReconcile` (L34), `ReconcilePlan` struct (L19) |
-| **K8s Provider — Stage 3** | [`kubernetes/reconcile_plan.go`](controller/internal/controller/kubernetes/reconcile_plan.go) | `executeReconcilePlan` (L57) |
-| **K8s Provider — RBAC gen** | [`kubernetes/rbac_generator.go`](controller/internal/controller/kubernetes/rbac_generator.go) | `buildRBACPlan`, `applyRBACPlan` |
-| **K8s Provider — Deletion** | [`kubernetes/rbac_cleaner.go`](controller/internal/controller/kubernetes/rbac_cleaner.go) | `CleanupAll`, `CleanupOrphans` |
-| **K8s Provider — Orphan** | [`kubernetes/orphan_cleanup.go`](controller/internal/controller/kubernetes/orphan_cleanup.go) | `filterOrphanedClusters`, orphan status |
-| **GreenhouseTeams** | [`greenhouseteams/reconciler.go`](controller/internal/controller/greenhouseteams/reconciler.go) | `Reconcile` (L38) |
-| **GreenhouseTeams — Conflict** | [`greenhouseteams/conflict.go`](controller/internal/controller/greenhouseteams/conflict.go) | `DetermineMode` (L87), `CleanupTRBs` (L106) |
-| **GreenhouseTeams — Teams** | [`greenhouseteams/team.go`](controller/internal/controller/greenhouseteams/team.go) | `ReconcileTeam` |
-| **GreenhouseTeams — TRBs** | [`greenhouseteams/teamrolebinding.go`](controller/internal/controller/greenhouseteams/teamrolebinding.go) | `ReconcileAllTRBs` |
-| **GitHub** | [`github/reconciler.go`](controller/internal/controller/github/reconciler.go) | `Reconcile` (L41) |
-| **GitHub — Desired State** | [`github/desired_state.go`](controller/internal/controller/github/desired_state.go) | `BuildDesiredState` |
-| **GitHub — Teams** | [`github/github_team.go`](controller/internal/controller/github/github_team.go) | `ReconcileTeams` |
-| **GitHub — Orgs** | [`github/github_org.go`](controller/internal/controller/github/github_org.go) | `reconcileOrganizations` |
-| **Status Aggregator** | [`aggregator/reconciler.go`](controller/internal/controller/aggregator/reconciler.go) | `Reconcile` (L37), `computeConditions` (L99) |
+| **K8s Provider — Stage 1** | [`kubernetes/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go) | `Reconcile` (L77), `SetupWithManager` (L360) |
+| **K8s Provider — Stage 2** | [`kubernetes/reconcile_plan.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go) | `planReconcile` (L34), `ReconcilePlan` struct (L19) |
+| **K8s Provider — Stage 3** | [`kubernetes/reconcile_plan.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go) | `executeReconcilePlan` (L57) |
+| **K8s Provider — RBAC gen** | [`kubernetes/rbac_generator.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_generator.go) | `buildRBACPlan`, `applyRBACPlan` |
+| **K8s Provider — Deletion** | [`kubernetes/rbac_cleaner.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_cleaner.go) | `CleanupAll`, `CleanupOrphans` |
+| **K8s Provider — Orphan** | [`kubernetes/orphan_cleanup.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/orphan_cleanup.go) | `filterOrphanedClusters`, orphan status |
+| **GreenhouseTeams** | [`greenhouseteams/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go) | `Reconcile` (L38) |
+| **GreenhouseTeams — Conflict** | [`greenhouseteams/conflict.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go) | `DetermineMode` (L87), `CleanupTRBs` (L106) |
+| **GreenhouseTeams — Teams** | [`greenhouseteams/team.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/team.go) | `ReconcileTeam` |
+| **GreenhouseTeams — TRBs** | [`greenhouseteams/teamrolebinding.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/teamrolebinding.go) | `ReconcileAllTRBs` |
+| **GitHub** | [`github/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go) | `Reconcile` (L41) |
+| **GitHub — Desired State** | [`github/desired_state.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/desired_state.go) | `BuildDesiredState` |
+| **GitHub — Teams** | [`github/github_team.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team.go) | `ReconcileTeams` |
+| **GitHub — Orgs** | [`github/github_org.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_org.go) | `reconcileOrganizations` |
+| **Status Aggregator** | [`aggregator/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go) | `Reconcile` (L37), `computeConditions` (L99) |
