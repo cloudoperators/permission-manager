@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package ccrn provides a parser for Common Cloud Resource Name (CCRN) URNs
 // used in the permission-manager system.
 package ccrn

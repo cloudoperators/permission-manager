@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.kubernetes.enabled }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -88,3 +92,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "pm-controller.fullname" . }}-kubernetes
     namespace: {{ .Release.Namespace }}
+{{- end }}
