@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package greenhouseteams implements the Greenhouse Teams provider controller.
 // It reconciles Teams and TeamRoleBindings (TRBs) for ASRs that reference a
 // greenhouse-teams ConnectorBinding. When the same ASR also references a

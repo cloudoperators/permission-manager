@@ -1,6 +1,6 @@
 # E2E Test Catalog
 
-This document lists all 57 end-to-end test scenarios for the pm-controller, grouped by feature area. Each test maps to acceptance criteria (AC) from the provider specifications.
+This document lists all end-to-end test scenarios for the pm-controller, grouped by feature area. Each test maps to acceptance criteria (AC) from the provider specifications.
 
 ---
 
@@ -215,21 +215,92 @@ This document lists all 57 end-to-end test scenarios for the pm-controller, grou
 | 101 | `TestConflict_RoundTrip_K8sAddedThenRemoved` | Full lifecycle: greenhouse-only → add k8s (conflict) → remove k8s (resolved) → final state matches initial | Round-trip correctness |
 | 102 | `TestConflict_StatusReporting` | In conflict mode, both providers report status independently, both show ready | Dual status reporting |
 
+## Smoke Test (1 test)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 103 | `TestSmoke_CreateASR_ClusterRoleAppears` | Creating an ASR targeting consumer-1 produces the expected ClusterRole (pm-\<asr-name\>) on consumer-1 | Basic end-to-end sanity |
+
+## Unmanaged Resources (3 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 104 | `TestUnmanaged_Kubernetes_RBAC` | Pre-existing ClusterRoles/ClusterRoleBindings without pm-controller labels are never modified or deleted during reconciliation | Non-interference with foreign resources |
+| 105 | `TestUnmanaged_GitHub_CRs` | Pre-existing GithubTeam/GithubTeamRepository CRs without pm-controller labels are never modified or deleted during reconciliation | Non-interference with foreign resources |
+| 106 | `TestUnmanaged_GreenhouseTeams_CRs` | Pre-existing Team/TeamRoleBinding CRs without pm-controller labels are never modified or deleted during reconciliation | Non-interference with foreign resources |
+
+## Edge Cases — Lifecycle (4 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 107 | `TestEdge_Lifecycle_EmptyPermissions` | ASR with empty permissions produces no RBAC; ASR exists and kubernetes provider reports ready | Empty permissions are a safe no-op |
+| 108 | `TestEdge_Lifecycle_PermissionsStrippedToZero` | Updating an ASR's permissions to `[]` removes existing ClusterRole from consumer; ASR is not deleted | Permissions can be emptied |
+| 109 | `TestEdge_Lifecycle_CBDeletedDuringASRDeletion` | Deleting an ASR succeeds even when the referenced ConnectorBinding is already gone; ClusterRole cleaned up | Finalizer handles missing CB |
+| 110 | `TestEdge_Lifecycle_SpecNameUpdate` | Changing spec.name from "team-alpha" to "team-beta" updates CRB subject; SAR confirms "team-beta" allowed and "team-alpha" denied | Group rename propagated |
+
+## Edge Cases — Status (1 test)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 111 | `TestEdge_Status_ProviderRemovedFromStatus` | Removing a provider's CB ref from connectorRefs removes that provider's entry from status.providers | Status reflects current providers |
+
+## Edge Cases — Drift Correction (2 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 112 | `TestEdge_DriftCorrection_BindingSubjects` | Tampering with ClusterRoleBinding subject group (attacker-controlled value) is corrected on reconcile | CRB subject drift self-healing |
+| 113 | `TestEdge_DriftCorrection_RoleBindingSubjects` | Tampering with RoleBinding subject group (attacker-controlled value) is corrected on reconcile | RoleBinding subject drift self-healing |
+
+## Edge Cases — Partial Deletion (2 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 114 | `TestEdge_PartialDeletion_CRBOnly` | Deleting only the ClusterRoleBinding (leaving ClusterRole intact) → controller re-creates CRB with correct subject | CRB partial-delete recovery |
+| 115 | `TestEdge_PartialDeletion_RoleBindingOnly` | Deleting only a RoleBinding (leaving ClusterRole intact) → controller re-creates the RoleBinding | RoleBinding partial-delete recovery |
+
+## Edge Cases — Operational (3 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 116 | `TestEdge_Operational_CBCapabilityMappingUpdate` | Patching a CB's capabilityMapping updates the downstream GithubTeamRepository CR with the new permission value | CB capability mapping is live-updatable |
+| 117 | `TestEdge_Operational_DeprecatedFinalizerMigration` | ASR with deprecated finalizer gets it replaced by the current finalizer on reconcile | Finalizer migration is automatic |
+| 118 | `TestEdge_Operational_ClusterKubeconfigRotation` | Updating a cluster's kubeconfig Secret with a fresh copy → controller continues functioning | Kubeconfig rotation is seamless |
+
+## Edge Cases — Resilience (6 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 119 | `TestEdge_Resilience_ControllerRestart` | Restarting the controller pod mid-run → ClusterRole persists with correct verbs and ASR status returns to Success | Crash recovery |
+| 120 | `TestEdge_Resilience_FinalizerBlocksOnUnreachableCluster` | Finalizer HOLDS when a target cluster is unreachable, preventing silent orphaning | Security: no orphaned RBAC |
+| 121 | `TestEdge_Resilience_OrphanCleanupAfterClusterReturns` | When a broken cluster becomes reachable again, finalizer completes and ASR deletion proceeds | Deferred cleanup after recovery |
+| 122 | `TestEdge_Resilience_GreenhouseClusterRemovedUnblocksDeletion` | Deleting a broken cluster's Greenhouse Cluster CR (decommission) removes the finalizer block | Decommission unblocks deletion |
+| 123 | `TestEdge_Resilience_AbandonCleanupAnnotation` | Setting abandon-cleanup annotation on a stuck ASR removes the finalizer despite unreachable clusters | Operator escape hatch |
+| 124 | `TestEdge_Resilience_RapidCreateDelete` | Creating and immediately deleting an ASR → finalizer completes and no orphaned ClusterRole persists | Rapid lifecycle handling |
+
+## Edge Cases — Wildcard (4 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 125 | `TestEdge_Wildcard_NamespaceDynamicCreation` | Creating a new namespace matching a wildcard pattern → reconcile picks it up and creates RoleBinding | Dynamic namespace discovery |
+| 126 | `TestEdge_Wildcard_NamespaceDeleted` | Deleting a namespace that matched a wildcard → controller does not report error status | Graceful namespace removal |
+| 127 | `TestEdge_Wildcard_GlobMatchesZero` | Glob matching zero namespaces → no RBAC created, ASR still reports Success | Zero-match is not an error |
+| 128 | `TestEdge_Wildcard_OverlappingNamespacePatterns` | Overlapping namespace patterns (glob READ + exact WRITE on same ns) → both RoleBindings created referencing same ClusterRole with merged verbs | Namespace-level verb merging |
+
 ---
 
 ## Summary by User Story
 
 ### US-1: As an operator, I want ASRs to automatically provision RBAC on target clusters
-**Tests:** 1–4 (Onboarding), 28–37 (RBAC Correctness)
+**Tests:** 1–4 (Onboarding), 28–37 (RBAC Correctness), 103 (Smoke)
 
 ### US-2: As an operator, I want RBAC cleaned up when clusters leave or ASRs are deleted
-**Tests:** 5–8 (Offboarding), 33, 58–59 (Deletion)
+**Tests:** 5–8 (Offboarding), 33, 58–59 (Deletion), 108–109 (Edge Lifecycle)
 
 ### US-3: As an operator, I want pattern-based targeting with wildcards
-**Tests:** 9–16 (Wildcards), 50–52 (GitHub Wildcards)
+**Tests:** 9–16 (Wildcards), 50–52 (GitHub Wildcards), 125–128 (Edge Wildcards)
 
 ### US-4: As an operator, I want visibility into provisioning health
-**Tests:** 38–45 (Status), 63–67 (GitHub Status), 87–89 (GH-Teams Status), 96 (Aggregated)
+**Tests:** 38–45 (Status), 63–67 (GitHub Status), 87–89 (GH-Teams Status), 96 (Aggregated), 111 (Edge Status)
 
 ### US-5: As an operator, I want each provider to work independently
 **Tests:** 17, 91–96 (Multi-Provider), 23–27 (ConnectorBinding Lifecycle)
@@ -244,7 +315,13 @@ This document lists all 57 end-to-end test scenarios for the pm-controller, grou
 **Tests:** 97–102 (Conflict Detection)
 
 ### US-9: As an operator, I want the controller to self-heal from drift
-**Tests:** 22, 34, 45 (Drift Correction)
+**Tests:** 22, 34, 45 (Drift Correction), 112–115 (Edge Drift/Partial Deletion)
 
 ### US-10: As an operator, I want ASRs to support multiple simultaneous providers
 **Tests:** 91–96 (Multi-Provider Integration)
+
+### US-11: As an operator, I want the controller to not interfere with unmanaged resources
+**Tests:** 104–106 (Unmanaged Resources)
+
+### US-12: As an operator, I want the controller to be resilient to failures and edge cases
+**Tests:** 107–110 (Edge Lifecycle), 116–118 (Edge Operational), 119–124 (Edge Resilience)

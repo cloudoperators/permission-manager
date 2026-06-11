@@ -31,8 +31,9 @@ header:
     - '**/*.json'
     - '**/.gitkeep'
     - '**/*.txt'
-    - '*Dockerfile*'
-    - 'Makefile'
+    - '**/Dockerfile*'
+    - '**/*.e2e'
+    - '**/Makefile'
     - 'pkg/idproxy/web/**'
     - 'pkg/apis/scheme_builder.go' # Belongs to the Kubernetes authors
     - 'cmd/tcp-proxy/main.go' # MIT License
