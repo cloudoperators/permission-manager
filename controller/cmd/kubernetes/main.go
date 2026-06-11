@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // pm-controller-kubernetes is the Kubernetes provider controller binary.
 // It watches ASRs with Kubernetes ConnectorBindings and provisions RBAC
 // resources on target clusters.
