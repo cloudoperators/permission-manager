@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // greenhouse-teams is a standalone Kubernetes controller that watches Permission Manager
 // ApplicationSpecificRole and ConnectorBinding CRDs, processing those that reference
 // the greenhouse-teams provider to create Greenhouse Team and TeamRoleBinding CRs.
