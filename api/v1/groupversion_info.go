@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package v1 contains API Schema definitions for the permission-manager v1 API group.
 // +kubebuilder:object:generate=true
 // +groupName=permission-manager.cloudoperators.dev
