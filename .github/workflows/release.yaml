@@ -71,6 +71,7 @@ jobs:
           context: .
           file: ./controller/Dockerfile
           target: ${{ matrix.target }}
+          build-args: TARGET=${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

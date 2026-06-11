@@ -1,6 +1,8 @@
 # Build stage
 FROM golang:1.22 AS builder
 
+ARG TARGET
+
 WORKDIR /workspace
 
 # Copy go mod files (context is repo root)
@@ -16,44 +18,41 @@ COPY controller/cmd/ cmd/
 COPY controller/internal/ internal/
 COPY controller/pkg/ pkg/
 
-# Build all controller binaries
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-kubernetes ./cmd/kubernetes/
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-aggregator ./cmd/aggregator/
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-github ./cmd/github/
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-greenhouse-teams ./cmd/greenhouse-teams/
+# Build only the requested binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o /out/pm-controller ./cmd/${TARGET}/
 
 # Runtime stage - Kubernetes provider
 FROM gcr.io/distroless/static:nonroot AS kubernetes
 
 WORKDIR /
-COPY --from=builder /workspace/pm-controller-kubernetes .
+COPY --from=builder /out/pm-controller .
 USER 65532:65532
 
-ENTRYPOINT ["/pm-controller-kubernetes"]
+ENTRYPOINT ["/pm-controller"]
 
 # Runtime stage - Aggregator
 FROM gcr.io/distroless/static:nonroot AS aggregator
 
 WORKDIR /
-COPY --from=builder /workspace/pm-controller-aggregator .
+COPY --from=builder /out/pm-controller .
 USER 65532:65532
 
-ENTRYPOINT ["/pm-controller-aggregator"]
+ENTRYPOINT ["/pm-controller"]
 
 # Runtime stage - GitHub provider
 FROM gcr.io/distroless/static:nonroot AS github
 
 WORKDIR /
-COPY --from=builder /workspace/pm-controller-github .
+COPY --from=builder /out/pm-controller .
 USER 65532:65532
 
-ENTRYPOINT ["/pm-controller-github"]
+ENTRYPOINT ["/pm-controller"]
 
 # Runtime stage - Greenhouse Teams provider
 FROM gcr.io/distroless/static:nonroot AS greenhouse-teams
 
 WORKDIR /
-COPY --from=builder /workspace/pm-controller-greenhouse-teams .
+COPY --from=builder /out/pm-controller .
 USER 65532:65532
 
-ENTRYPOINT ["/pm-controller-greenhouse-teams"]
+ENTRYPOINT ["/pm-controller"]
