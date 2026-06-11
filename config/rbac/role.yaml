@@ -1,0 +1,55 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - greenhouse.sap
+  - greenhouseapis.sap
+  resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - permission-manager.cloudoperators.dev
+  resources:
+  - applicationspecificroles
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - permission-manager.cloudoperators.dev
+  resources:
+  - applicationspecificroles/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - permission-manager.cloudoperators.dev
+  resources:
+  - applicationspecificroles/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - permission-manager.cloudoperators.dev
+  resources:
+  - connectorbindings
+  verbs:
+  - get
+  - list
+  - watch
