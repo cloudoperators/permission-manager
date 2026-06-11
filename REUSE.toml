@@ -17,6 +17,6 @@ SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and Permission
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["**/*.json", ".github/CODEOWNERS", "**/.gitignore", "**/Dockerfile*", "**/Makefile"]
+path = ["**/*.json", ".github/CODEOWNERS", "**/.gitignore", "**/Dockerfile*", "**/Makefile", "**/*.mk", "**/*.txt", "PROJECT"]
 SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and Permission Manager contributors"
 SPDX-License-Identifier = "Apache-2.0"
