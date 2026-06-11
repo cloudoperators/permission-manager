@@ -6,6 +6,7 @@ name: Release - Build and Publish Container Images
 on:
   release:
     types: [published]
+  workflow_dispatch: # allows manual testing from any branch
 
 env:
   REGISTRY: ghcr.io
@@ -17,7 +18,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # for cosign keyless signing
+      id-token: write # for cosign keyless signing and GitHub attestations
+      attestations: write # for actions/attest-build-provenance
 
     strategy:
       fail-fast: false
@@ -73,12 +75,27 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Attest build provenance (GitHub)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
       - name: Generate SBOM with Trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
           format: cyclonedx
           output: sbom.cdx.json
+
+      - name: Attest SBOM (GitHub)
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.cdx.json
+          push-to-registry: true
 
       - name: Attest SBOM with cosign
         run: |
