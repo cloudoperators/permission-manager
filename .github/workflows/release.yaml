@@ -68,7 +68,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./controller
+          context: .
+          file: ./controller/Dockerfile
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true

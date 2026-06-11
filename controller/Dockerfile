@@ -3,19 +3,18 @@ FROM golang:1.22 AS builder
 
 WORKDIR /workspace
 
-# Copy go mod files
-COPY go.mod go.sum ./
+# Copy go mod files (context is repo root)
+COPY controller/go.mod controller/go.sum ./
 
-# Copy the local api module (for replace directive)
-# In CI, this should be adjusted to use the published module
-COPY api/ ../api/
+# Copy the local api module (used via replace directive)
+COPY api/ /api/
 
 RUN go mod download
 
 # Copy source code
-COPY cmd/ cmd/
-COPY internal/ internal/
-COPY pkg/ pkg/
+COPY controller/cmd/ cmd/
+COPY controller/internal/ internal/
+COPY controller/pkg/ pkg/
 
 # Build all controller binaries
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o pm-controller-kubernetes ./cmd/kubernetes/
