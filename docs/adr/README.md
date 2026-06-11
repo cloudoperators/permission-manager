@@ -24,6 +24,7 @@ ADRs document significant design decisions made during development. Each record 
 | [014](014-kubeconfig-credential-plugin-rejection.md) | Kubeconfig Credential Plugin Rejection | Pending review | 2026-06 |
 | [015](015-scope-separated-clusterroles.md) | Scope-Separated ClusterRoles for RBAC Generation | Pending review | 2026-06 |
 | [016](016-capability-taxonomy-revision.md) | Capability Taxonomy Revision (SECURE + Wildcard) | Pending review | 2026-06 |
+| [017](017-kubebuilder-migration.md) | Migrate to Kubebuilder Project Layout | Accepted | 2026-06 |
 
 ## Format
 
