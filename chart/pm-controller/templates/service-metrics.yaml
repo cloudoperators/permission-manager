@@ -1,5 +1,8 @@
 {{- if and .Values.alerts.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
-{{- $components := list "aggregator" "kubernetes" }}
+{{- $components := list "aggregator" }}
+{{- if .Values.kubernetes.enabled }}
+{{- $components = append $components "kubernetes" }}
+{{- end }}
 {{- if .Values.github.enabled }}
 {{- $components = append $components "github" }}
 {{- end }}
