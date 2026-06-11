@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: ./bin/structured-auth.yaml
+        containerPath: /etc/kubernetes/structured-auth.yaml
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            "anonymous-auth": "true"
+            "authentication-config": "/etc/kubernetes/structured-auth.yaml"
+          extraVolumes:
+            - name: structured-auth
+              hostPath: /etc/kubernetes/structured-auth.yaml 
+              mountPath: /etc/kubernetes/structured-auth.yaml
+  - role: worker
