@@ -43,7 +43,7 @@ Each binary:
 - Deploys as a separate Kubernetes `Deployment` with its own `ServiceAccount` and RBAC.
 - Filters ASRs via a `predicate` that checks the ConnectorBinding index before reconciling.
 
-Shared logic lives in `pkg/` (provider constants, status helpers, CCRN parser) and is imported by all binaries.
+Shared logic lives in `controller/pkg/` (provider constants, status helpers, CCRN parser) and is imported by all binaries.
 
 ## Consequences
 
