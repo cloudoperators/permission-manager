@@ -239,6 +239,90 @@ func assertVerbsInClusterRole(t *testing.T, ctx context.Context, c client.Client
 	}
 }
 
+// assertRoleExists verifies that a Role with the given name exists in the
+// specified namespace and carries the pm-controller managed-by label.
+func assertRoleExists(t *testing.T, ctx context.Context, c client.Client, namespace, name string) {
+	t.Helper()
+
+	err := pollUntil(t, ctx, defaultAssertTimeout, assertPollInterval, func() (bool, error) {
+		var r rbacv1.Role
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &r); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		// Verify managed-by label
+		if r.Labels["app.kubernetes.io/managed-by"] != "pm-controller" {
+			return false, fmt.Errorf("Role %s/%s exists but missing managed-by label (labels: %v)", namespace, name, r.Labels)
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("assertRoleExists(%s/%s): %v", namespace, name, err)
+	}
+}
+
+// assertRoleAbsent polls until the Role with the given name is no longer found
+// in the specified namespace (NotFound).
+func assertRoleAbsent(t *testing.T, ctx context.Context, c client.Client, namespace, name string) {
+	t.Helper()
+
+	err := pollUntil(t, ctx, defaultAssertTimeout, assertPollInterval, func() (bool, error) {
+		var r rbacv1.Role
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &r); err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("assertRoleAbsent(%s/%s): %v", namespace, name, err)
+	}
+}
+
+// assertVerbsInRole checks that the first rule of the named Role in the given
+// namespace contains exactly the expected verbs (order-independent comparison).
+func assertVerbsInRole(t *testing.T, ctx context.Context, c client.Client, namespace, name string, expectedVerbs []string) {
+	t.Helper()
+
+	err := pollUntil(t, ctx, defaultAssertTimeout, assertPollInterval, func() (bool, error) {
+		var r rbacv1.Role
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &r); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if len(r.Rules) == 0 {
+			return false, fmt.Errorf("Role %s/%s has no rules", namespace, name)
+		}
+
+		got := make([]string, len(r.Rules[0].Verbs))
+		copy(got, r.Rules[0].Verbs)
+		sort.Strings(got)
+
+		want := make([]string, len(expectedVerbs))
+		copy(want, expectedVerbs)
+		sort.Strings(want)
+
+		if len(got) != len(want) {
+			return false, fmt.Errorf("verb count mismatch: got %v, want %v", got, want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				return false, fmt.Errorf("verb mismatch at [%d]: got %q, want %q (full: got=%v, want=%v)", i, got[i], want[i], got, want)
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("assertVerbsInRole(%s/%s, %v): %v", namespace, name, expectedVerbs, err)
+	}
+}
+
 // assertRBACEnforced performs a SubjectAccessReview to verify that RBAC
 // enforcement matches the expected allowed state for the given group,
 // verb, resource, and optional namespace (empty for cluster-scope).

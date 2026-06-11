@@ -85,14 +85,13 @@ func TestRBAC_ClusterScope_READ(t *testing.T) {
 }
 
 // TestRBAC_NamespaceScope_WRITE verifies that an ASR with namespace-scoped WRITE
-// creates a ClusterRole and a RoleBinding in the target namespace, and that SAR
+// creates a Role and a RoleBinding in the target namespace, and that SAR
 // confirms CREATE is allowed in that namespace but NOT in another.
 func TestRBAC_NamespaceScope_WRITE(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	asrName := "rbac-ns-write"
 	resourceName := resourcePrefix + asrName
-	nsClusterRoleName := resourceName + "-ns" // namespace-only ASRs use -ns suffix
 
 	consumer := consumerClusters[0]
 	targetNS := consumer.Namespaces[0]
@@ -112,11 +111,11 @@ func TestRBAC_NamespaceScope_WRITE(t *testing.T) {
 		{"resource": namespaceCCRN(consumer.Name, targetNS), "capability": "WRITE"},
 	})
 
-	// Wait for the namespace-scoped ClusterRole to appear (uses -ns suffix).
-	waitForClusterRole(t, consumer.Name, nsClusterRoleName, resourcePropagationTimeout)
+	// Wait for the namespace-scoped Role to appear in target namespace.
+	waitForRole(t, consumer.Name, resourceName, targetNS, resourcePropagationTimeout)
 
-	// Assert ClusterRole exists.
-	assertClusterRoleExists(t, ctx, crClient, nsClusterRoleName)
+	// Assert Role exists in the target namespace.
+	assertRoleExists(t, ctx, crClient, targetNS, resourceName)
 
 	// Assert RoleBinding exists in the target namespace (uses base name).
 	assertRoleBindingExists(t, ctx, crClient, targetNS, resourceName, asrName)

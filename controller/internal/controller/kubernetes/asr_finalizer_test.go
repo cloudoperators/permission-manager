@@ -753,11 +753,11 @@ func TestReconcile_FullCreateDeleteLifecycle(t *testing.T) {
 		t.Fatalf("expected ClusterRoleBinding on prod-eu: %v", err)
 	}
 
-	// Verify RBAC was created on staging-us (namespace-only → nsClusterRole)
-	var stagingCR rbacv1.ClusterRole
-	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-lifecycle-asr-ns"}, &stagingCR)
+	// Verify RBAC was created on staging-us (namespace-only → Role per namespace)
+	var stagingRole rbacv1.Role
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-lifecycle-asr", Namespace: "default"}, &stagingRole)
 	if err != nil {
-		t.Fatalf("expected namespace-scoped ClusterRole on staging-us: %v", err)
+		t.Fatalf("expected namespace-scoped Role on staging-us: %v", err)
 	}
 
 	var stagingRB rbacv1.RoleBinding
@@ -797,9 +797,9 @@ func TestReconcile_FullCreateDeleteLifecycle(t *testing.T) {
 	}
 
 	// Verify all RBAC cleaned up on staging-us
-	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-lifecycle-asr-ns"}, &stagingCR)
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-lifecycle-asr", Namespace: "default"}, &stagingRole)
 	if err == nil {
-		t.Error("expected namespace-scoped ClusterRole to be deleted on staging-us after ASR deletion")
+		t.Error("expected namespace-scoped Role to be deleted on staging-us after ASR deletion")
 	}
 	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-lifecycle-asr", Namespace: "default"}, &stagingRB)
 	if err == nil {
@@ -1168,9 +1168,13 @@ func TestRBACIntegration_DeleteCleansUpRBACOnAllClusters(t *testing.T) {
 	if err := prodClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr"}, &prodCRB); err != nil {
 		t.Fatalf("expected ClusterRoleBinding on prod-eu: %v", err)
 	}
-	var stagingCR rbacv1.ClusterRole
-	if err := stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr-ns"}, &stagingCR); err != nil {
-		t.Fatalf("expected namespace-scoped ClusterRole on staging-us: %v", err)
+	var stagingRole1 rbacv1.Role
+	if err := stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr", Namespace: "default"}, &stagingRole1); err != nil {
+		t.Fatalf("expected namespace-scoped Role in default on staging-us: %v", err)
+	}
+	var stagingRole2 rbacv1.Role
+	if err := stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr", Namespace: "monitoring"}, &stagingRole2); err != nil {
+		t.Fatalf("expected namespace-scoped Role in monitoring on staging-us: %v", err)
 	}
 	var stagingRB1 rbacv1.RoleBinding
 	if err := stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr", Namespace: "default"}, &stagingRB1); err != nil {
@@ -1209,9 +1213,13 @@ func TestRBACIntegration_DeleteCleansUpRBACOnAllClusters(t *testing.T) {
 	if err == nil {
 		t.Error("expected ClusterRoleBinding on prod-eu to be deleted")
 	}
-	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr-ns"}, &stagingCR)
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr", Namespace: "default"}, &stagingRole1)
 	if err == nil {
-		t.Error("expected namespace-scoped ClusterRole on staging-us to be deleted")
+		t.Error("expected namespace-scoped Role in default on staging-us to be deleted")
+	}
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-integration-asr", Namespace: "monitoring"}, &stagingRole2)
+	if err == nil {
+		t.Error("expected namespace-scoped Role in monitoring on staging-us to be deleted")
 	}
 
 	var rb1 rbacv1.RoleBinding

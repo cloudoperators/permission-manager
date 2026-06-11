@@ -173,5 +173,25 @@ func (c *RBACCleaner) deleteRBACOnCluster(ctx context.Context, clusterClient Clu
 		}
 	}
 
+	// Delete Roles with the ASR label (across all namespaces)
+	var roleList rbacv1.RoleList
+	if err := clusterClient.List(ctx, &roleList, labelSelector); err != nil {
+		logger.Error(err, "failed to list Roles for cleanup")
+		return fmt.Errorf("failed to list Roles on cluster %q: %w", clusterName, err)
+	}
+	for i := range roleList.Items {
+		ref := audit.ResourceRef{Kind: "Role", Name: roleList.Items[i].Name, Namespace: roleList.Items[i].Namespace, Cluster: clusterName}
+		if err := clusterClient.Delete(ctx, &roleList.Items[i]); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "failed to delete Role", "namespace", roleList.Items[i].Namespace, "name", roleList.Items[i].Name)
+				c.AuditLog.Log(ctx, audit.ActionDelete, audit.OutcomeFailure, asrName, ref, err)
+				errs = append(errs, fmt.Errorf("failed to delete Role %q in namespace %q on cluster %q: %w", roleList.Items[i].Name, roleList.Items[i].Namespace, clusterName, err))
+			}
+		} else {
+			logger.Info("deleted Role", "namespace", roleList.Items[i].Namespace, "name", roleList.Items[i].Name)
+			c.AuditLog.Log(ctx, audit.ActionDelete, audit.OutcomeSuccess, asrName, ref, nil)
+		}
+	}
+
 	return errors.Join(errs...)
 }

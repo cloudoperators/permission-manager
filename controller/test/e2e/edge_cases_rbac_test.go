@@ -87,7 +87,6 @@ func TestEdge_DriftCorrection_RoleBindingSubjects(t *testing.T) {
 	ctx := context.Background()
 	asrName := "edge-drift-rb-subject"
 	resourceName := resourcePrefix + asrName
-	nsClusterRoleName := resourceName + "-ns" // namespace-only ASRs use -ns suffix
 
 	consumer := consumerClusters[0]
 	targetNS := consumer.Namespaces[0]
@@ -106,8 +105,8 @@ func TestEdge_DriftCorrection_RoleBindingSubjects(t *testing.T) {
 		{"resource": namespaceCCRN(consumer.Name, targetNS), "capability": "WRITE"},
 	})
 
-	// Wait for the namespace-scoped ClusterRole and RoleBinding to appear.
-	waitForClusterRole(t, consumer.Name, nsClusterRoleName, resourcePropagationTimeout)
+	// Wait for the namespace-scoped Role and RoleBinding to appear.
+	waitForRole(t, consumer.Name, resourceName, targetNS, resourcePropagationTimeout)
 	assertRoleBindingExists(t, ctx, crClient, targetNS, resourceName, asrName)
 
 	// Inject drift: change the RoleBinding subject to an attacker group.
@@ -211,14 +210,13 @@ func TestEdge_PartialDeletion_CRBOnly(t *testing.T) {
 }
 
 // TestEdge_PartialDeletion_RoleBindingOnly verifies that deleting only the
-// RoleBinding in a target namespace (while leaving the ClusterRole intact)
+// RoleBinding in a target namespace (while leaving the Role intact)
 // causes the controller to re-create the RoleBinding on reconcile.
 func TestEdge_PartialDeletion_RoleBindingOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	asrName := "edge-partial-del-rb"
 	resourceName := resourcePrefix + asrName
-	nsClusterRoleName := resourceName + "-ns" // namespace-only ASRs use -ns suffix
 
 	consumer := consumerClusters[0]
 	targetNS := consumer.Namespaces[0]
@@ -238,11 +236,11 @@ func TestEdge_PartialDeletion_RoleBindingOnly(t *testing.T) {
 	})
 
 	// Wait for RBAC resources to appear.
-	waitForClusterRole(t, consumer.Name, nsClusterRoleName, resourcePropagationTimeout)
-	assertClusterRoleExists(t, ctx, crClient, nsClusterRoleName)
+	waitForRole(t, consumer.Name, resourceName, targetNS, resourcePropagationTimeout)
+	assertRoleExists(t, ctx, crClient, targetNS, resourceName)
 	assertRoleBindingExists(t, ctx, crClient, targetNS, resourceName, asrName)
 
-	// Delete only the RoleBinding (leave ClusterRole intact).
+	// Delete only the RoleBinding (leave Role intact).
 	var rb rbacv1.RoleBinding
 	err := crClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: targetNS}, &rb)
 	if err != nil {
@@ -272,6 +270,6 @@ func TestEdge_PartialDeletion_RoleBindingOnly(t *testing.T) {
 		t.Fatalf("RoleBinding was not re-created with correct subject within timeout: %v", err)
 	}
 
-	// Verify the ClusterRole was never deleted (still exists).
-	assertClusterRoleExists(t, ctx, crClient, nsClusterRoleName)
+	// Verify the Role was never deleted (still exists).
+	assertRoleExists(t, ctx, crClient, targetNS, resourceName)
 }

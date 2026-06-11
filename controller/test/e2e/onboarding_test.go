@@ -286,13 +286,13 @@ func TestOnboarding_ClusterWithNamespacePerms(t *testing.T) {
 
 	createASRObj(t, asr)
 
-	// Wait for the namespace-scoped ClusterRole to appear (uses -ns suffix).
-	waitForClusterRoleByName(t, ctx, "consumer-1", "pm-"+asrName+"-ns")
+	// Wait for the namespace-scoped Role to appear in apps-prod.
+	waitForRoleByName(t, ctx, "consumer-1", "apps-prod", "pm-"+asrName)
 
 	// Verify the RoleBinding exists in the apps-prod namespace (uses base name).
 	assertRoleBindingByName(t, ctx, "consumer-1", "apps-prod", "pm-"+asrName)
 
-	// Verify the RoleBinding references the correct ClusterRole and subject.
+	// Verify the RoleBinding references the correct Role and subject.
 	cl := clientForCluster(t, "consumer-1")
 	var rb rbacv1.RoleBinding
 	if err := cl.Get(ctx, types.NamespacedName{
@@ -302,11 +302,11 @@ func TestOnboarding_ClusterWithNamespacePerms(t *testing.T) {
 		t.Fatalf("failed to get RoleBinding in apps-prod: %v", err)
 	}
 
-	if rb.RoleRef.Kind != "ClusterRole" {
-		t.Errorf("RoleBinding RoleRef.Kind = %q, want %q", rb.RoleRef.Kind, "ClusterRole")
+	if rb.RoleRef.Kind != "Role" {
+		t.Errorf("RoleBinding RoleRef.Kind = %q, want %q", rb.RoleRef.Kind, "Role")
 	}
-	if rb.RoleRef.Name != "pm-"+asrName+"-ns" {
-		t.Errorf("RoleBinding RoleRef.Name = %q, want %q", rb.RoleRef.Name, "pm-"+asrName+"-ns")
+	if rb.RoleRef.Name != "pm-"+asrName {
+		t.Errorf("RoleBinding RoleRef.Name = %q, want %q", rb.RoleRef.Name, "pm-"+asrName)
 	}
 	if len(rb.Subjects) == 0 {
 		t.Fatal("expected at least one subject in RoleBinding")

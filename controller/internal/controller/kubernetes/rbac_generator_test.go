@@ -426,12 +426,16 @@ func TestBuildRBACPlan_NamespaceScopeOnly(t *testing.T) {
 		t.Error("expected no ClusterRoleBinding for namespace-only scope")
 	}
 
-	// Should have namespace-scoped ClusterRole
-	if plan.nsClusterRole == nil {
-		t.Fatal("expected nsClusterRole to be created for namespace-only scope")
+	// Should have a namespace-scoped Role
+	if len(plan.roles) != 1 {
+		t.Fatalf("expected 1 Role, got %d", len(plan.roles))
 	}
-	if plan.nsClusterRole.Name != "pm-ns-writer-ns" {
-		t.Errorf("nsClusterRole name = %q, want %q", plan.nsClusterRole.Name, "pm-ns-writer-ns")
+	role := plan.roles[0]
+	if role.Name != "pm-ns-writer" {
+		t.Errorf("Role name = %q, want %q", role.Name, "pm-ns-writer")
+	}
+	if role.Namespace != "kube-system" {
+		t.Errorf("Role namespace = %q, want %q", role.Namespace, "kube-system")
 	}
 
 	if len(plan.roleBindings) != 1 {
@@ -445,11 +449,11 @@ func TestBuildRBACPlan_NamespaceScopeOnly(t *testing.T) {
 	if rb.Namespace != "kube-system" {
 		t.Errorf("RoleBinding namespace = %q, want %q", rb.Namespace, "kube-system")
 	}
-	if rb.RoleRef.Name != "pm-ns-writer-ns" {
-		t.Errorf("RoleBinding roleRef = %q, want %q", rb.RoleRef.Name, "pm-ns-writer-ns")
+	if rb.RoleRef.Name != "pm-ns-writer" {
+		t.Errorf("RoleBinding roleRef = %q, want %q", rb.RoleRef.Name, "pm-ns-writer")
 	}
-	if rb.RoleRef.Kind != "ClusterRole" {
-		t.Errorf("RoleBinding roleRef kind = %q, want %q", rb.RoleRef.Kind, "ClusterRole")
+	if rb.RoleRef.Kind != "Role" {
+		t.Errorf("RoleBinding roleRef kind = %q, want %q", rb.RoleRef.Kind, "Role")
 	}
 	subject := rb.Subjects[0]
 	if subject.Kind != "Group" || subject.Name != "ns-writer-group" {
@@ -474,13 +478,33 @@ func TestBuildRBACPlan_MixedScope(t *testing.T) {
 	if plan.clusterRoleBinding == nil {
 		t.Fatal("expected ClusterRoleBinding")
 	}
+	if len(plan.roles) != 2 {
+		t.Fatalf("expected 2 Roles, got %d", len(plan.roles))
+	}
 	if len(plan.roleBindings) != 2 {
 		t.Fatalf("expected 2 RoleBindings, got %d", len(plan.roleBindings))
 	}
 
-	// Verify RoleBindings are sorted by namespace
+	// Verify Roles are sorted by namespace and have correct per-namespace verbs
+	if plan.roles[0].Namespace != "default" {
+		t.Errorf("first Role namespace = %q, want %q", plan.roles[0].Namespace, "default")
+	}
+	if len(plan.roles[0].Rules[0].Verbs) != 2 {
+		t.Errorf("default Role verbs = %v, want 2 verbs (create, delete)", plan.roles[0].Rules[0].Verbs)
+	}
+	if plan.roles[1].Namespace != "monitoring" {
+		t.Errorf("second Role namespace = %q, want %q", plan.roles[1].Namespace, "monitoring")
+	}
+	if len(plan.roles[1].Rules[0].Verbs) != 2 {
+		t.Errorf("monitoring Role verbs = %v, want 2 verbs (get, list)", plan.roles[1].Rules[0].Verbs)
+	}
+
+	// Verify RoleBindings are sorted by namespace and reference Role (not ClusterRole)
 	if plan.roleBindings[0].Namespace != "default" {
 		t.Errorf("first RoleBinding namespace = %q, want %q", plan.roleBindings[0].Namespace, "default")
+	}
+	if plan.roleBindings[0].RoleRef.Kind != "Role" {
+		t.Errorf("first RoleBinding roleRef kind = %q, want %q", plan.roleBindings[0].RoleRef.Kind, "Role")
 	}
 	if plan.roleBindings[1].Namespace != "monitoring" {
 		t.Errorf("second RoleBinding namespace = %q, want %q", plan.roleBindings[1].Namespace, "monitoring")
@@ -537,18 +561,21 @@ func TestApplyRBACPlan_CreatesResources(t *testing.T) {
 	if rb.Subjects[0].Name != "test-group" {
 		t.Errorf("RoleBinding subject = %q, want %q", rb.Subjects[0].Name, "test-group")
 	}
-	if rb.RoleRef.Name != "pm-test-asr-ns" {
-		t.Errorf("RoleBinding roleRef = %q, want %q", rb.RoleRef.Name, "pm-test-asr-ns")
+	if rb.RoleRef.Name != "pm-test-asr" {
+		t.Errorf("RoleBinding roleRef = %q, want %q", rb.RoleRef.Name, "pm-test-asr")
+	}
+	if rb.RoleRef.Kind != "Role" {
+		t.Errorf("RoleBinding roleRef kind = %q, want %q", rb.RoleRef.Kind, "Role")
 	}
 
-	// Verify namespace-scoped ClusterRole was created
-	var nsCR rbacv1.ClusterRole
-	err = fakeClient.Get(ctx, types.NamespacedName{Name: "pm-test-asr-ns"}, &nsCR)
+	// Verify namespace-scoped Role was created in default namespace
+	var nsRole rbacv1.Role
+	err = fakeClient.Get(ctx, types.NamespacedName{Name: "pm-test-asr", Namespace: "default"}, &nsRole)
 	if err != nil {
-		t.Fatalf("failed to get namespace-scoped ClusterRole: %v", err)
+		t.Fatalf("failed to get namespace-scoped Role: %v", err)
 	}
-	if nsCR.Labels[LabelASRName] != "test-asr" {
-		t.Errorf("nsClusterRole missing ASR label")
+	if nsRole.Labels[LabelASRName] != "test-asr" {
+		t.Errorf("Role missing ASR label")
 	}
 }
 
@@ -710,12 +737,18 @@ func TestRBACIntegration_FullReconcileFlow(t *testing.T) {
 		t.Errorf("prod-eu CRB subject = %q, want %q", prodCRB.Subjects[0].Name, "my-team")
 	}
 
-	// Verify staging-us: nsClusterRole + RoleBindings in default and monitoring
+	// Verify staging-us: per-namespace Roles + RoleBindings in default and monitoring
 	// (no cluster-scoped ClusterRole since staging-us has only namespace permissions)
-	var stagingNsCR rbacv1.ClusterRole
-	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-team-access-ns"}, &stagingNsCR)
+	var stagingDefaultRole rbacv1.Role
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-team-access", Namespace: "default"}, &stagingDefaultRole)
 	if err != nil {
-		t.Fatalf("failed to get namespace-scoped ClusterRole on staging-us: %v", err)
+		t.Fatalf("failed to get Role in default on staging-us: %v", err)
+	}
+
+	var stagingMonRole rbacv1.Role
+	err = stagingClient.Get(ctx, types.NamespacedName{Name: "pm-team-access", Namespace: "monitoring"}, &stagingMonRole)
+	if err != nil {
+		t.Fatalf("failed to get Role in monitoring on staging-us: %v", err)
 	}
 
 	// staging-us should NOT have a cluster-scoped ClusterRole
@@ -741,8 +774,11 @@ func TestRBACIntegration_FullReconcileFlow(t *testing.T) {
 	if defaultRB.Subjects[0].Name != "my-team" {
 		t.Errorf("staging-us default RB subject = %q, want %q", defaultRB.Subjects[0].Name, "my-team")
 	}
-	if defaultRB.RoleRef.Name != "pm-team-access-ns" {
-		t.Errorf("staging-us default RB roleRef = %q, want %q", defaultRB.RoleRef.Name, "pm-team-access-ns")
+	if defaultRB.RoleRef.Name != "pm-team-access" {
+		t.Errorf("staging-us default RB roleRef = %q, want %q", defaultRB.RoleRef.Name, "pm-team-access")
+	}
+	if defaultRB.RoleRef.Kind != "Role" {
+		t.Errorf("staging-us default RB roleRef kind = %q, want %q", defaultRB.RoleRef.Kind, "Role")
 	}
 
 	// Check RoleBinding in monitoring namespace
@@ -981,18 +1017,31 @@ func TestRBACIntegration_MultiplePermissionsClusterAndNamespace(t *testing.T) {
 		t.Errorf("expected 3 cluster-scoped verbs (READ only), got %d: %v", len(cr.Rules[0].Verbs), cr.Rules[0].Verbs)
 	}
 
-	// Verify namespace-scoped ClusterRole with WRITE verbs
-	var nsCR rbacv1.ClusterRole
-	err = prodClient.Get(ctx, types.NamespacedName{Name: "pm-full-access-ns"}, &nsCR)
+	// Verify per-namespace Roles with exact verb sets (no union leakage)
+	var appsRole rbacv1.Role
+	err = prodClient.Get(ctx, types.NamespacedName{Name: "pm-full-access", Namespace: "apps"}, &appsRole)
 	if err != nil {
-		t.Fatalf("failed to get namespace-scoped ClusterRole: %v", err)
+		t.Fatalf("failed to get Role in apps: %v", err)
 	}
-	if len(nsCR.Rules) != 1 {
-		t.Fatalf("expected 1 rule on ns ClusterRole, got %d", len(nsCR.Rules))
+	if len(appsRole.Rules) != 1 {
+		t.Fatalf("expected 1 rule on apps Role, got %d", len(appsRole.Rules))
 	}
-	// Namespace-scoped: WRITE (7) merged with READ (3) = 7 unique verbs
-	if len(nsCR.Rules[0].Verbs) != 7 {
-		t.Errorf("expected 7 namespace verbs (WRITE union), got %d: %v", len(nsCR.Rules[0].Verbs), nsCR.Rules[0].Verbs)
+	// apps: WRITE capability = 7 verbs (create, delete, deletecollection, get, list, patch, update)
+	if len(appsRole.Rules[0].Verbs) != 7 {
+		t.Errorf("expected 7 verbs on apps Role (WRITE), got %d: %v", len(appsRole.Rules[0].Verbs), appsRole.Rules[0].Verbs)
+	}
+
+	var monRole rbacv1.Role
+	err = prodClient.Get(ctx, types.NamespacedName{Name: "pm-full-access", Namespace: "monitoring"}, &monRole)
+	if err != nil {
+		t.Fatalf("failed to get Role in monitoring: %v", err)
+	}
+	if len(monRole.Rules) != 1 {
+		t.Fatalf("expected 1 rule on monitoring Role, got %d", len(monRole.Rules))
+	}
+	// monitoring: READ capability = 3 verbs (get, list, watch)
+	if len(monRole.Rules[0].Verbs) != 3 {
+		t.Errorf("expected 3 verbs on monitoring Role (READ), got %d: %v", len(monRole.Rules[0].Verbs), monRole.Rules[0].Verbs)
 	}
 
 	// Verify ClusterRoleBinding (because of cluster-scope READ)
@@ -1005,14 +1054,17 @@ func TestRBACIntegration_MultiplePermissionsClusterAndNamespace(t *testing.T) {
 		t.Errorf("CRB roleRef = %q, want %q", crb.RoleRef.Name, "pm-full-access")
 	}
 
-	// Verify RoleBindings in both namespaces reference the ns ClusterRole
+	// Verify RoleBindings in both namespaces reference the namespace Role
 	var appsRB rbacv1.RoleBinding
 	err = prodClient.Get(ctx, types.NamespacedName{Name: "pm-full-access", Namespace: "apps"}, &appsRB)
 	if err != nil {
 		t.Fatalf("failed to get RoleBinding in apps: %v", err)
 	}
-	if appsRB.RoleRef.Name != "pm-full-access-ns" {
-		t.Errorf("apps RB roleRef = %q, want %q", appsRB.RoleRef.Name, "pm-full-access-ns")
+	if appsRB.RoleRef.Name != "pm-full-access" {
+		t.Errorf("apps RB roleRef = %q, want %q", appsRB.RoleRef.Name, "pm-full-access")
+	}
+	if appsRB.RoleRef.Kind != "Role" {
+		t.Errorf("apps RB roleRef kind = %q, want %q", appsRB.RoleRef.Kind, "Role")
 	}
 
 	var monRB rbacv1.RoleBinding
@@ -1020,8 +1072,11 @@ func TestRBACIntegration_MultiplePermissionsClusterAndNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get RoleBinding in monitoring: %v", err)
 	}
-	if monRB.RoleRef.Name != "pm-full-access-ns" {
-		t.Errorf("monitoring RB roleRef = %q, want %q", monRB.RoleRef.Name, "pm-full-access-ns")
+	if monRB.RoleRef.Name != "pm-full-access" {
+		t.Errorf("monitoring RB roleRef = %q, want %q", monRB.RoleRef.Name, "pm-full-access")
+	}
+	if monRB.RoleRef.Kind != "Role" {
+		t.Errorf("monitoring RB roleRef kind = %q, want %q", monRB.RoleRef.Kind, "Role")
 	}
 }
 

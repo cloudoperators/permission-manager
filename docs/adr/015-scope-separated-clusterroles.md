@@ -1,4 +1,4 @@
-# ADR-015: Scope-Separated ClusterRoles for RBAC Generation
+# ADR-015: Scope-Separated RBAC — ClusterRoles and Namespace Roles
 
 ## Status
 
@@ -6,11 +6,11 @@ Pending review (supersedes implicit design in ADR-010)
 
 ## Context
 
-The Kubernetes provider generates RBAC resources (ClusterRole, ClusterRoleBinding, RoleBinding) on target clusters based on ASR permissions. The original `buildRBACPlan` implementation merged **all verbs** — from both cluster-scoped and namespace-scoped permissions — into a **single ClusterRole** with wildcard rules (`apiGroups: ["*"]`, `resources: ["*"]`).
+The Kubernetes provider generates RBAC resources (ClusterRole, ClusterRoleBinding, Role, RoleBinding) on target clusters based on ASR permissions. The original `buildRBACPlan` implementation merged **all verbs** — from both cluster-scoped and namespace-scoped permissions — into a **single ClusterRole** with wildcard rules (`apiGroups: ["*"]`, `resources: ["*"]`).
 
-This created a privilege escalation vulnerability:
+This created two distinct privilege escalation vulnerabilities:
 
-### The Verb-Merging Bug
+### Bug 1: Scope Leakage (Cluster vs Namespace)
 
 Given an ASR with:
 - `READ` on cluster CCRN (cluster-scoped) → verbs: `get, list, watch`
@@ -21,66 +21,82 @@ The original code:
 2. Created a ClusterRoleBinding (because cluster-scoped verbs exist) referencing this merged ClusterRole
 3. **Result**: The subject received `create, update, patch, delete` **cluster-wide**, even though WRITE was intended only for a specific namespace
 
-The RoleBindings for specific namespaces were also created but were redundant — the ClusterRoleBinding already granted everything cluster-wide.
+### Bug 2: Verb Union Leakage (Between Namespaces)
 
-### Design Principle Violated
+Given an ASR with:
+- `WRITE` on namespace `apps` → verbs: `create, delete, deletecollection, get, list, patch, update`
+- `READ` on namespace `monitoring` → verbs: `get, list, watch`
 
-Kubernetes RBAC follows a **union-only, no-deny** model. The correct pattern for mixed-scope permissions is:
+An intermediate fix (scope-separated ClusterRoles) still:
+1. Created a single `pm-<asr>-ns` ClusterRole with the **union** of all namespace verbs (7 verbs)
+2. Created RoleBindings in both namespaces referencing this shared ClusterRole
+3. **Result**: `monitoring` received write verbs (`create, delete, patch, update`) even though it was only granted READ
+
+### Design Principles Violated
+
+Kubernetes RBAC follows a **union-only, no-deny** model. The correct patterns are:
 - Cluster-wide permissions → ClusterRoleBinding referencing a ClusterRole with **only** cluster-scoped verbs
-- Namespace-scoped permissions → RoleBinding (in each namespace) referencing a ClusterRole with **only** namespace-scoped verbs
-
-A RoleBinding referencing a ClusterRole is a standard Kubernetes pattern that grants the ClusterRole's permissions **only within the binding's namespace**.
+- Namespace-scoped permissions → A **Role per namespace** with that namespace's exact verb set, bound via a RoleBinding
 
 ### Alternatives considered
 
 | Approach | Description | Rejected because |
 |----------|-------------|-----------------|
-| **Single merged ClusterRole (original behavior)** | Combine all verbs into one ClusterRole; bind via both ClusterRoleBinding and RoleBindings | The privilege escalation bug — namespace-scoped verbs leak to cluster-wide via the ClusterRoleBinding |
-| **Namespace-scoped Roles instead of ClusterRoles** | Create `Role` resources in each target namespace rather than ClusterRoles | Roles cannot be shared across namespaces; would require N identical Role objects for N namespaces with no deduplication; ClusterRoles referenced by RoleBindings are the standard Kubernetes pattern for this |
-| **Single ClusterRole with per-rule namespace restrictions** | Use a single ClusterRole but add namespace-aware rules (resourceNames or namespace conditions) | Kubernetes RBAC rules do not support namespace restrictions within a ClusterRole — scope is determined entirely by the binding type |
-| **Two scope-separated ClusterRoles per ASR per cluster** ✅ | Cluster-scoped verbs in `pm-<asr>`, namespace-scoped verbs in `pm-<asr>-ns`, each with appropriate binding type | Chosen — see Decision |
+| **Single merged ClusterRole (original)** | Combine all verbs into one ClusterRole; bind via both ClusterRoleBinding and RoleBindings | Bug 1 — namespace-scoped verbs leak cluster-wide via the ClusterRoleBinding |
+| **Two scope-separated ClusterRoles (intermediate)** | Cluster verbs in `pm-<asr>`, namespace verbs in `pm-<asr>-ns`; RoleBindings reference the shared `-ns` ClusterRole | Bug 2 — verb union leakage between namespaces; `monitoring` gets WRITE verbs when only granted READ |
+| **Single ClusterRole with per-rule namespace restrictions** | Use a single ClusterRole but add namespace-aware rules | Kubernetes RBAC rules do not support namespace restrictions within a ClusterRole — scope is determined entirely by the binding type |
+| **Per-namespace Roles** ✅ | ClusterRole for cluster-scoped verbs; a separate `Role` in each namespace with that namespace's exact verb set | Chosen — see Decision |
 
 ## Decision
 
-Generate **two separate ClusterRoles** per ASR per cluster, each carrying the standard `permission-manager.cloudoperators.dev/asr` label:
+Generate **scope-appropriate RBAC resources** per ASR per cluster:
 
-| Resource | Name | Contains | Bound by |
-|----------|------|----------|----------|
-| ClusterRole | `pm-<asr>` | Cluster-scoped verbs only | ClusterRoleBinding `pm-<asr>` |
-| ClusterRole | `pm-<asr>-ns` | Namespace-scoped verbs only | RoleBinding `pm-<asr>` (one per namespace) |
+| Resource | Name | Namespace | Contains | Bound by |
+|----------|------|-----------|----------|----------|
+| ClusterRole | `pm-<asr>` | — | Cluster-scoped verbs only | ClusterRoleBinding `pm-<asr>` |
+| Role | `pm-<asr>` | each target ns | That namespace's exact verb set | RoleBinding `pm-<asr>` in same ns |
 
 ### Rules
 
-1. If the ASR has **only** cluster-scoped permissions → produce only `pm-<asr>` + ClusterRoleBinding. No `-ns` ClusterRole.
-2. If the ASR has **only** namespace-scoped permissions → produce only `pm-<asr>-ns` + RoleBindings. No ClusterRoleBinding.
-3. If the ASR has **both** → produce both ClusterRoles with their respective bindings.
-4. On reconcile, **stale counterparts are deleted**: if the ASR no longer has cluster-scoped permissions, the old `pm-<asr>` ClusterRole and ClusterRoleBinding are cleaned up (and vice versa for `-ns`).
+1. If the ASR has **only** cluster-scoped permissions → produce only `pm-<asr>` ClusterRole + ClusterRoleBinding. No namespace Roles.
+2. If the ASR has **only** namespace-scoped permissions → produce only per-namespace Roles + RoleBindings. No ClusterRole or ClusterRoleBinding.
+3. If the ASR has **both** → produce the ClusterRole + ClusterRoleBinding AND per-namespace Roles + RoleBindings.
+4. Each namespace gets a Role with **exactly** the verbs granted to it — no union across namespaces.
+5. On reconcile, **stale resources are cleaned up**: if the ASR no longer targets a namespace, the old Role and RoleBinding in that namespace are deleted. If it no longer has cluster-scoped permissions, the ClusterRole and ClusterRoleBinding are deleted.
+
+### Namespace Wildcard Handling
+
+- Bare wildcard `"*"` → promotes verbs to `clusterVerbs` (scope promotion via ClusterRoleBinding)
+- Prefix wildcards (e.g., `"kube-*"`) → expanded against live namespace list; each matched namespace gets its own Role with the wildcard's verbs
+- Overlapping patterns (e.g., `apps-*` READ + `apps-prod` WRITE) → verbs merge **per namespace** during expansion, so `apps-prod` gets READ+WRITE while `apps-staging` gets only READ
 
 ### Migration from Old Format
 
-Existing clusters may have a single `pm-<asr>` ClusterRole with merged verbs. On first reconcile after deployment:
-- The `pm-<asr>` ClusterRole is **patched** to contain only cluster-scoped verbs (reduced, not expanded).
-- A new `pm-<asr>-ns` ClusterRole is **created** with namespace-scoped verbs.
-- Existing RoleBindings must have their `roleRef` updated from `pm-<asr>` to `pm-<asr>-ns`. Since Kubernetes forbids patching `roleRef`, these are **deleted and recreated**.
+Existing clusters may have a legacy `pm-<asr>-ns` ClusterRole from the intermediate design. On first reconcile after deployment:
+- Per-namespace `Role` objects are created with the correct verb sets.
+- RoleBindings must have their `roleRef` updated from `ClusterRole/pm-<asr>-ns` to `Role/pm-<asr>`. Since Kubernetes forbids patching `roleRef`, these are **deleted and recreated**.
+- The legacy `pm-<asr>-ns` ClusterRole is **deleted** as part of migration cleanup.
 
 ### RBACCleaner Compatibility
 
-The `RBACCleaner` uses `client.MatchingLabels{LabelASRName: asrName}` to find all RBAC resources for an ASR. Since both ClusterRoles carry this label, **no changes to the cleaner are needed** — it discovers and deletes both automatically.
+The `RBACCleaner` uses `client.MatchingLabels{LabelASRName: asrName}` to find all RBAC resources for an ASR. It cleans up ClusterRoles, ClusterRoleBindings, Roles, and RoleBindings — all carry the ASR label. **No orphan resources are left behind.**
 
 ## Consequences
 
 **Benefits:**
-- Eliminates the privilege escalation vulnerability — namespace-scoped verbs can never appear in a cluster-wide binding.
-- Principle of least privilege: each binding grants exactly the intended scope.
-- No behavioral change for ASRs with only one scope type (cluster-only or namespace-only).
-- Backward-compatible cleanup via label selectors.
+- Eliminates both privilege escalation vulnerabilities:
+  - Namespace-scoped verbs never appear in a cluster-wide binding (Bug 1).
+  - Each namespace gets exactly the verbs it was granted — no verb union leakage (Bug 2).
+- Principle of least privilege: each Role/binding grants the minimum required scope and verbs.
+- Namespace Roles are invisible outside their namespace (reduced cluster-level RBAC noise).
+- No behavioral change for ASRs with only cluster-scoped permissions (cluster-only).
 
 **Trade-offs:**
-- **More resources per ASR**: mixed-scope ASRs produce 2 ClusterRoles instead of 1. For N ASRs, worst case is 2N ClusterRoles. Acceptable for the security improvement.
-- **RoleBinding migration**: the first reconcile after deployment will delete and recreate all RoleBindings for mixed-scope ASRs (due to `roleRef` immutability). This causes a brief window where namespace-scoped permissions are absent. Acceptable because the reconcile is fast and self-healing.
-- **Complexity**: `buildRBACPlan` and `applyRBACPlan` become moderately more complex. Mitigated by clear naming and comprehensive unit tests.
+- **More resources per ASR**: an ASR targeting N namespaces produces N Roles + N RoleBindings instead of 1 ClusterRole + N RoleBindings. Acceptable for the security improvement.
+- **RoleBinding migration**: the first reconcile after deployment will delete and recreate all RoleBindings for namespace-scoped ASRs (due to `roleRef` Kind change from ClusterRole to Role). This causes a brief window where namespace-scoped permissions are absent. Acceptable because the reconcile is fast and self-healing.
+- **No cross-namespace deduplication**: if multiple namespaces happen to share the same verb set, each still gets its own Role. The cost is minimal (Roles are lightweight objects) and the design remains simpler.
 
 **Related ADRs:**
-- ADR-009 (Capability Mapping) — defines the verb sets that flow into ClusterRoles.
+- ADR-009 (Capability Mapping) — defines the verb sets that flow into Roles/ClusterRoles.
 - ADR-010 (Multi-Cluster Client Factory) — the pipeline that delivers clients to `applyRBACPlan`.
 - ADR-012 (Best-Effort Cleanup) — the orphan tracking that handles scope transitions.

@@ -90,6 +90,38 @@ func assertRoleBindingAbsentByName(t *testing.T, ctx context.Context, shortClust
 	assertRoleBindingAbsent(t, ctx, cl, namespace, rbName)
 }
 
+// waitForRoleByName waits for a Role to appear in a namespace on a cluster (identified by short name).
+func waitForRoleByName(t *testing.T, ctx context.Context, shortClusterName, namespace, roleName string) {
+	t.Helper()
+	name := fullClusterName(shortClusterName)
+	deadline, ok := ctx.Deadline()
+	timeout := resourcePropagationTimeout
+	if ok {
+		timeout = time.Until(deadline)
+	}
+	waitForRole(t, name, roleName, namespace, timeout)
+}
+
+// waitForRoleAbsentByName waits for a Role to disappear from a namespace on a cluster.
+func waitForRoleAbsentByName(t *testing.T, ctx context.Context, shortClusterName, namespace, roleName string) {
+	t.Helper()
+	name := fullClusterName(shortClusterName)
+	deadline, ok := ctx.Deadline()
+	timeout := resourcePropagationTimeout
+	if ok {
+		timeout = time.Until(deadline)
+	}
+	waitForRoleAbsent(t, name, roleName, namespace, timeout)
+}
+
+// assertRoleAbsentByName verifies a Role is gone from a namespace on a cluster (by short name).
+func assertRoleAbsentByName(t *testing.T, ctx context.Context, shortClusterName, namespace, roleName string) {
+	t.Helper()
+	name := fullClusterName(shortClusterName)
+	cl := crClientForCluster(t, name)
+	assertRoleAbsent(t, ctx, cl, namespace, roleName)
+}
+
 // updateASRObj updates an ASR on the management cluster via typed client.
 func updateASRObj(t *testing.T, asr *pmv1.ApplicationSpecificRole) {
 	t.Helper()

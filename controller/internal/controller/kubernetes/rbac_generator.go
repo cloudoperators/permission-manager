@@ -52,9 +52,9 @@ type clusterScope struct {
 // rbacPlan holds the planned RBAC resources to create for a single cluster.
 type rbacPlan struct {
 	clusterRole        *rbacv1.ClusterRole        // pm-<asr>: cluster-scoped verbs only
-	nsClusterRole      *rbacv1.ClusterRole        // pm-<asr>-ns: namespace-scoped verbs only
 	clusterRoleBinding *rbacv1.ClusterRoleBinding // binds pm-<asr> cluster-wide
-	roleBindings       []*rbacv1.RoleBinding      // bind pm-<asr>-ns per namespace
+	roles              []*rbacv1.Role             // per-namespace Roles with exact verb sets
+	roleBindings       []*rbacv1.RoleBinding      // bind corresponding Role per namespace
 }
 
 // buildClusterScopes parses ASR permissions and groups them by cluster,
@@ -135,15 +135,15 @@ func sortedKeys(m map[string]struct{}) []string {
 }
 
 // buildRBACPlan creates the RBAC resource plan for a single cluster.
-// It produces two separate ClusterRoles with non-overlapping verb sets:
-//   - pm-<asr>: contains ONLY cluster-scoped verbs, bound via ClusterRoleBinding
-//   - pm-<asr>-ns: contains ONLY the union of namespace verbs, bound via RoleBindings
+// It produces:
+//   - pm-<asr> ClusterRole: contains ONLY cluster-scoped verbs, bound via ClusterRoleBinding
+//   - pm-<asr> Role per namespace: contains that namespace's exact verb set, bound via RoleBinding
 //
-// When only one scope has verbs, only that ClusterRole is produced.
+// Each namespace gets its own Role with precisely the verbs it was granted,
+// avoiding the verb-union leakage that a shared ClusterRole would cause.
 func buildRBACPlan(asrName, specName string, scope *clusterScope) *rbacPlan {
 	plan := &rbacPlan{}
 	resourceName := ResourceNamePrefix + asrName
-	nsResourceName := resourceName + "-ns"
 	labels := map[string]string{
 		LabelManagedBy: ManagedByValue,
 		LabelASRName:   asrName,
@@ -185,53 +185,48 @@ func buildRBACPlan(asrName, specName string, scope *clusterScope) *rbacPlan {
 		}
 	}
 
-	// Build namespace-scoped ClusterRole + RoleBindings if there are namespace verbs
+	// Build per-namespace Roles + RoleBindings if there are namespace verbs
 	if len(scope.namespaceVerbs) > 0 {
-		// Collect the union of all namespace verbs
-		allNsVerbs := make(map[string]struct{})
-		for _, nsVerbs := range scope.namespaceVerbs {
-			for v := range nsVerbs {
-				allNsVerbs[v] = struct{}{}
-			}
+		namespaces := make([]string, 0, len(scope.namespaceVerbs))
+		for ns := range scope.namespaceVerbs {
+			namespaces = append(namespaces, ns)
 		}
+		sort.Strings(namespaces)
 
-		if len(allNsVerbs) > 0 {
-			plan.nsClusterRole = &rbacv1.ClusterRole{
+		for _, ns := range namespaces {
+			nsVerbs := scope.namespaceVerbs[ns]
+			if len(nsVerbs) == 0 {
+				continue
+			}
+
+			plan.roles = append(plan.roles, &rbacv1.Role{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:   nsResourceName,
-					Labels: labels,
+					Name:      resourceName,
+					Namespace: ns,
+					Labels:    labels,
 				},
 				Rules: []rbacv1.PolicyRule{
 					{
 						APIGroups: []string{"*"},
 						Resources: []string{"*"},
-						Verbs:     sortedKeys(allNsVerbs),
+						Verbs:     sortedKeys(nsVerbs),
 					},
 				},
-			}
+			})
 
-			// For each namespace, create a RoleBinding referencing the ns ClusterRole
-			namespaces := make([]string, 0, len(scope.namespaceVerbs))
-			for ns := range scope.namespaceVerbs {
-				namespaces = append(namespaces, ns)
-			}
-			sort.Strings(namespaces)
-
-			for _, ns := range namespaces {
-				plan.roleBindings = append(plan.roleBindings, &rbacv1.RoleBinding{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: ns,
-						Labels:    labels,
-					},
-					RoleRef: rbacv1.RoleRef{
-						APIGroup: "rbac.authorization.k8s.io",
-						Kind:     "ClusterRole",
-						Name:     nsResourceName,
-					},
-					Subjects: []rbacv1.Subject{subject},
-				})
-			}
+			plan.roleBindings = append(plan.roleBindings, &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: ns,
+					Labels:    labels,
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "Role",
+					Name:     resourceName,
+				},
+				Subjects: []rbacv1.Subject{subject},
+			})
 		}
 	}
 
@@ -243,15 +238,7 @@ func buildRBACPlan(asrName, specName string, scope *clusterScope) *rbacPlan {
 // for new ones. It also cleans up stale resources when a scope becomes empty.
 // It emits audit records for each resource operation.
 func applyRBACPlan(ctx context.Context, c ClusterClient, plan *rbacPlan, asrName, clusterName string, al *audit.Logger) error {
-	// Derive resource names from the ASR name in labels
-	var resourceName, nsResourceName string
-	if plan.clusterRole != nil {
-		resourceName = plan.clusterRole.Name
-		nsResourceName = resourceName + "-ns"
-	} else if plan.nsClusterRole != nil {
-		nsResourceName = plan.nsClusterRole.Name
-		resourceName = nsResourceName[:len(nsResourceName)-3]
-	}
+	resourceName := ResourceNamePrefix + asrName
 
 	// Apply cluster-scoped ClusterRole
 	if plan.clusterRole != nil {
@@ -272,7 +259,7 @@ func applyRBACPlan(ctx context.Context, c ClusterClient, plan *rbacPlan, asrName
 		if opResult != OperationResultNone {
 			al.Log(ctx, operationResultToAction(opResult), audit.OutcomeSuccess, asrName, ref, nil)
 		}
-	} else if resourceName != "" {
+	} else {
 		// Stale cleanup: delete cluster-scoped ClusterRole and ClusterRoleBinding
 		deleteIfExists(ctx, c, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: resourceName}}, asrName, clusterName, "ClusterRole", al)
 		deleteIfExists(ctx, c, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: resourceName}}, asrName, clusterName, "ClusterRoleBinding", al)
@@ -300,29 +287,31 @@ func applyRBACPlan(ctx context.Context, c ClusterClient, plan *rbacPlan, asrName
 		}
 	}
 
-	// Apply namespace-scoped ClusterRole
-	if plan.nsClusterRole != nil {
-		cr := &rbacv1.ClusterRole{
+	// Apply per-namespace Roles
+	for _, role := range plan.roles {
+		r := &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: plan.nsClusterRole.Name,
+				Name:      role.Name,
+				Namespace: role.Namespace,
 			},
 		}
-		opResult, err := createOrPatch(ctx, c, cr, func() {
-			cr.Labels = plan.nsClusterRole.Labels
-			cr.Rules = plan.nsClusterRole.Rules
+		opResult, err := createOrPatch(ctx, c, r, func() {
+			r.Labels = role.Labels
+			r.Rules = role.Rules
 		})
-		ref := audit.ResourceRef{Kind: "ClusterRole", Name: plan.nsClusterRole.Name, Cluster: clusterName}
+		ref := audit.ResourceRef{Kind: "Role", Name: role.Name, Namespace: role.Namespace, Cluster: clusterName}
 		if err != nil {
 			al.Log(ctx, operationResultToAction(opResult), audit.OutcomeFailure, asrName, ref, err)
-			return fmt.Errorf("failed to apply ClusterRole %q: %w", plan.nsClusterRole.Name, err)
+			return fmt.Errorf("failed to apply Role %q in namespace %q: %w", role.Name, role.Namespace, err)
 		}
 		if opResult != OperationResultNone {
 			al.Log(ctx, operationResultToAction(opResult), audit.OutcomeSuccess, asrName, ref, nil)
 		}
-	} else if nsResourceName != "" {
-		// Stale cleanup: delete namespace-scoped ClusterRole
-		deleteIfExists(ctx, c, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: nsResourceName}}, asrName, clusterName, "ClusterRole", al)
 	}
+
+	// Migration cleanup: delete the legacy pm-<asr>-ns ClusterRole if it exists
+	nsResourceName := resourceName + "-ns"
+	deleteIfExists(ctx, c, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: nsResourceName}}, asrName, clusterName, "ClusterRole", al)
 
 	// Apply RoleBindings with roleRef migration handling
 	for _, rb := range plan.roleBindings {
@@ -348,7 +337,7 @@ func applyRBACPlan(ctx context.Context, c ClusterClient, plan *rbacPlan, asrName
 
 // createOrPatchRoleBinding handles RoleBinding application with roleRef migration.
 // Since roleRef is immutable in Kubernetes, if an existing RoleBinding has a different
-// roleRef than desired, it must be deleted and recreated.
+// roleRef (Name or Kind) than desired, it must be deleted and recreated.
 func createOrPatchRoleBinding(ctx context.Context, c client.Client, target *rbacv1.RoleBinding, desired *rbacv1.RoleBinding) (OperationResult, error) {
 	key := client.ObjectKeyFromObject(target)
 	if err := c.Get(ctx, key, target); err != nil {
@@ -363,7 +352,7 @@ func createOrPatchRoleBinding(ctx context.Context, c client.Client, target *rbac
 	}
 
 	// Object exists — check if roleRef changed (immutable field)
-	if target.RoleRef.Name != desired.RoleRef.Name {
+	if target.RoleRef.Name != desired.RoleRef.Name || target.RoleRef.Kind != desired.RoleRef.Kind {
 		// Delete and recreate since roleRef cannot be patched
 		if err := c.Delete(ctx, target); err != nil {
 			return OperationResultNone, fmt.Errorf("failed to delete RoleBinding with stale roleRef: %w", err)
