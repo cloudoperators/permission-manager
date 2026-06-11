@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package audit provides a typed audit logger emitting OTel-conformant JSON
 // lines to an io.Writer. It is designed to be thread-safe and does not depend
 // on any external packages beyond the Go standard library.
