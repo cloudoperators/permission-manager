@@ -43,6 +43,7 @@ affinity: {}
 
 # --- Kubernetes provider controller ---
 kubernetes:
+  enabled: true
   replicaCount: 1
 
   image:
