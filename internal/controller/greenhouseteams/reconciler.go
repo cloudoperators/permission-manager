@@ -369,6 +369,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("greenhouse-teams").
 		For(&v1alpha1.ApplicationSpecificRole{}).
 		WithEventFilter(ghASRPredicate).
 		Watches(

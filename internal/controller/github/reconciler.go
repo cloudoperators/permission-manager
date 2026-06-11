@@ -283,6 +283,7 @@ func (r *GithubReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("github").
 		For(&v1alpha1.ApplicationSpecificRole{}).
 		WithEventFilter(githubASRPredicate).
 		Watches(
