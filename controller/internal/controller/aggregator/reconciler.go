@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package aggregator implements a lightweight status aggregator controller that
 // watches all ApplicationSpecificRoles, reads per-provider status, and computes
 // holistic conditions (Ready, Degraded). It has zero provider-specific logic.
