@@ -113,14 +113,14 @@ func testdataDir(t *testing.T) string {
 	return filepath.Join(dir, "testdata")
 }
 
-// repoRoot returns the absolute path to the repository root (parent of pm-controller).
+// repoRoot returns the absolute path to the repository root (parent of controller).
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get working directory: %v", err)
 	}
-	// We are in pm-controller/test/e2e, repo root is 3 levels up.
+	// We are in controller/test/e2e, repo root is 3 levels up.
 	return filepath.Join(dir, "..", "..", "..")
 }
 
@@ -333,7 +333,7 @@ func buildAndLoadControllerImage(t *testing.T) {
 	t.Logf("Building controller image from %s...", root)
 	runCmd(t, "docker", "build",
 		"-t", controllerImage,
-		"-f", filepath.Join(root, "pm-controller", "Dockerfile.e2e"),
+		"-f", filepath.Join(root, "controller", "Dockerfile.e2e"),
 		root,
 	)
 
@@ -821,7 +821,7 @@ func buildAndLoadGithubProviderImage(t *testing.T) {
 	t.Logf("Building GitHub provider image from %s...", root)
 	runCmd(t, "docker", "build",
 		"-t", githubProviderImage,
-		"-f", filepath.Join(root, "pm-controller", "Dockerfile.github.e2e"),
+		"-f", filepath.Join(root, "controller", "Dockerfile.github.e2e"),
 		root,
 	)
 
@@ -842,7 +842,7 @@ func buildAndLoadGreenhouseTeamsProviderImage(t *testing.T) {
 	t.Logf("Building greenhouse-teams provider image from %s...", root)
 	runCmd(t, "docker", "build",
 		"-t", greenhouseTeamsProviderImage,
-		"-f", filepath.Join(root, "pm-controller", "Dockerfile.greenhouse-teams.e2e"),
+		"-f", filepath.Join(root, "controller", "Dockerfile.greenhouse-teams.e2e"),
 		root,
 	)
 
@@ -896,7 +896,7 @@ func buildAndLoadAggregatorImage(t *testing.T) {
 	t.Logf("Building aggregator image from %s...", root)
 	runCmd(t, "docker", "build",
 		"-t", aggregatorImage,
-		"-f", filepath.Join(root, "pm-controller", "Dockerfile.aggregator.e2e"),
+		"-f", filepath.Join(root, "controller", "Dockerfile.aggregator.e2e"),
 		root,
 	)
 
