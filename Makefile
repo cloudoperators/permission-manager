@@ -15,18 +15,85 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Image URL to use all building/pushing image targets
-IMG ?= controller:latest
-IMG_LICENSE_EYE ?= ghcr.io/apache/skywalking-eyes/license-eye
-# YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
-YEAR ?= $(shell date +%Y)
+# ==============================================================================
+# Shell
+# ==============================================================================
+
+# Setting SHELL to bash allows bash commands to be executed by recipes.
+# Options are set to exit when a recipe line exits non-zero or a piped command fails.
+SHELL = /usr/bin/env bash -o pipefail
+.SHELLFLAGS = -ec
+
+# ==============================================================================
+# Go environment
+# ==============================================================================
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
+GOBIN = $(shell go env GOPATH)/bin
 else
-GOBIN=$(shell go env GOBIN)
+GOBIN = $(shell go env GOBIN)
 endif
+
+# YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
+YEAR ?= $(shell date +%Y)
+
+# ==============================================================================
+# Image / container
+# ==============================================================================
+
+# Image URL to use all building/pushing image targets
+IMG ?= controller:latest
+IMG_LICENSE_EYE ?= ghcr.io/apache/skywalking-eyes/license-eye
+
+# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
+# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1).
+PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+
+# PLATFORM is the single-arch target for `docker-build`. It is auto-detected from
+# the host architecture but can be overridden, e.g. `PLATFORM=linux/arm64 make docker-build`.
+UNAME_P := $(shell uname -p)
+ifeq ($(UNAME_P),x86_64)
+    HOST_PLATFORM := linux/amd64
+else ifneq ($(filter arm%,$(UNAME_P)),)
+    HOST_PLATFORM := linux/arm64
+else
+    HOST_PLATFORM := linux/amd64
+endif
+PLATFORM ?= $(HOST_PLATFORM)
+
+# ==============================================================================
+# E2E
+# ==============================================================================
+
+# kubectl kuberc is disabled by default for test isolation; enable with:
+# - KUBECTL_KUBERC=true
+# CertManager is installed by default; skip with:
+# - CERT_MANAGER_INSTALL_SKIP=true
+KIND_CLUSTER ?= greenhouse-admin
+
+# ==============================================================================
+# Deployment
+# ==============================================================================
+
+ifndef ignore-not-found
+  ignore-not-found = false
+endif
+
+# ==============================================================================
+# Tool binary locations
+# ==============================================================================
+
+# Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+
+KUBECTL        ?= kubectl
+KIND           ?= kind
+KUSTOMIZE      ?= $(LOCALBIN)/kustomize
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+ENVTEST        ?= $(LOCALBIN)/setup-envtest
+GOIMPORTS      ?= $(LOCALBIN)/goimports
+GOLANGCI_LINT   = $(LOCALBIN)/golangci-lint
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 # Be aware that the target commands are only tested with Docker which is
@@ -34,10 +101,33 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
-# Setting SHELL to bash allows bash commands to be executed by recipes.
-# Options are set to exit when a recipe line exits non-zero or a piped command fails.
-SHELL = /usr/bin/env bash -o pipefail
-.SHELLFLAGS = -ec
+# ==============================================================================
+# Tool versions
+# ==============================================================================
+
+KUSTOMIZE_VERSION        ?= v5.8.1
+CONTROLLER_TOOLS_VERSION ?= v0.20.1
+GOLANGCI_LINT_VERSION    ?= v2.12.2
+
+# ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
+ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+
+# ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
+ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
+
+# ==============================================================================
+# Includes
+# ==============================================================================
+
+include hack/setup.mk
+
+# ==============================================================================
+# Targets
+# ==============================================================================
 
 .PHONY: all
 all: build
@@ -69,8 +159,6 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
-GOIMPORTS ?= $(LOCALBIN)/goimports
-
 .PHONY: goimports
 goimports: $(GOIMPORTS)
 $(GOIMPORTS): $(LOCALBIN)
@@ -91,12 +179,6 @@ test: fmt vet ## Run tests.
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# kubectl kuberc is disabled by default for test isolation; enable with:
-# - KUBECTL_KUBERC=true
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
-KIND_CLUSTER ?= kubebuilder-scaffold-test-e2e
-
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 	@command -v $(KIND) >/dev/null 2>&1 || { \
@@ -147,19 +229,16 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build --platform=$(PLATFORM) -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
-# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
+# To use docker-buildx you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 .PHONY: docker-buildx
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
@@ -175,62 +254,39 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	mkdir -p dist
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
 
 ##@ Deployment
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
+	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -; else echo "No CRDs to install; skipping."; fi
 
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
+
+.PHONY: kind-load
+kind-load: ## Load docker image into the Kind cluster.
+	$(KIND) load docker-image ${IMG} --name $(KIND_CLUSTER)
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 
-## Location to install dependencies to
-LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
-## Tool Binaries
-KUBECTL ?= kubectl
-KIND ?= kind
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-ENVTEST ?= $(LOCALBIN)/setup-envtest
-GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
-
-## Tool Versions
-KUSTOMIZE_VERSION ?= v5.8.1
-CONTROLLER_TOOLS_VERSION ?= v0.20.1
-
-#ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
-ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
-  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
-
-#ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
-ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
-  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
-
-GOLANGCI_LINT_VERSION ?= v2.12.2
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
@@ -267,6 +323,10 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 .PHONY: license
 license:
 	docker run --rm -v $(shell pwd):/github/workspace $(IMG_LICENSE_EYE) -c .github/licenserc.yaml header fix
+
+# ==============================================================================
+# Helper functions
+# ==============================================================================
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
