@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cbindex provides a generic, thread-safe in-memory index for ConnectorBindings
 // filtered by provider. It eliminates duplication across provider-specific indexer
 // implementations (github, greenhouse-teams, kubernetes).
