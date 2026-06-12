@@ -1,8 +1,0 @@
-# Built binaries (root-level only, not source subdirectories)
-/kubernetes
-/github
-/greenhouse-teams
-/aggregator
-/pm-controller
-/pm-controller-kubernetes
-/pm-controller-aggregator
