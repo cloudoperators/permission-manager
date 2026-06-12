@@ -149,16 +149,17 @@ func TestEdge_Wildcard_GlobMatchesZero(t *testing.T) {
 // Permission 2: namespace apps-prod with WRITE (create, update, patch, delete)
 //
 // Expected:
-// - Single ClusterRole with merged verbs (7 verbs total)
-// - RoleBinding in apps-prod (matches both patterns)
-// - RoleBinding in apps-staging (matches apps-* only)
-// - Both RoleBindings reference the same ClusterRole (which has merged verbs)
+// - Role in apps-prod with merged verbs (7 verbs: READ + WRITE)
+// - Role in apps-staging with READ verbs only (3 verbs)
+// - RoleBinding in apps-prod referencing its Role
+// - RoleBinding in apps-staging referencing its Role
+// - Each namespace gets exactly its own verb set (no verb union leakage)
 func TestEdge_Wildcard_OverlappingNamespacePatterns(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	asrName := "edge-wc-overlap-ns"
-	expectedCR := "pm-" + asrName + "-ns" // namespace-only ASRs use -ns suffix
-	expectedRB := "pm-" + asrName         // RoleBinding uses base name
+	expectedRoleName := "pm-" + asrName // Role uses base name
+	expectedRB := "pm-" + asrName       // RoleBinding uses base name
 
 	consumer1 := consumerClusters[0].Name // pm-e2e-consumer-1
 
@@ -176,12 +177,16 @@ func TestEdge_Wildcard_OverlappingNamespacePatterns(t *testing.T) {
 
 	c := crClientForCluster(t, consumer1)
 
-	// Wait for namespace-scoped ClusterRole to appear with merged verbs
-	waitForClusterRole(t, consumer1, expectedCR, resourcePropagationTimeout)
+	// Wait for namespace-scoped Role to appear in apps-prod with merged verbs
+	waitForRole(t, consumer1, expectedRoleName, "apps-prod", resourcePropagationTimeout)
 
-	// Verify the ClusterRole has all 7 merged verbs (READ + WRITE)
+	// Verify the Role in apps-prod has all 7 merged verbs (READ + WRITE)
 	allVerbs := []string{"create", "delete", "get", "list", "patch", "update", "watch"}
-	assertVerbsInClusterRole(t, ctx, c, expectedCR, allVerbs)
+	assertVerbsInRole(t, ctx, c, "apps-prod", expectedRoleName, allVerbs)
+
+	// Verify the Role in apps-staging has only 3 READ verbs
+	readVerbs := []string{"get", "list", "watch"}
+	assertVerbsInRole(t, ctx, c, "apps-staging", expectedRoleName, readVerbs)
 
 	// Verify RoleBinding exists in apps-prod (matches both patterns)
 	assertRoleBindingExists(t, ctx, c, "apps-prod", expectedRB, asrName)
@@ -195,6 +200,6 @@ func TestEdge_Wildcard_OverlappingNamespacePatterns(t *testing.T) {
 	// Verify no RoleBinding in logging (does not match either pattern)
 	assertRoleBindingNotCreated(t, ctx, c, "logging", expectedRB, 10*time.Second)
 
-	t.Logf("SUCCESS: Overlapping namespace patterns merge verbs correctly; "+
-		"apps-prod and apps-staging both get RoleBindings, ClusterRole has %d verbs", len(allVerbs))
+	t.Logf("SUCCESS: Overlapping namespace patterns merge verbs per-namespace correctly; "+
+		"apps-prod gets %d verbs (READ+WRITE), apps-staging gets %d verbs (READ only)", len(allVerbs), len(readVerbs))
 }

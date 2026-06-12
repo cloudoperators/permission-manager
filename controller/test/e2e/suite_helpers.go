@@ -804,6 +804,60 @@ func waitForClusterRoleAbsent(t *testing.T, clusterName, clusterRoleName string,
 	}
 }
 
+// waitForRole polls until a namespace-scoped Role appears on a cluster.
+func waitForRole(t *testing.T, clusterName, roleName, namespace string, timeout time.Duration) {
+	t.Helper()
+	t.Logf("Waiting for Role %q in namespace %q on %s (timeout: %s)...", roleName, namespace, clusterName, timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	clusterCtx := "kind-" + clusterName
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Role %q in namespace %q did not appear on %s within %s", roleName, namespace, clusterName, timeout)
+		case <-ticker.C:
+			_, err := runCmdNoFail("kubectl", "--context", clusterCtx,
+				"-n", namespace, "get", "role", roleName)
+			if err == nil {
+				t.Logf("Role %q found in namespace %q on %s", roleName, namespace, clusterName)
+				return
+			}
+		}
+	}
+}
+
+// waitForRoleAbsent polls until a namespace-scoped Role is removed from a cluster.
+func waitForRoleAbsent(t *testing.T, clusterName, roleName, namespace string, timeout time.Duration) {
+	t.Helper()
+	t.Logf("Waiting for Role %q in namespace %q to be removed from %s (timeout: %s)...", roleName, namespace, clusterName, timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	clusterCtx := "kind-" + clusterName
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Role %q in namespace %q still exists on %s after %s", roleName, namespace, clusterName, timeout)
+		case <-ticker.C:
+			_, err := runCmdNoFail("kubectl", "--context", clusterCtx,
+				"-n", namespace, "get", "role", roleName)
+			if err != nil {
+				t.Logf("Role %q removed from namespace %q on %s", roleName, namespace, clusterName)
+				return
+			}
+		}
+	}
+}
+
 // controllerLogs fetches recent controller logs for debugging.
 func controllerLogs(t *testing.T) string {
 	t.Helper()

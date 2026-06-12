@@ -296,7 +296,7 @@ func TestOffboarding_ASRDelete_FinalizerCleansAll(t *testing.T) {
 	// Step 4: Wait for RBAC to be removed from all clusters.
 	waitForClusterRoleAbsentByName(t, ctx, "consumer-1", "pm-"+asrName)
 	waitForClusterRoleAbsentByName(t, ctx, "consumer-2", "pm-"+asrName)
-	waitForClusterRoleAbsentByName(t, ctx, "consumer-1", "pm-"+asrName+"-ns")
+	waitForRoleAbsentByName(t, ctx, "consumer-1", "apps-prod", "pm-"+asrName)
 
 	// Verify RoleBinding in apps-prod is also removed.
 	assertRoleBindingAbsentByName(t, ctx, "consumer-1", "apps-prod", "pm-"+asrName)
@@ -314,5 +314,5 @@ func TestOffboarding_ASRDelete_FinalizerCleansAll(t *testing.T) {
 	// Final check: confirm no orphaned RBAC resources remain.
 	assertClusterRoleAbsentByName(t, ctx, "consumer-1", "pm-"+asrName)
 	assertClusterRoleAbsentByName(t, ctx, "consumer-2", "pm-"+asrName)
-	assertClusterRoleAbsentByName(t, ctx, "consumer-1", "pm-"+asrName+"-ns")
+	assertRoleAbsentByName(t, ctx, "consumer-1", "apps-prod", "pm-"+asrName)
 }
