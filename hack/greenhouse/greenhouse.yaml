@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Greenhouse manager HelmRelease. Installs the upstream OCI chart; the chart
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: greenhouse
+  namespace: flux-system
+  labels:
+    greenhouse.sap/dependsOn: "cert-manager"
+spec:
+  dependsOn:
+    - name: cert-manager
+  releaseName: greenhouse
+  interval: 5m
+  timeout: 10m
+  driftDetection:
+    mode: enabled
+    ignore:
+      - paths:
+          - /spec/replicas
+        target:
+          kind: Deployment
+  chart:
+    spec:
+      chart: greenhouse
+      version: 0.19.2
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: greenhouse
+        namespace: flux-system
+  targetNamespace: greenhouse
+  storageNamespace: greenhouse
+  install:
+    crds: CreateReplace
+    createNamespace: true
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    global:
+      dnsDomain: green.house
+      dex:
+        backend: kubernetes
+      plugin:
+        expressionEvaluationEnabled: true
+        integrationEnabled: false
+        defaultDeploymentTool: flux
+    idproxy:
+      enabled: false
+    proxy:
+      enabled: false
+    dashboard:
+      enabled: false
+    demo:
+      enabled: false
+    postgresqlng:
+      enabled: false
+    authz:
+      enabled: false
+    manager:
+      alerts:
+        enabled: false
+      certManager:
+        enabled: true
+      controllerManager:
+        replicas: 1
+      webhook:
+        replicas: 1
