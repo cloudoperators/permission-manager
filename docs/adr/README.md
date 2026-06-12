@@ -8,7 +8,7 @@ ADRs document significant design decisions made during development. Each record 
 
 | # | Title | Status | Date |
 |---|-------|--------|------|
-| [001](001-multi-binary-provider-architecture.md) | Multi-Binary Provider Architecture | Pending review | 2026-06 |
+| [001](001-single-binary-provider-architecture.md) | Single-Binary Provider Architecture | Pending review | 2026-06 |
 | [002](002-server-side-apply-for-provider-status.md) | Server-Side Apply for Provider Status | Pending review | 2026-06 |
 | [003](003-status-aggregator-controller.md) | Status Aggregator Controller | Pending review | 2026-06 |
 | [004](004-connector-binding-indexer-pattern.md) | ConnectorBinding Indexer Pattern | Pending review | 2026-06 |
