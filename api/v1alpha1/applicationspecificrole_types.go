@@ -37,19 +37,26 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// Condition type constants for ApplicationSpecificRole.
+// ProviderType identifies a permission-manager provider.
+type ProviderType string
+
 const (
-	// ConditionReady indicates the ASR has been successfully reconciled across all providers.
-	ConditionReady = "Ready"
-	// ConditionDegraded indicates the ASR has partial failures across providers.
-	ConditionDegraded = "Degraded"
+	// ProviderKubernetes is the provider ID for the Kubernetes RBAC provider.
+	ProviderKubernetes ProviderType = "kubernetes"
+
+	// ProviderGithub is the provider ID for the GitHub provider.
+	ProviderGithub ProviderType = "github"
 )
 
 // ApplicationSpecificRoleSpec defines the desired state of ApplicationSpecificRole
@@ -129,6 +136,7 @@ type TargetStatus struct {
 	TargetID string `json:"targetID"`
 
 	// Status is the provisioning result (e.g., Success, Error, Unreachable).
+	// TODO: change to TargetStatusValue once github provider is updated.
 	Status string `json:"status"`
 
 	// Message is a human-readable description of the result.
@@ -158,7 +166,8 @@ type ProviderStatus struct {
 
 // ApplicationSpecificRoleStatus defines the observed state of ApplicationSpecificRole.
 type ApplicationSpecificRoleStatus struct {
-	// Providers maps provider name to its reconciliation status.
+	// Providers maps provider type to its reconciliation status.
+	// TODO: change key type to ProviderType once all providers are migrated.
 	// +optional
 	Providers map[string]ProviderStatus `json:"providers,omitempty"`
 
@@ -169,6 +178,9 @@ type ApplicationSpecificRoleStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=asr
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].status"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // ApplicationSpecificRole is the Schema for the applicationspecificroles API
 type ApplicationSpecificRole struct {
@@ -194,6 +206,20 @@ type ApplicationSpecificRoleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []ApplicationSpecificRole `json:"items"`
+}
+
+func (asr *ApplicationSpecificRole) GetConditions() []metav1.Condition {
+	return asr.Status.Conditions
+}
+
+func (asr *ApplicationSpecificRole) SetCondition(c metav1.Condition) {
+	asr.Status.Conditions = pmmeta.SetCondition(asr.Status.Conditions, c)
+}
+
+func (asr *ApplicationSpecificRole) RemoveCondition(t pmmeta.ConditionType) {
+	asr.Status.Conditions = slices.DeleteFunc(asr.Status.Conditions, func(c metav1.Condition) bool {
+		return c.Type == string(t)
+	})
 }
 
 func init() {

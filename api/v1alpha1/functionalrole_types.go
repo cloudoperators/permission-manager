@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
 /*
 Copyright 2026.
 
@@ -111,6 +114,8 @@ type FunctionalRoleStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=fr
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // FunctionalRole is the Schema for the functionalroles API
 type FunctionalRole struct {
