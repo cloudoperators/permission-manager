@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -17,12 +18,6 @@ import (
 )
 
 const (
-	// GithubTeam status values.
-	teamStatusComplete    = "complete"
-	teamStatusFailed      = "failed"
-	teamStatusPending     = "pending"
-	teamStatusRatelimited = "ratelimited"
-
 	// Target status result values.
 	targetStatusSuccess = "Success"
 	targetStatusError   = "Error"
@@ -91,7 +86,7 @@ func computeProviderStatus(
 	}
 
 	// Fetch all GithubTeam CRs owned by this ASR
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	listOpts := []client.ListOption{
 		client.MatchingLabels{
 			LabelManagedByKey: LabelManagedByGithub,
@@ -107,7 +102,7 @@ func computeProviderStatus(
 	}
 
 	// Build a map of GithubTeam CRs by their CR name for lookup
-	teamStatuses := make(map[string]string, len(teamList.Items))
+	teamStatuses := make(map[string]repoguardv1.GithubTeamState, len(teamList.Items))
 	for i := range teamList.Items {
 		team := &teamList.Items[i]
 		teamStatuses[team.Name] = team.Status.TeamStatus
@@ -159,15 +154,15 @@ func computeProviderStatus(
 }
 
 // mapTeamStatus maps a GithubTeam.Status.TeamStatus to a TargetStatus status string.
-func mapTeamStatus(teamStatus string) (status string, message string) {
+func mapTeamStatus(teamStatus repoguardv1.GithubTeamState) (status string, message string) {
 	switch teamStatus {
-	case teamStatusComplete:
+	case repoguardv1.GithubTeamStateComplete:
 		return targetStatusSuccess, ""
-	case teamStatusFailed:
+	case repoguardv1.GithubTeamStateFailed:
 		return targetStatusError, "GithubTeam reconciliation failed"
-	case teamStatusPending:
+	case repoguardv1.GithubTeamStatePendingOperations:
 		return targetStatusPending, "GithubTeam reconciliation pending"
-	case teamStatusRatelimited:
+	case repoguardv1.GithubTeamStateRateLimited:
 		return targetStatusPending, "GithubTeam rate-limited"
 	case "":
 		return targetStatusPending, "GithubTeam status not yet reported"
@@ -190,7 +185,7 @@ func patchProviderStatus(ctx context.Context, c client.Client, asr *v1alpha1.App
 
 // extractASRFromGithubTeam extracts the owning ASR's ObjectKey from a GithubTeam's labels.
 // Returns nil if the required labels are missing or the managed-by value doesn't match.
-func extractASRFromGithubTeam(team *GithubTeam) []client.ObjectKey {
+func extractASRFromGithubTeam(team *repoguardv1.GithubTeam) []client.ObjectKey {
 	labels := team.GetLabels()
 	if labels == nil {
 		return nil

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,9 +35,9 @@ const (
 
 // orgContribution represents what an ASR contributes to a GithubOrganization.
 type orgContribution struct {
-	PublicTeams  []GithubTeamWithPermission `json:"publicTeams,omitempty"`
-	PrivateTeams []GithubTeamWithPermission `json:"privateTeams,omitempty"`
-	OwnerTeams   []string                   `json:"ownerTeams,omitempty"`
+	PublicTeams  []repoguardv1.GithubTeamWithPermission `json:"publicTeams,omitempty"`
+	PrivateTeams []repoguardv1.GithubTeamWithPermission `json:"privateTeams,omitempty"`
+	OwnerTeams   []string                               `json:"ownerTeams,omitempty"`
 }
 
 // reconcileOrganizations processes all permissions in the ASR that target GithubOrganization resources.
@@ -85,9 +86,9 @@ func (r *GithubReconciler) reconcileOrganizations(
 		case ccrn.GithubResourceTypeRepositoryType:
 			// repository_type CCRN: add to default teams based on visibility
 			visibility := gh.Visibility
-			teamEntry := GithubTeamWithPermission{
-				Name:       teamName,
-				Permission: mappedPermission,
+			teamEntry := repoguardv1.GithubTeamWithPermission{
+				Team:       teamName,
+				Permission: repoguardv1.GithubTeamPermission(mappedPermission),
 			}
 
 			contrib := getOrCreateContrib(orgContribs, gh.Org)
@@ -133,7 +134,7 @@ func (r *GithubReconciler) patchOrganization(
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Fetch the GithubOrganization CR
-		var org GithubOrganization
+		var org repoguardv1.GithubOrganization
 		orgKey := client.ObjectKey{Namespace: namespace, Name: orgName}
 		if err := r.Get(ctx, orgKey, &org); err != nil {
 			return err
@@ -180,10 +181,10 @@ func (r *GithubReconciler) patchOrganization(
 
 // removeASRFromOrg removes all entries contributed by a specific ASR from a GithubOrganization.
 // Used during cleanup (ASR deletion).
-func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *GithubOrganization, asrName string) error {
+func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrganization, asrName string) error {
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Re-fetch to get the latest version
-		var freshOrg GithubOrganization
+		var freshOrg repoguardv1.GithubOrganization
 		orgKey := client.ObjectKeyFromObject(org)
 		if err := r.Get(ctx, orgKey, &freshOrg); err != nil {
 			if client.IgnoreNotFound(err) == nil {
@@ -220,7 +221,7 @@ func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *GithubOrga
 }
 
 // removeASRContributions removes all entries contributed by a specific ASR from the org spec.
-func removeASRContributions(org *GithubOrganization, asrName string) {
+func removeASRContributions(org *repoguardv1.GithubOrganization, asrName string) {
 	// Get what this ASR previously contributed
 	prevContrib := getStoredContribution(org, asrName)
 	if prevContrib == nil {
@@ -244,7 +245,7 @@ func removeASRContributions(org *GithubOrganization, asrName string) {
 }
 
 // applyContributions adds the new contributions to the org spec.
-func applyContributions(org *GithubOrganization, asrName string, contrib *orgContribution) {
+func applyContributions(org *repoguardv1.GithubOrganization, asrName string, contrib *orgContribution) {
 	// Add owner teams
 	for _, team := range contrib.OwnerTeams {
 		org.Spec.OrganizationOwnerTeams = appendUniqueString(org.Spec.OrganizationOwnerTeams, team)
@@ -262,7 +263,7 @@ func applyContributions(org *GithubOrganization, asrName string, contrib *orgCon
 }
 
 // updateASRAnnotations updates the tracking annotations on the GithubOrganization.
-func updateASRAnnotations(org *GithubOrganization, asrName string, contrib *orgContribution) {
+func updateASRAnnotations(org *repoguardv1.GithubOrganization, asrName string, contrib *orgContribution) {
 	if org.Annotations == nil {
 		org.Annotations = make(map[string]string)
 	}
@@ -281,7 +282,7 @@ func updateASRAnnotations(org *GithubOrganization, asrName string, contrib *orgC
 }
 
 // removeASRFromAnnotations removes the ASR from tracking annotations.
-func removeASRFromAnnotations(org *GithubOrganization, asrName string) {
+func removeASRFromAnnotations(org *repoguardv1.GithubOrganization, asrName string) {
 	if org.Annotations == nil {
 		return
 	}
@@ -300,7 +301,7 @@ func removeASRFromAnnotations(org *GithubOrganization, asrName string) {
 }
 
 // getStoredContribution retrieves the previously stored contribution for an ASR from annotations.
-func getStoredContribution(org *GithubOrganization, asrName string) *orgContribution {
+func getStoredContribution(org *repoguardv1.GithubOrganization, asrName string) *orgContribution {
 	if org.Annotations == nil {
 		return nil
 	}
@@ -318,7 +319,7 @@ func getStoredContribution(org *GithubOrganization, asrName string) *orgContribu
 }
 
 // getManagedASRNames returns the list of ASR names currently managing this org.
-func getManagedASRNames(org *GithubOrganization) []string {
+func getManagedASRNames(org *repoguardv1.GithubOrganization) []string {
 	if org.Annotations == nil {
 		return nil
 	}
@@ -330,7 +331,7 @@ func getManagedASRNames(org *GithubOrganization) []string {
 }
 
 // hasASRContribution checks if a given ASR has contributed to this org (via annotations).
-func hasASRContribution(org *GithubOrganization, asrName string) bool {
+func hasASRContribution(org *repoguardv1.GithubOrganization, asrName string) bool {
 	if org.Annotations == nil {
 		return false
 	}
@@ -358,9 +359,9 @@ func appendUniqueString(slice []string, s string) []string {
 	return append(slice, s)
 }
 
-func appendUniqueTeam(slice []GithubTeamWithPermission, team GithubTeamWithPermission) []GithubTeamWithPermission {
+func appendUniqueTeam(slice []repoguardv1.GithubTeamWithPermission, team repoguardv1.GithubTeamWithPermission) []repoguardv1.GithubTeamWithPermission {
 	for _, existing := range slice {
-		if existing.Name == team.Name && existing.Permission == team.Permission {
+		if existing.Team == team.Team && existing.Permission == team.Permission {
 			return slice
 		}
 	}
@@ -377,10 +378,10 @@ func removeString(slice []string, s string) []string {
 	return result
 }
 
-func removeTeam(slice []GithubTeamWithPermission, team GithubTeamWithPermission) []GithubTeamWithPermission {
-	result := make([]GithubTeamWithPermission, 0, len(slice))
+func removeTeam(slice []repoguardv1.GithubTeamWithPermission, team repoguardv1.GithubTeamWithPermission) []repoguardv1.GithubTeamWithPermission {
+	result := make([]repoguardv1.GithubTeamWithPermission, 0, len(slice))
 	for _, item := range slice {
-		if item.Name != team.Name || item.Permission != team.Permission {
+		if item.Team != team.Team || item.Permission != team.Permission {
 			result = append(result, item)
 		}
 	}

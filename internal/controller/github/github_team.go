@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -36,18 +37,19 @@ func ReconcileTeams(
 
 	// Create or update desired teams
 	for _, dt := range desired {
-		team := &GithubTeam{
+		team := &repoguardv1.GithubTeam{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dt.CRName,
 				Namespace: targetNamespace,
 			},
 		}
-		team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
 
 		opResult, err := controllerutil.CreateOrUpdate(ctx, c, team, func() error {
 			team.Labels = labels
-			team.Spec = GithubTeamSpec{
-				TeamName: teamName,
+			team.Spec = repoguardv1.GithubTeamSpec{
+				Github:       dt.Instance,
+				Organization: dt.Org,
+				Team:         teamName,
 			}
 			return nil
 		})
@@ -92,7 +94,7 @@ func deleteStaleTeams(
 	desiredNames map[string]struct{},
 	al *audit.Logger,
 ) error {
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := c.List(ctx, &teamList,
 		client.InNamespace(namespace),
 		client.MatchingLabels{LabelSourceASR: asrName},
