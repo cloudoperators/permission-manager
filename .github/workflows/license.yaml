@@ -5,6 +5,8 @@ on:
 
 jobs:
   build-license-eye:
+    permissions:
+      contents: write
     uses: cloudoperators/common/.github/workflows/shared-license.yaml@main
     with:
       apply_header: false
