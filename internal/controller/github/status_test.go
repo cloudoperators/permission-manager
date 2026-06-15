@@ -13,6 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
+
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -20,14 +22,14 @@ func newStatusTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(s)
 	_ = v1alpha1.AddToScheme(s)
-	_ = AddToScheme(s)
+	_ = repoguardv1.AddToScheme(s)
 	return s
 }
 
 func TestMapTeamStatus(t *testing.T) {
 	tests := []struct {
 		name           string
-		teamStatus     string
+		teamStatus     repoguardv1.GithubTeamState
 		expectedStatus string
 		expectMessage  bool
 	}{
@@ -122,7 +124,7 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 	}
 
 	// Create GithubTeam CRs with "complete" status
-	team1 := &GithubTeam{
+	team1 := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
@@ -131,12 +133,12 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "complete"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateComplete},
 	}
-	team1.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team1.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
-	team2 := &GithubTeam{
+	team2 := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.com", "other-org"),
 			Namespace: "default",
@@ -145,10 +147,10 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "complete"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateComplete},
 	}
-	team2.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team2.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -185,7 +187,7 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 		},
 	}
 
-	teamComplete := &GithubTeam{
+	teamComplete := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "org-a"),
 			Namespace: "default",
@@ -194,12 +196,12 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "complete"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateComplete},
 	}
-	teamComplete.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	teamComplete.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
-	teamFailed := &GithubTeam{
+	teamFailed := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "org-b"),
 			Namespace: "default",
@@ -208,12 +210,12 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "failed"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateFailed},
 	}
-	teamFailed.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	teamFailed.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
-	teamRatelimited := &GithubTeam{
+	teamRatelimited := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "org-c"),
 			Namespace: "default",
@@ -222,10 +224,10 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "ratelimited"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateRateLimited},
 	}
-	teamRatelimited.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	teamRatelimited.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -302,7 +304,7 @@ func TestComputeProviderStatus_TargetIDFormat(t *testing.T) {
 		},
 	}
 
-	team := &GithubTeam{
+	team := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
@@ -311,10 +313,10 @@ func TestComputeProviderStatus_TargetIDFormat(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "complete"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateComplete},
 	}
-	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -350,7 +352,7 @@ func TestComputeProviderStatus_DeduplicatesInstanceOrg(t *testing.T) {
 		},
 	}
 
-	team := &GithubTeam{
+	team := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
@@ -359,10 +361,10 @@ func TestComputeProviderStatus_DeduplicatesInstanceOrg(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "complete"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStateComplete},
 	}
-	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -391,7 +393,7 @@ func TestComputeProviderStatus_PendingStatus(t *testing.T) {
 	}
 
 	// Team exists but has "pending" status
-	team := &GithubTeam{
+	team := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
@@ -400,10 +402,10 @@ func TestComputeProviderStatus_PendingStatus(t *testing.T) {
 				LabelSourceASR:    "test-asr",
 			},
 		},
-		Spec:   GithubTeamSpec{TeamName: "test-asr"},
-		Status: GithubTeamStatus{TeamStatus: "pending"},
+		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
+		Status: repoguardv1.GithubTeamStatus{TeamStatus: repoguardv1.GithubTeamStatePendingOperations},
 	}
-	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -480,7 +482,7 @@ func TestMapGithubTeamToASR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			team := &GithubTeam{
+			team := &repoguardv1.GithubTeam{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "some-team",
 					Namespace: "default",

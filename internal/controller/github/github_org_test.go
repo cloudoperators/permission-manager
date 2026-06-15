@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
+
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
@@ -35,22 +37,22 @@ func buildConnectorDef(mapping map[string]string) *runtime.RawExtension {
 func testScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
-	_ = AddToScheme(scheme)
+	_ = repoguardv1.AddToScheme(scheme)
 	return scheme
 }
 
 // helper to create a GithubOrganization CR.
-func newGithubOrg(namespace, name string) *GithubOrganization {
-	return &GithubOrganization{
+func newGithubOrg(namespace, name string) *repoguardv1.GithubOrganization {
+	return &repoguardv1.GithubOrganization{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: GroupVersion.String(),
+			APIVersion: repoguardv1.GroupVersion.String(),
 			Kind:       "GithubOrganization",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: GithubOrganizationSpec{},
+		Spec: repoguardv1.GithubOrganizationSpec{},
 	}
 }
 
@@ -128,7 +130,7 @@ func TestReconcileOrganizations_OrgCCRN_AdminAddsOwnerTeam(t *testing.T) {
 	}
 
 	// Verify the org was patched
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestReconcileOrganizations_OrgCCRN_NonAdminDoesNotAddOwnerTeam(t *testing.T
 	}
 
 	// Verify the org was NOT patched (no org-level changes for non-admin)
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -259,7 +261,7 @@ func TestReconcileOrganizations_WildcardPublicPatchesPublicTeams(t *testing.T) {
 		t.Fatalf("unexpected requeue: %v", result)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -267,8 +269,8 @@ func TestReconcileOrganizations_WildcardPublicPatchesPublicTeams(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 public team, got %d", len(updatedOrg.Spec.DefaultPublicRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name != "team-gamma" {
-		t.Errorf("expected public team 'team-gamma', got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team != "team-gamma" {
+		t.Errorf("expected public team 'team-gamma', got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team)
 	}
 	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Permission != "push" {
 		t.Errorf("expected permission 'push', got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Permission)
@@ -326,7 +328,7 @@ func TestReconcileOrganizations_WildcardPrivatePatchesPrivateTeams(t *testing.T)
 		t.Fatalf("unexpected requeue: %v", result)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -334,8 +336,8 @@ func TestReconcileOrganizations_WildcardPrivatePatchesPrivateTeams(t *testing.T)
 	if len(updatedOrg.Spec.DefaultPrivateRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 private team, got %d", len(updatedOrg.Spec.DefaultPrivateRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name != "team-delta" {
-		t.Errorf("expected private team 'team-delta', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team != "team-delta" {
+		t.Errorf("expected private team 'team-delta', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team)
 	}
 	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission != "pull" {
 		t.Errorf("expected permission 'pull', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission)
@@ -393,7 +395,7 @@ func TestReconcileOrganizations_WildcardStarPatchesBoth(t *testing.T) {
 		t.Fatalf("unexpected requeue: %v", result)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -401,15 +403,15 @@ func TestReconcileOrganizations_WildcardStarPatchesBoth(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 public team, got %d", len(updatedOrg.Spec.DefaultPublicRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name != "team-epsilon" {
-		t.Errorf("expected public team 'team-epsilon', got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team != "team-epsilon" {
+		t.Errorf("expected public team 'team-epsilon', got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team)
 	}
 
 	if len(updatedOrg.Spec.DefaultPrivateRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 private team, got %d", len(updatedOrg.Spec.DefaultPrivateRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name != "team-epsilon" {
-		t.Errorf("expected private team 'team-epsilon', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team != "team-epsilon" {
+		t.Errorf("expected private team 'team-epsilon', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team)
 	}
 }
 
@@ -463,7 +465,7 @@ func TestReconcileOrganizations_AnnotationTracking(t *testing.T) {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -488,7 +490,7 @@ func TestReconcileOrganizations_AnnotationTracking(t *testing.T) {
 	if len(contrib.OwnerTeams) != 1 || contrib.OwnerTeams[0] != "team-zeta" {
 		t.Errorf("expected owner teams ['team-zeta'], got %v", contrib.OwnerTeams)
 	}
-	if len(contrib.PublicTeams) != 1 || contrib.PublicTeams[0].Name != "team-zeta" {
+	if len(contrib.PublicTeams) != 1 || contrib.PublicTeams[0].Team != "team-zeta" {
 		t.Errorf("expected public teams with 'team-zeta', got %v", contrib.PublicTeams)
 	}
 }
@@ -504,7 +506,7 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 	// Pre-populate the org with a previous contribution from the same ASR
 	prevContrib := orgContribution{
 		OwnerTeams:  []string{"team-eta"},
-		PublicTeams: []GithubTeamWithPermission{{Name: "team-eta", Permission: "push"}},
+		PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-eta", Permission: repoguardv1.GithubTeamPermission("push")}},
 	}
 	prevContribJSON, _ := json.Marshal(prevContrib)
 
@@ -514,7 +516,7 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 		annotationASRDefaultTeamsPrefix + "team-eta": string(prevContribJSON),
 	}
 	org.Spec.OrganizationOwnerTeams = []string{"team-eta"}
-	org.Spec.DefaultPublicRepositoryTeams = []GithubTeamWithPermission{{Name: "team-eta", Permission: "push"}}
+	org.Spec.DefaultPublicRepositoryTeams = []repoguardv1.GithubTeamWithPermission{{Team: "team-eta", Permission: repoguardv1.GithubTeamPermission("push")}}
 
 	cb := &v1alpha1.ConnectorBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
@@ -555,7 +557,7 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -574,8 +576,8 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPrivateRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 private team, got %d", len(updatedOrg.Spec.DefaultPrivateRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name != "team-eta" {
-		t.Errorf("expected private team 'team-eta', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team != "team-eta" {
+		t.Errorf("expected private team 'team-eta', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team)
 	}
 	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission != "pull" {
 		t.Errorf("expected permission 'pull', got %q", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission)
@@ -644,7 +646,7 @@ func TestReconcileOrganizations_MultipleASRsNoConflict(t *testing.T) {
 		t.Fatalf("reconcileOrganizations for asr-2 failed: %v", err)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -655,7 +657,7 @@ func TestReconcileOrganizations_MultipleASRsNoConflict(t *testing.T) {
 	}
 
 	// team-two should be in public teams
-	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 || updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name != "team-two" {
+	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 || updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team != "team-two" {
 		t.Errorf("expected public teams ['team-two'], got %v", updatedOrg.Spec.DefaultPublicRepositoryTeams)
 	}
 
@@ -765,7 +767,7 @@ func TestReconcileOrganizations_NonGithubCCRNSkipped(t *testing.T) {
 	}
 
 	// Org should remain unchanged
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -840,7 +842,7 @@ func TestFullReconcile_EndToEnd(t *testing.T) {
 	}
 
 	// Verify org was patched
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -851,13 +853,13 @@ func TestFullReconcile_EndToEnd(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 public team, got %d", len(updatedOrg.Spec.DefaultPublicRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name != "team-full" || updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Permission != "push" {
+	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team != "team-full" || updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Permission != "push" {
 		t.Errorf("unexpected public team: %+v", updatedOrg.Spec.DefaultPublicRepositoryTeams[0])
 	}
 	if len(updatedOrg.Spec.DefaultPrivateRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 private team, got %d", len(updatedOrg.Spec.DefaultPrivateRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Name != "team-full" || updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission != "push" {
+	if updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Team != "team-full" || updatedOrg.Spec.DefaultPrivateRepositoryTeams[0].Permission != "push" {
 		t.Errorf("unexpected private team: %+v", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0])
 	}
 
@@ -882,12 +884,12 @@ func TestRemoveASRContributions_CleanupOnDeletion(t *testing.T) {
 	// Test that removeASRContributions correctly removes entries
 	prevContrib := orgContribution{
 		OwnerTeams:   []string{"team-cleanup"},
-		PublicTeams:  []GithubTeamWithPermission{{Name: "team-cleanup", Permission: "push"}},
-		PrivateTeams: []GithubTeamWithPermission{{Name: "team-cleanup", Permission: "pull"}},
+		PublicTeams:  []repoguardv1.GithubTeamWithPermission{{Team: "team-cleanup", Permission: repoguardv1.GithubTeamPermission("push")}},
+		PrivateTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-cleanup", Permission: repoguardv1.GithubTeamPermission("pull")}},
 	}
 	prevContribJSON, _ := json.Marshal(prevContrib)
 
-	org := &GithubOrganization{
+	org := &repoguardv1.GithubOrganization{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-org",
 			Namespace: "test-ns",
@@ -897,14 +899,14 @@ func TestRemoveASRContributions_CleanupOnDeletion(t *testing.T) {
 				annotationASRDefaultTeamsPrefix + "other-team":   `{"publicTeams":[{"name":"other-team","permission":"admin"}]}`,
 			},
 		},
-		Spec: GithubOrganizationSpec{
+		Spec: repoguardv1.GithubOrganizationSpec{
 			OrganizationOwnerTeams: []string{"team-cleanup"},
-			DefaultPublicRepositoryTeams: []GithubTeamWithPermission{
-				{Name: "team-cleanup", Permission: "push"},
-				{Name: "other-team", Permission: "admin"},
+			DefaultPublicRepositoryTeams: []repoguardv1.GithubTeamWithPermission{
+				{Team: "team-cleanup", Permission: repoguardv1.GithubTeamPermission("push")},
+				{Team: "other-team", Permission: repoguardv1.GithubTeamPermission("admin")},
 			},
-			DefaultPrivateRepositoryTeams: []GithubTeamWithPermission{
-				{Name: "team-cleanup", Permission: "pull"},
+			DefaultPrivateRepositoryTeams: []repoguardv1.GithubTeamWithPermission{
+				{Team: "team-cleanup", Permission: repoguardv1.GithubTeamPermission("pull")},
 			},
 		},
 	}
@@ -921,8 +923,8 @@ func TestRemoveASRContributions_CleanupOnDeletion(t *testing.T) {
 	if len(org.Spec.DefaultPublicRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 public team remaining, got %d", len(org.Spec.DefaultPublicRepositoryTeams))
 	}
-	if org.Spec.DefaultPublicRepositoryTeams[0].Name != "other-team" {
-		t.Errorf("expected 'other-team' remaining, got %q", org.Spec.DefaultPublicRepositoryTeams[0].Name)
+	if org.Spec.DefaultPublicRepositoryTeams[0].Team != "other-team" {
+		t.Errorf("expected 'other-team' remaining, got %q", org.Spec.DefaultPublicRepositoryTeams[0].Team)
 	}
 
 	// Private teams should be empty
@@ -970,24 +972,24 @@ func TestHelpers_AppendUniqueString(t *testing.T) {
 }
 
 func TestHelpers_AppendUniqueTeam(t *testing.T) {
-	existing := []GithubTeamWithPermission{
-		{Name: "team-a", Permission: "push"},
+	existing := []repoguardv1.GithubTeamWithPermission{
+		{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")},
 	}
 
 	// Different team name
-	result := appendUniqueTeam(existing, GithubTeamWithPermission{Name: "team-b", Permission: "push"})
+	result := appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-b", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 2 {
 		t.Errorf("expected 2 teams, got %d", len(result))
 	}
 
 	// Same team, same permission (duplicate)
-	result = appendUniqueTeam(existing, GithubTeamWithPermission{Name: "team-a", Permission: "push"})
+	result = appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 1 {
 		t.Errorf("expected 1 team (no duplicate), got %d", len(result))
 	}
 
 	// Same team, different permission
-	result = appendUniqueTeam(existing, GithubTeamWithPermission{Name: "team-a", Permission: "pull"})
+	result = appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("pull")})
 	if len(result) != 2 {
 		t.Errorf("expected 2 teams (different permission), got %d", len(result))
 	}
@@ -1012,19 +1014,19 @@ func TestHelpers_RemoveString(t *testing.T) {
 }
 
 func TestHelpers_RemoveTeam(t *testing.T) {
-	teams := []GithubTeamWithPermission{
-		{Name: "team-a", Permission: "push"},
-		{Name: "team-b", Permission: "pull"},
-		{Name: "team-a", Permission: "admin"},
+	teams := []repoguardv1.GithubTeamWithPermission{
+		{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")},
+		{Team: "team-b", Permission: repoguardv1.GithubTeamPermission("pull")},
+		{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("admin")},
 	}
 
-	result := removeTeam(teams, GithubTeamWithPermission{Name: "team-a", Permission: "push"})
+	result := removeTeam(teams, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 2 {
 		t.Fatalf("expected 2 teams, got %d", len(result))
 	}
 	// Should keep team-a with admin and team-b
 	for _, team := range result {
-		if team.Name == "team-a" && team.Permission == "push" {
+		if team.Team == "team-a" && team.Permission == "push" {
 			t.Error("team-a with push should have been removed")
 		}
 	}

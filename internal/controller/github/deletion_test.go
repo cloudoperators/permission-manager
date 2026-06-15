@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
+
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
@@ -28,7 +30,7 @@ import (
 func newDeletionScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
-	_ = AddToScheme(scheme)
+	_ = repoguardv1.AddToScheme(scheme)
 	return scheme
 }
 
@@ -77,41 +79,41 @@ func newConnectorBinding(name, namespace string, capMapping map[string]string, t
 }
 
 // newOwnedGithubTeam creates a GithubTeam CR owned by the given ASR.
-func newOwnedGithubTeam(crName, namespace, asrName, asrNamespace string) *GithubTeam {
-	team := &GithubTeam{
+func newOwnedGithubTeam(crName, namespace, asrName, asrNamespace string) *repoguardv1.GithubTeam {
+	team := &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      crName,
 			Namespace: namespace,
 			Labels:    BuildLabels(asrName, asrNamespace),
 		},
-		Spec: GithubTeamSpec{TeamName: "my-team"},
+		Spec: repoguardv1.GithubTeamSpec{Team: "my-team"},
 	}
-	team.SetGroupVersionKind(GroupVersion.WithKind("GithubTeam"))
+	team.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeam"))
 	return team
 }
 
 // newOwnedGithubTeamRepo creates a GithubTeamRepository CR owned by the given ASR.
-func newOwnedGithubTeamRepo(crName, namespace, asrName, asrNamespace string, repos []string, permission string) *GithubTeamRepository {
-	teamRepo := &GithubTeamRepository{
+func newOwnedGithubTeamRepo(crName, namespace, asrName, asrNamespace string, repos []string, permission string) *repoguardv1.GithubTeamRepository {
+	teamRepo := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      crName,
 			Namespace: namespace,
 			Labels:    BuildLabels(asrName, asrNamespace),
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: repos,
-			Permission:   permission,
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: repos,
+			Permission: repoguardv1.GithubTeamPermission(permission),
 		},
 	}
-	teamRepo.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	teamRepo.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 	return teamRepo
 }
 
 // newGithubOrgWithContributions creates a GithubOrganization with contributions from an ASR.
-func newGithubOrgWithContributions(namespace, orgName, asrName string, contrib *orgContribution) *GithubOrganization {
-	org := &GithubOrganization{
+func newGithubOrgWithContributions(namespace, orgName, asrName string, contrib *orgContribution) *repoguardv1.GithubOrganization {
+	org := &repoguardv1.GithubOrganization{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: GroupVersion.String(),
+			APIVersion: repoguardv1.GroupVersion.String(),
 			Kind:       "GithubOrganization",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -119,7 +121,7 @@ func newGithubOrgWithContributions(namespace, orgName, asrName string, contrib *
 			Namespace:   namespace,
 			Annotations: make(map[string]string),
 		},
-		Spec: GithubOrganizationSpec{},
+		Spec: repoguardv1.GithubOrganizationSpec{},
 	}
 
 	if contrib != nil {
@@ -264,7 +266,7 @@ func TestDeletion_DeletesAllOwnedTeams(t *testing.T) {
 	}
 
 	// Verify all owned teams were deleted
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestDeletion_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 	}
 
 	// Verify other ASR's team was NOT deleted
-	var team GithubTeam
+	var team repoguardv1.GithubTeam
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-other-team1"}, &team); err != nil {
 		t.Errorf("other ASR's team should not be deleted: %v", err)
 	}
@@ -340,7 +342,7 @@ func TestDeletion_DeletesAllOwnedTeamRepos(t *testing.T) {
 	}
 
 	// Verify all owned team repos were deleted
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list team repos: %v", err)
 	}
@@ -373,7 +375,7 @@ func TestDeletion_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
 	}
 
 	// Verify other ASR's repo was NOT deleted
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-other-repo1"}, &repo); err != nil {
 		t.Errorf("other ASR's team repo should not be deleted: %v", err)
 	}
@@ -402,8 +404,8 @@ func TestDeletion_RemovesOrgEntriesContributedByASR(t *testing.T) {
 	// Create org with contributions from this ASR
 	contrib := &orgContribution{
 		OwnerTeams:   []string{"team-org"},
-		PublicTeams:  []GithubTeamWithPermission{{Name: "team-org", Permission: "push"}},
-		PrivateTeams: []GithubTeamWithPermission{{Name: "team-org", Permission: "push"}},
+		PublicTeams:  []repoguardv1.GithubTeamWithPermission{{Team: "team-org", Permission: repoguardv1.GithubTeamPermission("push")}},
+		PrivateTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-org", Permission: repoguardv1.GithubTeamPermission("push")}},
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-org", contrib)
 
@@ -420,7 +422,7 @@ func TestDeletion_RemovesOrgEntriesContributedByASR(t *testing.T) {
 	}
 
 	// Verify org entries were cleaned up
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -461,14 +463,14 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 		OwnerTeams: []string{"team-del"},
 	}
 	otherContrib := &orgContribution{
-		PublicTeams: []GithubTeamWithPermission{{Name: "team-other", Permission: "push"}},
+		PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-other", Permission: repoguardv1.GithubTeamPermission("push")}},
 	}
 	delContribJSON, _ := json.Marshal(delContrib)
 	otherContribJSON, _ := json.Marshal(otherContrib)
 
-	org := &GithubOrganization{
+	org := &repoguardv1.GithubOrganization{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: GroupVersion.String(),
+			APIVersion: repoguardv1.GroupVersion.String(),
 			Kind:       "GithubOrganization",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -480,9 +482,9 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 				annotationASRDefaultTeamsPrefix + "team-other": string(otherContribJSON),
 			},
 		},
-		Spec: GithubOrganizationSpec{
+		Spec: repoguardv1.GithubOrganizationSpec{
 			OrganizationOwnerTeams:       []string{"team-del"},
-			DefaultPublicRepositoryTeams: []GithubTeamWithPermission{{Name: "team-other", Permission: "push"}},
+			DefaultPublicRepositoryTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-other", Permission: repoguardv1.GithubTeamPermission("push")}},
 		},
 	}
 
@@ -496,7 +498,7 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 	}
 
 	// Verify ONLY the deleting ASR's entries were removed
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -510,8 +512,8 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 1 {
 		t.Fatalf("expected 1 public team, got %d", len(updatedOrg.Spec.DefaultPublicRepositoryTeams))
 	}
-	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name != "team-other" {
-		t.Errorf("expected 'team-other' to remain, got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Name)
+	if updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team != "team-other" {
+		t.Errorf("expected 'team-other' to remain, got %q", updatedOrg.Spec.DefaultPublicRepositoryTeams[0].Team)
 	}
 
 	// Annotations: team-del should be removed, team-other should remain
@@ -544,7 +546,7 @@ func TestDeletion_CleansUpMultipleOrgs(t *testing.T) {
 	org1 := newGithubOrgWithContributions("target-ns", "org1", "team-multi", contrib1)
 
 	// Contributions to org2
-	contrib2 := &orgContribution{PublicTeams: []GithubTeamWithPermission{{Name: "team-multi", Permission: "push"}}}
+	contrib2 := &orgContribution{PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-multi", Permission: repoguardv1.GithubTeamPermission("push")}}}
 	org2 := newGithubOrgWithContributions("other-ns", "org2", "team-multi", contrib2)
 
 	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org1, org2)
@@ -557,7 +559,7 @@ func TestDeletion_CleansUpMultipleOrgs(t *testing.T) {
 	}
 
 	// Verify org1 was cleaned
-	var updatedOrg1 GithubOrganization
+	var updatedOrg1 repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "org1"}, &updatedOrg1); err != nil {
 		t.Fatalf("failed to get org1: %v", err)
 	}
@@ -566,7 +568,7 @@ func TestDeletion_CleansUpMultipleOrgs(t *testing.T) {
 	}
 
 	// Verify org2 was cleaned (in a different namespace)
-	var updatedOrg2 GithubOrganization
+	var updatedOrg2 repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "other-ns", Name: "org2"}, &updatedOrg2); err != nil {
 		t.Fatalf("failed to get org2: %v", err)
 	}
@@ -615,7 +617,7 @@ func TestDeletion_FinalizerRemovedOnlyAfterCleanupSucceeds(t *testing.T) {
 	// If NotFound: fake client GC'd it (all finalizers removed) - this is correct
 
 	// Verify all resources were cleaned up
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-fin"}); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -623,7 +625,7 @@ func TestDeletion_FinalizerRemovedOnlyAfterCleanupSucceeds(t *testing.T) {
 		t.Errorf("expected 0 teams, got %d", len(teamList.Items))
 	}
 
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-fin"}); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
@@ -738,7 +740,7 @@ func TestDeletion_CrossNamespaceOrgCleanup(t *testing.T) {
 	namespaces := []string{"ns-a", "ns-b", "ns-c"}
 	orgNames := []string{"org1", "org2", "org3"}
 	for i, ns := range namespaces {
-		var updatedOrg GithubOrganization
+		var updatedOrg repoguardv1.GithubOrganization
 		if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: orgNames[i]}, &updatedOrg); err != nil {
 			t.Fatalf("failed to get org %s/%s: %v", ns, orgNames[i], err)
 		}
@@ -788,7 +790,7 @@ func TestCleanupOwnedResources_DeletesTeamsAndRepos(t *testing.T) {
 	}
 
 	// Verify all teams deleted
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -797,7 +799,7 @@ func TestCleanupOwnedResources_DeletesTeamsAndRepos(t *testing.T) {
 	}
 
 	// Verify all repos deleted
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
@@ -849,7 +851,7 @@ func TestCleanupOwnedResources_FallsBackToASRNamespaceWhenDefinitionInvalid(t *t
 	}
 
 	// Verify team was deleted from the fallback namespace
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("asr-namespace")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -896,7 +898,7 @@ func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 	}
 
 	// Verify org1 was cleaned
-	var updatedOrg1 GithubOrganization
+	var updatedOrg1 repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "ns-1", Name: "org-a"}, &updatedOrg1); err != nil {
 		t.Fatalf("failed to get org1: %v", err)
 	}
@@ -905,7 +907,7 @@ func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 	}
 
 	// Verify org2 was cleaned
-	var updatedOrg2 GithubOrganization
+	var updatedOrg2 repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "ns-2", Name: "org-b"}, &updatedOrg2); err != nil {
 		t.Fatalf("failed to get org2: %v", err)
 	}
@@ -914,7 +916,7 @@ func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 	}
 
 	// Verify org3 was NOT touched (different ASR)
-	var updatedOrg3 GithubOrganization
+	var updatedOrg3 repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "ns-3", Name: "org-c"}, &updatedOrg3); err != nil {
 		t.Fatalf("failed to get org3: %v", err)
 	}
@@ -973,7 +975,7 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 		[]string{"repo-a"}, "push")
 	contrib := &orgContribution{
 		OwnerTeams:  []string{"team-full"},
-		PublicTeams: []GithubTeamWithPermission{{Name: "team-full", Permission: "push"}},
+		PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-full", Permission: repoguardv1.GithubTeamPermission("push")}},
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-full", contrib)
 
@@ -990,7 +992,7 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	}
 
 	// Verify teams deleted
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -999,7 +1001,7 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	}
 
 	// Verify repos deleted
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns")); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
@@ -1008,7 +1010,7 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	}
 
 	// Verify org entries cleaned
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -1155,7 +1157,7 @@ func TestDeletion_WithAdvancedConfigTargetNamespace(t *testing.T) {
 	}
 
 	// Verify team was deleted from the custom namespace
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("custom-ns")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -1198,7 +1200,7 @@ func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
 	}
 
 	// Verify all teams deleted
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList,
 		client.InNamespace("target-ns"),
 		client.MatchingLabels{LabelSourceASR: "asr-many"},
@@ -1210,7 +1212,7 @@ func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
 	}
 
 	// Verify all repos deleted
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList,
 		client.InNamespace("target-ns"),
 		client.MatchingLabels{LabelSourceASR: "asr-many"},
@@ -1272,7 +1274,7 @@ func TestDeleteStaleTeams_NilDesiredDeletesAll(t *testing.T) {
 		t.Fatalf("deleteStaleTeams failed: %v", err)
 	}
 
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	if err := c.List(context.Background(), &teamList, client.InNamespace("ns")); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -1295,7 +1297,7 @@ func TestDeleteStaleTeamRepos_NilDesiredDeletesAll(t *testing.T) {
 		t.Fatalf("deleteStaleTeamRepos failed: %v", err)
 	}
 
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := c.List(context.Background(), &repoList, client.InNamespace("ns")); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
@@ -1314,7 +1316,7 @@ func TestRemoveASRFromOrg_OrgNotFound_Succeeds(t *testing.T) {
 	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, cb)
 
 	// Call removeASRFromOrg with a non-existent org
-	org := &GithubOrganization{
+	org := &repoguardv1.GithubOrganization{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nonexistent-org",
 			Namespace: "target-ns",
@@ -1334,8 +1336,8 @@ func TestRemoveASRFromOrg_RemovesContributionsAndAnnotations(t *testing.T) {
 
 	contrib := &orgContribution{
 		OwnerTeams:   []string{"team-rem"},
-		PublicTeams:  []GithubTeamWithPermission{{Name: "team-rem", Permission: "push"}},
-		PrivateTeams: []GithubTeamWithPermission{{Name: "team-rem", Permission: "pull"}},
+		PublicTeams:  []repoguardv1.GithubTeamWithPermission{{Team: "team-rem", Permission: repoguardv1.GithubTeamPermission("push")}},
+		PrivateTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-rem", Permission: repoguardv1.GithubTeamPermission("pull")}},
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-rem", contrib)
 
@@ -1346,7 +1348,7 @@ func TestRemoveASRFromOrg_RemovesContributionsAndAnnotations(t *testing.T) {
 		t.Fatalf("removeASRFromOrg failed: %v", err)
 	}
 
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg); err != nil {
 		t.Fatalf("failed to get org: %v", err)
 	}
@@ -1400,21 +1402,21 @@ func TestDeletion_CleanupOrderIsResourcesThenOrgsThenFinalizer(t *testing.T) {
 
 	// After reconcile: verify everything is cleaned in order
 	// 1. Teams gone
-	var teamList GithubTeamList
+	var teamList repoguardv1.GithubTeamList
 	_ = fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-order"})
 	if len(teamList.Items) != 0 {
 		t.Errorf("teams should be deleted first")
 	}
 
 	// 2. Repos gone
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	_ = fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-order"})
 	if len(repoList.Items) != 0 {
 		t.Errorf("repos should be deleted")
 	}
 
 	// 3. Org entries removed
-	var updatedOrg GithubOrganization
+	var updatedOrg repoguardv1.GithubOrganization
 	_ = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg)
 	if len(updatedOrg.Spec.OrganizationOwnerTeams) != 0 {
 		t.Errorf("org entries should be cleaned")
