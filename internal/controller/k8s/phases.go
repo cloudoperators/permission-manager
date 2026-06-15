@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 	pmutils "github.com/cloudoperators/permission-manager/pkg/utils"
@@ -77,7 +78,7 @@ func (p *Phase) ReconcileDelete(ctx context.Context, asr *v1alpha1.ApplicationSp
 	}
 
 	if len(errs) == 0 {
-		asr.Status.Providers = pmutils.RemoveProviderStatus(asr.Status.Providers, v1alpha1.ProviderKubernetes)
+		asr.Status.Providers = pmmeta.RemoveProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
 	}
 
 	return utilerrors.NewAggregate(errs)
@@ -85,7 +86,7 @@ func (p *Phase) ReconcileDelete(ctx context.Context, asr *v1alpha1.ApplicationSp
 
 // previouslyTargetedClusters returns the cluster names from status.providers["kubernetes"].targets.
 func previouslyTargetedClusters(asr *v1alpha1.ApplicationSpecificRole) []string {
-	ps := pmutils.GetProviderStatus(asr.Status.Providers, v1alpha1.ProviderKubernetes)
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
 	if ps == nil {
 		return nil
 	}
@@ -197,7 +198,7 @@ func detectOrphanClusters(asr *v1alpha1.ApplicationSpecificRole, currentScopes m
 	if asr.Status.Providers == nil {
 		return nil
 	}
-	ps, ok := asr.Status.Providers[string(v1alpha1.ProviderKubernetes)]
+	ps, ok := asr.Status.Providers[string(pmmeta.ProviderKubernetes)]
 	if !ok {
 		return nil
 	}
@@ -214,28 +215,28 @@ func detectOrphanClusters(asr *v1alpha1.ApplicationSpecificRole, currentScopes m
 // The lifecycle engine patches the full status at the end of reconcile.
 // If unmapped capabilities exist, reports degraded status instead.
 func (p *Phase) ensureProviderStatus(asr *v1alpha1.ApplicationSpecificRole, statuses []clusterStatus, unmappedCaps []string) {
-	var ps v1alpha1.ProviderStatus
+	var ps pmmeta.ProviderStatus
 
 	if len(unmappedCaps) > 0 {
-		ps = pmutils.DegradedProviderStatus(fmt.Sprintf("unmapped capabilities: %v", unmappedCaps))
+		ps = pmmeta.DegradedProviderStatus(fmt.Sprintf("unmapped capabilities: %v", unmappedCaps))
 	} else {
-		existing := pmutils.GetProviderStatus(asr.Status.Providers, v1alpha1.ProviderKubernetes)
-		var targets []v1alpha1.TargetStatus
+		existing := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+		var targets []pmmeta.TargetStatus
 		if existing != nil {
 			targets = existing.Targets
 		}
 		for _, s := range statuses {
-			ts := v1alpha1.TargetStatus{TargetID: s.name}
+			ts := pmmeta.TargetStatus{TargetID: s.name}
 			if s.err != nil {
-				ts.Status = string(pmutils.TargetStatusError)
+				ts.Status = string(pmmeta.TargetStatusError)
 				ts.Message = s.err.Error()
 			} else {
-				ts.Status = string(pmutils.TargetStatusReady)
+				ts.Status = string(pmmeta.TargetStatusReady)
 			}
-			targets = pmutils.SetTargetStatus(targets, ts)
+			targets = pmmeta.SetTargetStatus(targets, ts)
 		}
-		ps = pmutils.ProviderStatusFromTargets(targets)
+		ps = pmmeta.ProviderStatusFromTargets(targets)
 	}
 
-	asr.Status.Providers = pmutils.SetProviderStatus(asr.Status.Providers, v1alpha1.ProviderKubernetes, ps)
+	asr.Status.Providers = pmmeta.SetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes, ps)
 }

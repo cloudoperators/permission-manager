@@ -1,24 +1,73 @@
-package utils
+// SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package meta
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
-	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+// ProviderType identifies a permission-manager provider.
+type ProviderType string
+
+const (
+	// ProviderKubernetes is the provider ID for the Kubernetes RBAC provider.
+	ProviderKubernetes ProviderType = "kubernetes"
+
+	// ProviderGithub is the provider ID for the GitHub provider.
+	ProviderGithub ProviderType = "github"
 )
 
 // TargetStatusValue is the type for target provisioning status values.
 type TargetStatusValue string
 
-// Target status values.
 const (
 	TargetStatusReady    TargetStatusValue = "Ready"
 	TargetStatusDegraded TargetStatusValue = "Degraded"
 	TargetStatusError    TargetStatusValue = "Error"
 )
 
+// +kubebuilder:object:generate=true
+
+// TargetStatus tracks the provisioning state for a single target within a provider.
+type TargetStatus struct {
+	// TargetID is the identifier of the target (e.g., cluster name).
+	TargetID string `json:"targetID"`
+
+	// Status is the provisioning result.
+	// TODO: change to TargetStatusValue once github provider is updated.
+	Status string `json:"status"`
+
+	// Message is a human-readable description of the result.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// LastUpdated is the timestamp of the last provisioning attempt for this target.
+	LastUpdated metav1.Time `json:"lastUpdated"`
+}
+
+// +kubebuilder:object:generate=true
+
+// ProviderStatus tracks the reconciliation state for a single provider.
+type ProviderStatus struct {
+	// Ready indicates whether the provider has successfully reconciled all targets.
+	Ready bool `json:"ready"`
+
+	// Message is a human-readable summary of the provider's reconciliation state.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Targets contains per-target provisioning status.
+	// +optional
+	Targets []TargetStatus `json:"targets,omitempty"`
+
+	// LastReconciled is the timestamp of the last reconciliation attempt.
+	LastReconciled metav1.Time `json:"lastReconciled"`
+}
+
 // ProviderStatusFromTargets builds a ProviderStatus from per-target results.
 // Ready is true only when all targets are TargetStatusReady.
-func ProviderStatusFromTargets(targets []v1alpha1.TargetStatus) v1alpha1.ProviderStatus {
+func ProviderStatusFromTargets(targets []TargetStatus) ProviderStatus {
 	allReady := true
 	for _, t := range targets {
 		if t.Status != string(TargetStatusReady) {
@@ -26,7 +75,7 @@ func ProviderStatusFromTargets(targets []v1alpha1.TargetStatus) v1alpha1.Provide
 			break
 		}
 	}
-	return v1alpha1.ProviderStatus{
+	return ProviderStatus{
 		Ready:          allReady,
 		Targets:        targets,
 		LastReconciled: metav1.Now(),
@@ -34,9 +83,8 @@ func ProviderStatusFromTargets(targets []v1alpha1.TargetStatus) v1alpha1.Provide
 }
 
 // DegradedProviderStatus builds a ProviderStatus with Ready=false and a message.
-// Used when capabilities cannot be mapped or the provider is in a degraded state.
-func DegradedProviderStatus(msg string) v1alpha1.ProviderStatus {
-	return v1alpha1.ProviderStatus{
+func DegradedProviderStatus(msg string) ProviderStatus {
+	return ProviderStatus{
 		Ready:          false,
 		Message:        msg,
 		LastReconciled: metav1.Now(),
@@ -44,9 +92,8 @@ func DegradedProviderStatus(msg string) v1alpha1.ProviderStatus {
 }
 
 // SetTargetStatus upserts a TargetStatus into the slice by TargetID.
-// If a target with the same TargetID already exists, it is updated.
 // LastUpdated is only updated when Status or Message changes.
-func SetTargetStatus(targets []v1alpha1.TargetStatus, incoming v1alpha1.TargetStatus) []v1alpha1.TargetStatus {
+func SetTargetStatus(targets []TargetStatus, incoming TargetStatus) []TargetStatus {
 	for i, existing := range targets {
 		if existing.TargetID != incoming.TargetID {
 			continue
@@ -66,8 +113,8 @@ func SetTargetStatus(targets []v1alpha1.TargetStatus, incoming v1alpha1.TargetSt
 }
 
 // RemoveTargetStatus removes the target with the given TargetID from the slice.
-func RemoveTargetStatus(targets []v1alpha1.TargetStatus, targetID string) []v1alpha1.TargetStatus {
-	result := make([]v1alpha1.TargetStatus, 0, len(targets))
+func RemoveTargetStatus(targets []TargetStatus, targetID string) []TargetStatus {
+	result := make([]TargetStatus, 0, len(targets))
 	for _, t := range targets {
 		if t.TargetID != targetID {
 			result = append(result, t)
@@ -77,7 +124,7 @@ func RemoveTargetStatus(targets []v1alpha1.TargetStatus, targetID string) []v1al
 }
 
 // GetTargetStatus returns a pointer to the target with the given TargetID, or nil.
-func GetTargetStatus(targets []v1alpha1.TargetStatus, targetID string) *v1alpha1.TargetStatus {
+func GetTargetStatus(targets []TargetStatus, targetID string) *TargetStatus {
 	for i := range targets {
 		if targets[i].TargetID == targetID {
 			return &targets[i]
@@ -89,9 +136,9 @@ func GetTargetStatus(targets []v1alpha1.TargetStatus, targetID string) *v1alpha1
 // SetProviderStatus upserts a ProviderStatus into the providers map by providerKey.
 // LastReconciled is only updated when Ready, Message, or Targets change.
 // Allocates the map if nil.
-func SetProviderStatus(providers map[string]v1alpha1.ProviderStatus, providerKey v1alpha1.ProviderType, incoming v1alpha1.ProviderStatus) map[string]v1alpha1.ProviderStatus {
+func SetProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType, incoming ProviderStatus) map[string]ProviderStatus {
 	if providers == nil {
-		providers = make(map[string]v1alpha1.ProviderStatus)
+		providers = make(map[string]ProviderStatus)
 	}
 	key := string(providerKey)
 	if existing, ok := providers[key]; ok {
@@ -104,13 +151,13 @@ func SetProviderStatus(providers map[string]v1alpha1.ProviderStatus, providerKey
 }
 
 // RemoveProviderStatus removes the provider entry with the given key from the map.
-func RemoveProviderStatus(providers map[string]v1alpha1.ProviderStatus, providerKey v1alpha1.ProviderType) map[string]v1alpha1.ProviderStatus {
+func RemoveProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType) map[string]ProviderStatus {
 	delete(providers, string(providerKey))
 	return providers
 }
 
 // GetProviderStatus returns a pointer to the ProviderStatus for the given key, or nil.
-func GetProviderStatus(providers map[string]v1alpha1.ProviderStatus, providerKey v1alpha1.ProviderType) *v1alpha1.ProviderStatus {
+func GetProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType) *ProviderStatus {
 	if providers == nil {
 		return nil
 	}
@@ -121,9 +168,7 @@ func GetProviderStatus(providers map[string]v1alpha1.ProviderStatus, providerKey
 	return &ps
 }
 
-// targetsSemanticEqual returns true if two TargetStatus slices are semantically
-// equal, ignoring LastUpdated timestamps.
-func targetsSemanticEqual(a, b []v1alpha1.TargetStatus) bool {
+func targetsSemanticEqual(a, b []TargetStatus) bool {
 	if len(a) != len(b) {
 		return false
 	}

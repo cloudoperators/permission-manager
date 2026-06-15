@@ -235,8 +235,7 @@ spec:
                               the result.
                             type: string
                           status:
-                            description: Status is the provisioning result (e.g.,
-                              Success, Error, Unreachable).
+                            description: Status is the provisioning result.
                             type: string
                           targetID:
                             description: TargetID is the identifier of the target

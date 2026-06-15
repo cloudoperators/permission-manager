@@ -48,16 +48,11 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// ProviderType identifies a permission-manager provider.
-type ProviderType string
+// Deprecated: use pmmeta.TargetStatus from api/meta directly.
+type TargetStatus = pmmeta.TargetStatus
 
-const (
-	// ProviderKubernetes is the provider ID for the Kubernetes RBAC provider.
-	ProviderKubernetes ProviderType = "kubernetes"
-
-	// ProviderGithub is the provider ID for the GitHub provider.
-	ProviderGithub ProviderType = "github"
-)
+// Deprecated: use pmmeta.ProviderStatus from api/meta directly.
+type ProviderStatus = pmmeta.ProviderStatus
 
 // ApplicationSpecificRoleSpec defines the desired state of ApplicationSpecificRole
 type ApplicationSpecificRoleSpec struct {
@@ -130,44 +125,10 @@ type Approver struct {
 	Step int `json:"step,omitempty"`
 }
 
-// TargetStatus tracks the provisioning state for a single target within a provider.
-type TargetStatus struct {
-	// TargetID is the identifier of the target (e.g., cluster name).
-	TargetID string `json:"targetID"`
-
-	// Status is the provisioning result (e.g., Success, Error, Unreachable).
-	// TODO: change to TargetStatusValue once github provider is updated.
-	Status string `json:"status"`
-
-	// Message is a human-readable description of the result.
-	// +optional
-	Message string `json:"message,omitempty"`
-
-	// LastUpdated is the timestamp of the last provisioning attempt for this target.
-	LastUpdated metav1.Time `json:"lastUpdated"`
-}
-
-// ProviderStatus tracks the reconciliation state for a single provider.
-type ProviderStatus struct {
-	// Ready indicates whether the provider has successfully reconciled all targets.
-	Ready bool `json:"ready"`
-
-	// Message is a human-readable summary of the provider's reconciliation state.
-	// +optional
-	Message string `json:"message,omitempty"`
-
-	// Targets contains per-target provisioning status.
-	// +optional
-	Targets []TargetStatus `json:"targets,omitempty"`
-
-	// LastReconciled is the timestamp of the last reconciliation attempt.
-	LastReconciled metav1.Time `json:"lastReconciled"`
-}
-
 // ApplicationSpecificRoleStatus defines the observed state of ApplicationSpecificRole.
 type ApplicationSpecificRoleStatus struct {
 	// Providers maps provider type to its reconciliation status.
-	// TODO: change key type to ProviderType once all providers are migrated.
+	// TODO: migrate key to pmmeta.ProviderType and values to pmmeta.ProviderStatus directly once github provider is migrated to api/meta.
 	// +optional
 	Providers map[string]ProviderStatus `json:"providers,omitempty"`
 

@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/controller/k8s"
@@ -111,27 +112,27 @@ func (r *ASRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.RuntimeObject) (ctrl.Result, lifecycle.ReconcileResult, error) {
 	asr := obj.(*v1alpha1.ApplicationSpecificRole)
 
-	if r.Cfg.Enabled(string(v1alpha1.ProviderGithub)) {
+	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
 				continue
 			}
-			if cb.Spec.Provider == string(v1alpha1.ProviderGithub) {
+			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
 				r.Log.Info("github provider not implemented by this team, skipping", "asr", asr.Name)
 				break
 			}
 		}
 	}
 
-	if r.Cfg.Enabled(string(v1alpha1.ProviderKubernetes)) {
+	if r.Cfg.Enabled(string(pmmeta.ProviderKubernetes)) {
 		var errs []error
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
 				continue
 			}
-			if cb.Spec.Provider == string(v1alpha1.ProviderKubernetes) {
+			if cb.Spec.Provider == string(pmmeta.ProviderKubernetes) {
 				if err := r.k8sPhase.Reconcile(ctx, asr); err != nil {
 					errs = append(errs, err)
 				}
@@ -149,14 +150,14 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 func (r *ASRReconciler) EnsureDeleted(ctx context.Context, obj lifecycle.RuntimeObject) (ctrl.Result, lifecycle.ReconcileResult, error) {
 	asr := obj.(*v1alpha1.ApplicationSpecificRole)
 
-	if r.Cfg.Enabled(string(v1alpha1.ProviderKubernetes)) {
+	if r.Cfg.Enabled(string(pmmeta.ProviderKubernetes)) {
 		var errs []error
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
 				continue
 			}
-			if cb.Spec.Provider == string(v1alpha1.ProviderKubernetes) {
+			if cb.Spec.Provider == string(pmmeta.ProviderKubernetes) {
 				if err := r.k8sPhase.ReconcileDelete(ctx, asr); err != nil {
 					errs = append(errs, err)
 				}
