@@ -7,14 +7,25 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - secrets
   verbs:
   - get
   - list
   - watch
 - apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - greenhouse.sap
-  - greenhouseapis.sap
   resources:
   - clusters
   verbs:
@@ -49,7 +60,22 @@ rules:
   - permission-manager.cloudoperators.dev
   resources:
   - connectorbindings
+  - functionalroles
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - repo-guard.cloudoperators.dev
+  resources:
+  - githuborganizations
+  - githubteamrepositories
+  - githubteams
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
