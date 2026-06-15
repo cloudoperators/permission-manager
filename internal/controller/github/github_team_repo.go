@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -21,6 +22,7 @@ func ReconcileTeamRepos(
 	ctx context.Context,
 	c client.Client,
 	desired []DesiredTeamRepo,
+	teamName string,
 	targetNamespace string,
 	asrName string,
 	asrNamespace string,
@@ -38,19 +40,21 @@ func ReconcileTeamRepos(
 		}
 		desiredNames[dr.CRName] = struct{}{}
 
-		teamRepo := &GithubTeamRepository{
+		teamRepo := &repoguardv1.GithubTeamRepository{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dr.CRName,
 				Namespace: targetNamespace,
 			},
 		}
-		teamRepo.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
 
 		opResult, err := controllerutil.CreateOrUpdate(ctx, c, teamRepo, func() error {
 			teamRepo.Labels = labels
-			teamRepo.Spec = GithubTeamRepositorySpec{
-				Repositories: dr.Repositories,
-				Permission:   dr.Permission,
+			teamRepo.Spec = repoguardv1.GithubTeamRepositorySpec{
+				Github:       dr.Instance,
+				Organization: dr.Org,
+				Team:         teamName,
+				Repository:   dr.Repositories,
+				Permission:   repoguardv1.GithubTeamPermission(dr.Permission),
 			}
 			return nil
 		})
@@ -95,7 +99,7 @@ func deleteStaleTeamRepos(
 	desiredNames map[string]struct{},
 	al *audit.Logger,
 ) error {
-	var repoList GithubTeamRepositoryList
+	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := c.List(ctx, &repoList,
 		client.InNamespace(namespace),
 		client.MatchingLabels{LabelSourceASR: asrName},

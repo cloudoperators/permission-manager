@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
+
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
 
@@ -30,13 +32,13 @@ func TestReconcileTeamRepos_CreatesNewRepos(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the GithubTeamRepository was created
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-test-github-example-com-cc-push", Namespace: "pm-system"}
 	if err := c.Get(ctx, key, &repo); err != nil {
 		t.Fatalf("failed to get team repo: %v", err)
@@ -45,11 +47,11 @@ func TestReconcileTeamRepos_CreatesNewRepos(t *testing.T) {
 	if repo.Spec.Permission != "push" {
 		t.Errorf("expected permission push, got %q", repo.Spec.Permission)
 	}
-	if len(repo.Spec.Repositories) != 2 {
-		t.Fatalf("expected 2 repositories, got %d", len(repo.Spec.Repositories))
+	if len(repo.Spec.Repository) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(repo.Spec.Repository))
 	}
-	if repo.Spec.Repositories[0] != "repo-a" || repo.Spec.Repositories[1] != "repo-b" {
-		t.Errorf("expected repos [repo-a, repo-b], got %v", repo.Spec.Repositories)
+	if repo.Spec.Repository[0] != "repo-a" || repo.Spec.Repository[1] != "repo-b" {
+		t.Errorf("expected repos [repo-a, repo-b], got %v", repo.Spec.Repository)
 	}
 	if repo.Labels[LabelSourceASR] != "test-asr" {
 		t.Errorf("expected source-asr label, got %q", repo.Labels[LabelSourceASR])
@@ -64,7 +66,7 @@ func TestReconcileTeamRepos_UpdatesExistingRepo(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Pre-create with one repo
-	existing := &GithubTeamRepository{
+	existing := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
@@ -72,12 +74,12 @@ func TestReconcileTeamRepos_UpdatesExistingRepo(t *testing.T) {
 				LabelSourceASR: "test-asr",
 			},
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: []string{"repo-a"},
-			Permission:   "push",
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: []string{"repo-a"},
+			Permission: repoguardv1.GithubTeamPermission("push"),
 		},
 	}
-	existing.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	existing.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
 
@@ -92,19 +94,19 @@ func TestReconcileTeamRepos_UpdatesExistingRepo(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the repo list was updated
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-test-github-example-com-cc-push", Namespace: "pm-system"}
 	if err := c.Get(ctx, key, &repo); err != nil {
 		t.Fatalf("failed to get team repo: %v", err)
 	}
-	if len(repo.Spec.Repositories) != 2 {
-		t.Errorf("expected 2 repos after update, got %d", len(repo.Spec.Repositories))
+	if len(repo.Spec.Repository) != 2 {
+		t.Errorf("expected 2 repos after update, got %d", len(repo.Spec.Repository))
 	}
 }
 
@@ -113,7 +115,7 @@ func TestReconcileTeamRepos_RemovesRepoFromList(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Pre-create with two repos
-	existing := &GithubTeamRepository{
+	existing := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
@@ -121,12 +123,12 @@ func TestReconcileTeamRepos_RemovesRepoFromList(t *testing.T) {
 				LabelSourceASR: "test-asr",
 			},
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: []string{"repo-a", "repo-b"},
-			Permission:   "push",
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: []string{"repo-a", "repo-b"},
+			Permission: repoguardv1.GithubTeamPermission("push"),
 		},
 	}
-	existing.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	existing.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
 
@@ -141,22 +143,22 @@ func TestReconcileTeamRepos_RemovesRepoFromList(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the repo list was updated (repo-b removed)
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-test-github-example-com-cc-push", Namespace: "pm-system"}
 	if err := c.Get(ctx, key, &repo); err != nil {
 		t.Fatalf("failed to get team repo: %v", err)
 	}
-	if len(repo.Spec.Repositories) != 1 {
-		t.Fatalf("expected 1 repo after removal, got %d", len(repo.Spec.Repositories))
+	if len(repo.Spec.Repository) != 1 {
+		t.Fatalf("expected 1 repo after removal, got %d", len(repo.Spec.Repository))
 	}
-	if repo.Spec.Repositories[0] != "repo-a" {
-		t.Errorf("expected remaining repo to be repo-a, got %q", repo.Spec.Repositories[0])
+	if repo.Spec.Repository[0] != "repo-a" {
+		t.Errorf("expected remaining repo to be repo-a, got %q", repo.Spec.Repository[0])
 	}
 }
 
@@ -165,7 +167,7 @@ func TestReconcileTeamRepos_DeletesCRWhenEmpty(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Pre-create
-	existing := &GithubTeamRepository{
+	existing := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
@@ -173,12 +175,12 @@ func TestReconcileTeamRepos_DeletesCRWhenEmpty(t *testing.T) {
 				LabelSourceASR: "test-asr",
 			},
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: []string{"repo-a"},
-			Permission:   "push",
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: []string{"repo-a"},
+			Permission: repoguardv1.GithubTeamPermission("push"),
 		},
 	}
-	existing.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	existing.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
 
@@ -193,13 +195,13 @@ func TestReconcileTeamRepos_DeletesCRWhenEmpty(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the CR was deleted (not in desired set with repos)
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-test-github-example-com-cc-push", Namespace: "pm-system"}
 	err = c.Get(ctx, key, &repo)
 	if err == nil {
@@ -212,7 +214,7 @@ func TestReconcileTeamRepos_DeletesStaleRepos(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Pre-create a stale team repo
-	stale := &GithubTeamRepository{
+	stale := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-github-example-com-cc-admin",
 			Namespace: "pm-system",
@@ -220,12 +222,12 @@ func TestReconcileTeamRepos_DeletesStaleRepos(t *testing.T) {
 				LabelSourceASR: "test-asr",
 			},
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: []string{"old-repo"},
-			Permission:   "admin",
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: []string{"old-repo"},
+			Permission: repoguardv1.GithubTeamPermission("admin"),
 		},
 	}
-	stale.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	stale.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stale).Build()
 
@@ -240,13 +242,13 @@ func TestReconcileTeamRepos_DeletesStaleRepos(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the stale CR was deleted
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-test-github-example-com-cc-admin", Namespace: "pm-system"}
 	err = c.Get(ctx, key, &repo)
 	if err == nil {
@@ -265,7 +267,7 @@ func TestReconcileTeamRepos_DoesNotDeleteReposFromOtherASRs(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Pre-create a team repo from another ASR
-	otherASR := &GithubTeamRepository{
+	otherASR := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-other-github-example-com-cc-push",
 			Namespace: "pm-system",
@@ -273,25 +275,25 @@ func TestReconcileTeamRepos_DoesNotDeleteReposFromOtherASRs(t *testing.T) {
 				LabelSourceASR: "other-asr",
 			},
 		},
-		Spec: GithubTeamRepositorySpec{
-			Repositories: []string{"their-repo"},
-			Permission:   "push",
+		Spec: repoguardv1.GithubTeamRepositorySpec{
+			Repository: []string{"their-repo"},
+			Permission: repoguardv1.GithubTeamPermission("push"),
 		},
 	}
-	otherASR.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	otherASR.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(otherASR).Build()
 
 	// Empty desired state for our ASR
 	desired := []DesiredTeamRepo{}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify the other ASR's repo was NOT deleted
-	var repo GithubTeamRepository
+	var repo repoguardv1.GithubTeamRepository
 	key := types.NamespacedName{Name: "asr-other-github-example-com-cc-push", Namespace: "pm-system"}
 	if err := c.Get(ctx, key, &repo); err != nil {
 		t.Errorf("team repo from other ASR should not be deleted: %v", err)
@@ -320,20 +322,20 @@ func TestReconcileTeamRepos_MultiplePermissions(t *testing.T) {
 		},
 	}
 
-	err := ReconcileTeamRepos(ctx, c, desired, "pm-system", "test-asr", "default", audit.Disabled())
+	err := ReconcileTeamRepos(ctx, c, desired, "test-asr", "pm-system", "test-asr", "default", audit.Disabled())
 	if err != nil {
 		t.Fatalf("ReconcileTeamRepos failed: %v", err)
 	}
 
 	// Verify both CRs created
 	for _, d := range desired {
-		var repo GithubTeamRepository
+		var repo repoguardv1.GithubTeamRepository
 		key := types.NamespacedName{Name: d.CRName, Namespace: "pm-system"}
 		if err := c.Get(ctx, key, &repo); err != nil {
 			t.Errorf("failed to get team repo %q: %v", d.CRName, err)
 			continue
 		}
-		if repo.Spec.Permission != d.Permission {
+		if repo.Spec.Permission != repoguardv1.GithubTeamPermission(d.Permission) {
 			t.Errorf("repo %q: expected permission %q, got %q", d.CRName, d.Permission, repo.Spec.Permission)
 		}
 	}
@@ -344,25 +346,25 @@ func TestDeleteStaleTeamRepos_NilDesiredNamesDeletesAll(t *testing.T) {
 	scheme := newTestScheme()
 
 	// Create two repos owned by the same ASR
-	repo1 := &GithubTeamRepository{
+	repo1 := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-repo1",
 			Namespace: "pm-system",
 			Labels:    map[string]string{LabelSourceASR: "test-asr"},
 		},
-		Spec: GithubTeamRepositorySpec{Repositories: []string{"r1"}, Permission: "push"},
+		Spec: repoguardv1.GithubTeamRepositorySpec{Repository: []string{"r1"}, Permission: repoguardv1.GithubTeamPermission("push")},
 	}
-	repo1.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	repo1.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
-	repo2 := &GithubTeamRepository{
+	repo2 := &repoguardv1.GithubTeamRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-repo2",
 			Namespace: "pm-system",
 			Labels:    map[string]string{LabelSourceASR: "test-asr"},
 		},
-		Spec: GithubTeamRepositorySpec{Repositories: []string{"r2"}, Permission: "admin"},
+		Spec: repoguardv1.GithubTeamRepositorySpec{Repository: []string{"r2"}, Permission: repoguardv1.GithubTeamPermission("admin")},
 	}
-	repo2.SetGroupVersionKind(GroupVersion.WithKind("GithubTeamRepository"))
+	repo2.SetGroupVersionKind(repoguardv1.GroupVersion.WithKind("GithubTeamRepository"))
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo1, repo2).Build()
 
@@ -373,7 +375,7 @@ func TestDeleteStaleTeamRepos_NilDesiredNamesDeletesAll(t *testing.T) {
 	}
 
 	// Verify both deleted
-	var list GithubTeamRepositoryList
+	var list repoguardv1.GithubTeamRepositoryList
 	if err := c.List(ctx, &list, client.InNamespace("pm-system")); err != nil {
 		t.Fatalf("failed to list: %v", err)
 	}

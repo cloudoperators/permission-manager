@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,7 +63,7 @@ func (r *GithubReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if controllerutil.ContainsFinalizer(&asr, FinalizerGithub) {
 			log.Info("ASR no longer references GitHub CB, cleaning up stale resources")
 			// Use label-based cleanup across all namespaces (no CB info available)
-			var teamList GithubTeamList
+			var teamList repoguardv1.GithubTeamList
 			if err := r.List(ctx, &teamList, client.MatchingLabels{LabelSourceASR: asr.Name}); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to list GithubTeams for cleanup: %w", err)
 			}
@@ -71,7 +72,7 @@ func (r *GithubReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					return ctrl.Result{}, fmt.Errorf("failed to delete GithubTeam: %w", err)
 				}
 			}
-			var repoList GithubTeamRepositoryList
+			var repoList repoguardv1.GithubTeamRepositoryList
 			if err := r.List(ctx, &repoList, client.MatchingLabels{LabelSourceASR: asr.Name}); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to list GithubTeamRepositories for cleanup: %w", err)
 			}
@@ -168,7 +169,7 @@ func (r *GithubReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Reconcile GithubTeamRepository CRs
-	if err := ReconcileTeamRepos(ctx, r.Client, desired.TeamRepos, targetNamespace, asr.Name, asr.Namespace, r.AuditLog); err != nil {
+	if err := ReconcileTeamRepos(ctx, r.Client, desired.TeamRepos, asr.Spec.Name, targetNamespace, asr.Name, asr.Namespace, r.AuditLog); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile GithubTeamRepositories: %w", err)
 	}
 
@@ -230,7 +231,7 @@ func (r *GithubReconciler) cleanupOwnedResources(ctx context.Context, asr *v1alp
 // cleanupOrgEntries removes all organization entries contributed by this ASR
 // across all GithubOrganization resources in all namespaces.
 func (r *GithubReconciler) cleanupOrgEntries(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole) error {
-	var orgList GithubOrganizationList
+	var orgList repoguardv1.GithubOrganizationList
 	if err := r.List(ctx, &orgList); err != nil {
 		return fmt.Errorf("failed to list GithubOrganizations: %w", err)
 	}
@@ -263,20 +264,20 @@ func (r *GithubReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	// Predicate that filters GithubTeam CRs to only those managed by the github provider
-	githubTeamPredicate := predicate.TypedFuncs[*GithubTeam]{
-		CreateFunc: func(e event.TypedCreateEvent[*GithubTeam]) bool {
+	githubTeamPredicate := predicate.TypedFuncs[*repoguardv1.GithubTeam]{
+		CreateFunc: func(e event.TypedCreateEvent[*repoguardv1.GithubTeam]) bool {
 			labels := e.Object.GetLabels()
 			return labels != nil && labels[LabelManagedByKey] == LabelManagedByGithub
 		},
-		UpdateFunc: func(e event.TypedUpdateEvent[*GithubTeam]) bool {
+		UpdateFunc: func(e event.TypedUpdateEvent[*repoguardv1.GithubTeam]) bool {
 			labels := e.ObjectNew.GetLabels()
 			return labels != nil && labels[LabelManagedByKey] == LabelManagedByGithub
 		},
-		DeleteFunc: func(e event.TypedDeleteEvent[*GithubTeam]) bool {
+		DeleteFunc: func(e event.TypedDeleteEvent[*repoguardv1.GithubTeam]) bool {
 			labels := e.Object.GetLabels()
 			return labels != nil && labels[LabelManagedByKey] == LabelManagedByGithub
 		},
-		GenericFunc: func(e event.TypedGenericEvent[*GithubTeam]) bool {
+		GenericFunc: func(e event.TypedGenericEvent[*repoguardv1.GithubTeam]) bool {
 			labels := e.Object.GetLabels()
 			return labels != nil && labels[LabelManagedByKey] == LabelManagedByGithub
 		},
@@ -291,7 +292,7 @@ func (r *GithubReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.CBIndex.EnqueueASRsForConnectorBinding(mgr.GetClient()),
 		).
 		WatchesRawSource(
-			source.Kind(mgr.GetCache(), &GithubTeam{},
+			source.Kind(mgr.GetCache(), &repoguardv1.GithubTeam{},
 				handler.TypedEnqueueRequestsFromMapFunc(r.mapGithubTeamToASR),
 				githubTeamPredicate,
 			),
@@ -304,7 +305,7 @@ func (r *GithubReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // mapGithubTeamToASR maps a GithubTeam CR change to the owning ASR for re-reconciliation.
 // It reads the source-asr and source-namespace labels from the GithubTeam CR.
-func (r *GithubReconciler) mapGithubTeamToASR(ctx context.Context, team *GithubTeam) []reconcile.Request {
+func (r *GithubReconciler) mapGithubTeamToASR(ctx context.Context, team *repoguardv1.GithubTeam) []reconcile.Request {
 	keys := extractASRFromGithubTeam(team)
 	if len(keys) == 0 {
 		return nil
