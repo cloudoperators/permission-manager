@@ -3,11 +3,10 @@
 
 # Example: ConnectorBinding for Kubernetes provider
 # Links ASRs to the Kubernetes RBAC provider with capability mapping.
-apiVersion: permission-manager.cloudoperators.dev/v1
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ConnectorBinding
 metadata:
   name: k8s-connector
-  namespace: permission-manager
 spec:
   name: Kubernetes Production
   provider: kubernetes

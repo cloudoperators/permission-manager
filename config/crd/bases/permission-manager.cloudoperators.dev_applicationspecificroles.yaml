@@ -11,10 +11,19 @@ spec:
     kind: ApplicationSpecificRole
     listKind: ApplicationSpecificRoleList
     plural: applicationspecificroles
+    shortNames:
+    - asr
     singular: applicationspecificrole
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: ApplicationSpecificRole is the Schema for the applicationspecificroles
@@ -226,8 +235,7 @@ spec:
                               the result.
                             type: string
                           status:
-                            description: Status is the provisioning result (e.g.,
-                              Success, Error, Unreachable).
+                            description: Status is the provisioning result.
                             type: string
                           targetID:
                             description: TargetID is the identifier of the target
@@ -243,7 +251,7 @@ spec:
                   - lastReconciled
                   - ready
                   type: object
-                description: Providers maps provider name to its reconciliation status.
+                description: Providers maps provider type to its reconciliation status.
                 type: object
             type: object
         required:

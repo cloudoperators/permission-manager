@@ -1,0 +1,7 @@
+apiVersion: greenhouse.sap/v1alpha1
+kind: Organization
+metadata:
+  name: demo
+spec:
+  description: Demo Organization for permission-manager development
+  mappedOrgAdminIdPGroup: DEMO_ORG_ADMIN

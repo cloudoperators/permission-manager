@@ -37,20 +37,22 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// Condition type constants for ApplicationSpecificRole.
-const (
-	// ConditionReady indicates the ASR has been successfully reconciled across all providers.
-	ConditionReady = "Ready"
-	// ConditionDegraded indicates the ASR has partial failures across providers.
-	ConditionDegraded = "Degraded"
-)
+// Deprecated: use pmmeta.TargetStatus from api/meta directly.
+type TargetStatus = pmmeta.TargetStatus
+
+// Deprecated: use pmmeta.ProviderStatus from api/meta directly.
+type ProviderStatus = pmmeta.ProviderStatus
 
 // ApplicationSpecificRoleSpec defines the desired state of ApplicationSpecificRole
 type ApplicationSpecificRoleSpec struct {
@@ -123,42 +125,10 @@ type Approver struct {
 	Step int `json:"step,omitempty"`
 }
 
-// TargetStatus tracks the provisioning state for a single target within a provider.
-type TargetStatus struct {
-	// TargetID is the identifier of the target (e.g., cluster name).
-	TargetID string `json:"targetID"`
-
-	// Status is the provisioning result (e.g., Success, Error, Unreachable).
-	Status string `json:"status"`
-
-	// Message is a human-readable description of the result.
-	// +optional
-	Message string `json:"message,omitempty"`
-
-	// LastUpdated is the timestamp of the last provisioning attempt for this target.
-	LastUpdated metav1.Time `json:"lastUpdated"`
-}
-
-// ProviderStatus tracks the reconciliation state for a single provider.
-type ProviderStatus struct {
-	// Ready indicates whether the provider has successfully reconciled all targets.
-	Ready bool `json:"ready"`
-
-	// Message is a human-readable summary of the provider's reconciliation state.
-	// +optional
-	Message string `json:"message,omitempty"`
-
-	// Targets contains per-target provisioning status.
-	// +optional
-	Targets []TargetStatus `json:"targets,omitempty"`
-
-	// LastReconciled is the timestamp of the last reconciliation attempt.
-	LastReconciled metav1.Time `json:"lastReconciled"`
-}
-
 // ApplicationSpecificRoleStatus defines the observed state of ApplicationSpecificRole.
 type ApplicationSpecificRoleStatus struct {
-	// Providers maps provider name to its reconciliation status.
+	// Providers maps provider type to its reconciliation status.
+	// TODO: migrate key to pmmeta.ProviderType and values to pmmeta.ProviderStatus directly once github provider is migrated to api/meta.
 	// +optional
 	Providers map[string]ProviderStatus `json:"providers,omitempty"`
 
@@ -169,6 +139,9 @@ type ApplicationSpecificRoleStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=asr
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].status"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // ApplicationSpecificRole is the Schema for the applicationspecificroles API
 type ApplicationSpecificRole struct {
@@ -194,6 +167,20 @@ type ApplicationSpecificRoleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []ApplicationSpecificRole `json:"items"`
+}
+
+func (asr *ApplicationSpecificRole) GetConditions() []metav1.Condition {
+	return asr.Status.Conditions
+}
+
+func (asr *ApplicationSpecificRole) SetCondition(c metav1.Condition) {
+	asr.Status.Conditions = pmmeta.SetCondition(asr.Status.Conditions, c)
+}
+
+func (asr *ApplicationSpecificRole) RemoveCondition(t pmmeta.ConditionType) {
+	asr.Status.Conditions = slices.DeleteFunc(asr.Status.Conditions, func(c metav1.Condition) bool {
+		return c.Type == string(t)
+	})
 }
 
 func init() {

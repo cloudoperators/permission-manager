@@ -43,7 +43,7 @@ YEAR ?= $(shell date +%Y)
 # ==============================================================================
 
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= pm/manager:local
 IMG_LICENSE_EYE ?= ghcr.io/apache/skywalking-eyes/license-eye
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
