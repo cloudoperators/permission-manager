@@ -88,11 +88,44 @@ structured-auth: admin-ca ## Render bin/structured-auth.yaml with the admin CA i
 	cp $(STRUCTURED_AUTH_SRC) $(STRUCTURED_AUTH_OUT)
 	yq eval --inplace '.jwt[0].issuer.certificateAuthority = load_str("$(ADMIN_CA_OUT)")' $(STRUCTURED_AUTH_OUT)
 
-.PHONY: remote-cluster
-remote-cluster: structured-auth admin-oidc-discovery ## Create the greenhouse-remote Kind cluster if it does not already exist.
-	@if [ "$(call kind-cluster-exists,$(REMOTE_CLUSTER))" = "yes" ]; then \
-		echo "Kind cluster '$(REMOTE_CLUSTER)' already exists. Skipping creation."; \
-	else \
-		echo "Creating Kind cluster '$(REMOTE_CLUSTER)' from $(REMOTE_CLUSTER_CONFIG)..."; \
-		$(KIND) create cluster --name $(REMOTE_CLUSTER) --config $(REMOTE_CLUSTER_CONFIG); \
-	fi
+DEMO_ORG              ?= demo
+OIDC_SECRET_RENDERED  ?= $(LOCALBIN)/oidc-secret.yaml
+
+.PHONY: demo
+demo: demo-org demo-rbac demo-onboard ## Full OIDC onboarding demo: create org, apply remote RBAC, onboard cluster.
+
+.PHONY: demo-org
+demo-org: ## Apply the demo Organization to the admin cluster and wait for it to become Ready.
+	$(KUBECTL) --context kind-$(ADMIN_CLUSTER) apply -f config/samples/demo/organization.yaml
+	@echo "Waiting for Organization $(DEMO_ORG) to become Ready..."
+	@while true; do \
+		if $(KUBECTL) --context kind-$(ADMIN_CLUSTER) get organizations $(DEMO_ORG) -o json 2>/dev/null | \
+			jq -e '.status.statusConditions.conditions[] | select(.type=="Ready") | select(.status=="True")' > /dev/null 2>&1; then \
+			echo "Organization $(DEMO_ORG) is Ready."; \
+			break; \
+		fi; \
+		echo "  still waiting..."; \
+		sleep 5; \
+	done
+
+.PHONY: demo-rbac
+demo-rbac: ## Apply ClusterRoleBinding on the remote cluster authorizing Greenhouse OIDC access.
+	$(KUBECTL) --context kind-$(REMOTE_CLUSTER) apply -f config/samples/demo/remote-rbac.yaml
+
+.PHONY: demo-onboard
+demo-onboard: ## Render and apply the OIDC onboarding Secret to the admin cluster, then wait for the Cluster CR.
+	@mkdir -p $(LOCALBIN)
+	$(KIND) get kubeconfig --name $(REMOTE_CLUSTER) | yq '.clusters[0].cluster.certificate-authority-data' > $(LOCALBIN)/remote-ca.crt
+	cp config/samples/demo/oidc-secret.yaml $(OIDC_SECRET_RENDERED)
+	yq eval --inplace '.stringData["ca.crt"] = load_str("$(LOCALBIN)/remote-ca.crt")' $(OIDC_SECRET_RENDERED)
+	$(KUBECTL) --context kind-$(ADMIN_CLUSTER) apply -f $(OIDC_SECRET_RENDERED)
+	@echo "Waiting for Cluster kind-$(REMOTE_CLUSTER) to become Ready..."
+	@while true; do \
+		if $(KUBECTL) --context kind-$(ADMIN_CLUSTER) get cluster kind-$(REMOTE_CLUSTER) -n $(DEMO_ORG) -o json 2>/dev/null | \
+			jq -e '.status.statusConditions.conditions[] | select(.type=="Ready") | select(.status=="True")' > /dev/null 2>&1; then \
+			echo "Cluster kind-$(REMOTE_CLUSTER) is Ready."; \
+			break; \
+		fi; \
+		echo "  still waiting..."; \
+		sleep 5; \
+	done

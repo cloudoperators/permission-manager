@@ -17,6 +17,7 @@
 
 resources:
 - manager.yaml
+- pm-provider-cm.yaml
 images:
 - name: controller
   newName: controller

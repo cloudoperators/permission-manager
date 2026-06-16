@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -28,7 +29,7 @@ const (
 // PatchProviderStatus patches the status.providers[providerKey] field of an ASR
 // using Server-Side Apply (SSA). Each provider controller owns its own slice of
 // the status map, identified by the field manager "pm-controller-<providerKey>".
-func PatchProviderStatus(ctx context.Context, c client.Client, asr *v1alpha1.ApplicationSpecificRole, providerKey string, status v1alpha1.ProviderStatus) error {
+func PatchProviderStatus(ctx context.Context, c client.Client, asr *v1alpha1.ApplicationSpecificRole, providerKey string, status pmmeta.ProviderStatus) error {
 	// Build the unstructured patch object with only the fields we own.
 	patch := buildStatusPatch(asr.Name, asr.Namespace, providerKey, status)
 
@@ -71,8 +72,8 @@ func RemoveProviderStatus(ctx context.Context, c client.Client, asr *v1alpha1.Ap
 // UnmappedCapabilityStatus returns a ProviderStatus indicating that one or more
 // capabilities could not be mapped to provider-specific permissions. This reports
 // ready=false with an error message listing the unmapped capabilities.
-func UnmappedCapabilityStatus(unmapped []string) v1alpha1.ProviderStatus {
-	return v1alpha1.ProviderStatus{
+func UnmappedCapabilityStatus(unmapped []string) pmmeta.ProviderStatus {
+	return pmmeta.ProviderStatus{
 		Ready:          false,
 		Message:        fmt.Sprintf("Unmapped capabilities: %v", unmapped),
 		LastReconciled: metav1.Now(),
@@ -81,7 +82,7 @@ func UnmappedCapabilityStatus(unmapped []string) v1alpha1.ProviderStatus {
 
 // buildStatusPatch constructs an unstructured object suitable for SSA patching
 // of a single provider's status entry.
-func buildStatusPatch(name, namespace, providerKey string, status v1alpha1.ProviderStatus) *unstructured.Unstructured {
+func buildStatusPatch(name, namespace, providerKey string, status pmmeta.ProviderStatus) *unstructured.Unstructured {
 	// Convert targets to unstructured format
 	targets := make([]interface{}, 0, len(status.Targets))
 	for _, t := range status.Targets {

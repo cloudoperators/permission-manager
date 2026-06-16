@@ -1,0 +1,193 @@
+// SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package lifecycle
+
+import (
+	"context"
+
+	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
+)
+
+type ReconcileResult string
+
+const (
+	CommonCleanupFinalizer = "pm.cloudoperators.dev/cleanup"
+
+	CreatedReason         pmmeta.ConditionReason = "Created"
+	PendingCreationReason pmmeta.ConditionReason = "PendingCreation"
+	FailingCreationReason pmmeta.ConditionReason = "FailingCreation"
+
+	PendingDeletionReason pmmeta.ConditionReason = "PendingDeletion"
+	FailingDeletionReason pmmeta.ConditionReason = "FailingDeletion"
+	DeletedReason         pmmeta.ConditionReason = "Deleted"
+
+	eventReasonReconciled = "Reconciled"
+	eventReasonDeleted    = "Deleted"
+
+	// Success should be returned in case the operator reached its target state.
+	Success ReconcileResult = "Success"
+	// Failed should be returned in case the operator wasn't able to reach its target state and without external changes it's unlikely that this will succeed in the next try.
+	Failed ReconcileResult = "Failed"
+	// Pending should be returned in case the operator is still trying to reach the target state.
+	Pending ReconcileResult = "Pending"
+)
+
+// Conditioner is an optional hook for the caller to set custom status conditions
+// after EnsureCreated runs. When nil, default Ready conditions are applied.
+type Conditioner func(context.Context, RuntimeObject)
+
+// RuntimeObject generalises the CR being reconciled.
+type RuntimeObject interface {
+	runtime.Object
+	metav1.Object
+	GetConditions() []metav1.Condition
+	SetCondition(metav1.Condition)
+	RemoveCondition(pmmeta.ConditionType)
+}
+
+// Reconciler is the interface controllers must implement.
+type Reconciler interface {
+	EnsureCreated(context.Context, RuntimeObject) (ctrl.Result, ReconcileResult, error)
+	EnsureDeleted(context.Context, RuntimeObject) (ctrl.Result, ReconcileResult, error)
+	GetEventRecorder() events.EventRecorder
+}
+
+// Reconcile is the generic reconciliation entry point.
+// It handles finalizer lifecycle, deletion, and creation phases, then patches status.
+func Reconcile(ctx context.Context, kubeClient client.Client, namespacedName types.NamespacedName, runtimeObject RuntimeObject, reconciler Reconciler, statusFunc Conditioner) (ctrl.Result, error) {
+	logger := ctrl.LoggerFrom(ctx)
+
+	if err := kubeClient.Get(ctx, namespacedName, runtimeObject); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	ctx = createContextFromRuntimeObject(ctx, runtimeObject, reconciler.GetEventRecorder())
+
+	shouldBeDeleted := runtimeObject.GetDeletionTimestamp() != nil
+	hasFinalizer := controllerutil.ContainsFinalizer(runtimeObject, CommonCleanupFinalizer)
+
+	if !shouldBeDeleted && !hasFinalizer {
+		return ctrl.Result{}, ensureFinalizer(ctx, kubeClient, runtimeObject, CommonCleanupFinalizer)
+	}
+
+	var (
+		result ctrl.Result
+		err    error
+	)
+
+	if shouldBeDeleted {
+		if !hasFinalizer {
+			return ctrl.Result{}, nil
+		}
+		if isResourceDeleted(runtimeObject) {
+			return ctrl.Result{}, client.IgnoreNotFound(removeFinalizer(ctx, kubeClient, runtimeObject, CommonCleanupFinalizer))
+		}
+		result, err = ensureDeleted(ctx, logger, reconciler, runtimeObject)
+	} else {
+		result, err = ensureCreated(ctx, logger, reconciler, runtimeObject, statusFunc)
+	}
+
+	return result, patchStatus(ctx, kubeClient, runtimeObject, err)
+}
+
+// isResourceDeleted returns true when the Delete condition is True with reason Deleted.
+func isResourceDeleted(o RuntimeObject) bool {
+	c := pmmeta.GetConditionByType(o.GetConditions(), pmmeta.DeleteCondition)
+	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == string(DeletedReason)
+}
+
+// ensureCreated invokes EnsureCreated and applies status conditions.
+func ensureCreated(ctx context.Context, logger logr.Logger, reconciler Reconciler, o RuntimeObject, statusFunc Conditioner) (ctrl.Result, error) {
+	logger.Info("ensure created")
+	result, reconcileResult, err := reconciler.EnsureCreated(ctx, o)
+	if statusFunc != nil {
+		statusFunc(ctx, o)
+	} else {
+		setupCreateState(o, reconcileResult, err)
+	}
+	recorder := GetEventRecorderFromContext(ctx)
+	recorder.Eventf(o, nil, corev1.EventTypeNormal, eventReasonReconciled, "EnsureCreated", "reconcile result: %s", string(reconcileResult))
+	return result, err
+}
+
+// ensureDeleted invokes EnsureDeleted and applies delete conditions.
+func ensureDeleted(ctx context.Context, logger logr.Logger, reconciler Reconciler, o RuntimeObject) (ctrl.Result, error) {
+	logger.Info("ensure deleted")
+	setupDeleteState(o, Pending, nil)
+	result, reconcileResult, err := reconciler.EnsureDeleted(ctx, o)
+	setupDeleteState(o, reconcileResult, err)
+	recorder := GetEventRecorderFromContext(ctx)
+	recorder.Eventf(o, nil, corev1.EventTypeNormal, eventReasonDeleted, "EnsureDeleted", "delete result: %s", string(reconcileResult))
+	return result, err
+}
+
+// setupCreateState maps ReconcileResult to a Ready condition.
+func setupCreateState(o RuntimeObject, r ReconcileResult, err error) {
+	switch r {
+	case Success:
+		o.SetCondition(pmmeta.TrueCondition(pmmeta.ReadyCondition, CreatedReason, "resource is successfully reconciled"))
+	case Failed:
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		o.SetCondition(pmmeta.FalseCondition(pmmeta.ReadyCondition, FailingCreationReason, "reconciliation failed: "+msg))
+	default:
+		o.SetCondition(pmmeta.UnknownCondition(pmmeta.ReadyCondition, PendingCreationReason, "reconciliation is pending"))
+	}
+}
+
+// setupDeleteState maps ReconcileResult to a Delete condition.
+func setupDeleteState(o RuntimeObject, r ReconcileResult, err error) {
+	switch r {
+	case Success:
+		o.SetCondition(pmmeta.TrueCondition(pmmeta.DeleteCondition, DeletedReason, "resource is successfully deleted"))
+	case Failed:
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		o.SetCondition(pmmeta.FalseCondition(pmmeta.DeleteCondition, FailingDeletionReason, "deletion failed: "+msg))
+	default:
+		o.SetCondition(pmmeta.FalseCondition(pmmeta.DeleteCondition, PendingDeletionReason, "deletion is pending"))
+	}
+}
+
+// patchStatus patches the object's status subresource.
+func patchStatus(ctx context.Context, kubeClient client.Client, newObj RuntimeObject, reconcileError error) error {
+	oldObj, err := GetOrigResourceFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err = kubeClient.Status().Patch(ctx, newObj, client.MergeFrom(oldObj)); err != nil {
+		return err
+	}
+	return reconcileError
+}
+
+// ensureFinalizer adds the given finalizer if not already present.
+func ensureFinalizer(ctx context.Context, c client.Client, o client.Object, finalizer string) error {
+	if controllerutil.AddFinalizer(o, finalizer) {
+		return c.Update(ctx, o)
+	}
+	return nil
+}
+
+// removeFinalizer removes the given finalizer if present.
+func removeFinalizer(ctx context.Context, c client.Client, o client.Object, finalizer string) error {
+	if controllerutil.RemoveFinalizer(o, finalizer) {
+		return c.Update(ctx, o)
+	}
+	return nil
+}
