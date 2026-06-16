@@ -73,7 +73,7 @@ func expectProviderTargetStatus(t *testing.T, ctx context.Context, c client.Clie
 
 		for _, entry := range ps.Targets {
 			if entry.TargetID == targetID {
-				if entry.Status == expectedStatus {
+				if string(entry.Status) == expectedStatus {
 					return true, nil
 				}
 				return false, fmt.Errorf("ASR %s provider %q target %q status=%q, want %q (message: %s)",

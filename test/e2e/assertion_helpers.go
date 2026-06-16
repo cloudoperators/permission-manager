@@ -374,7 +374,7 @@ func assertASRStatus(t *testing.T, ctx context.Context, mgmtClient client.Client
 
 		for _, entry := range k8sProvider.Targets {
 			if entry.TargetID == clusterName {
-				if entry.Status == expectedStatus {
+				if string(entry.Status) == expectedStatus {
 					return true, nil
 				}
 				return false, fmt.Errorf("ASR %s cluster %q status is %q, want %q (message: %s)",

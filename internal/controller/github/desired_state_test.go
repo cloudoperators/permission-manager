@@ -9,6 +9,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -499,14 +500,14 @@ func TestBuildDesiredState_DuplicateReposDeduped(t *testing.T) {
 func TestBuildLabels(t *testing.T) {
 	labels := BuildLabels("my-asr", "pm-system")
 
-	if labels[LabelManagedByKey] != LabelManagedByGithub {
-		t.Errorf("expected managed-by=%q, got %q", LabelManagedByGithub, labels[LabelManagedByKey])
+	if labels[pmapis.LabelManagedByKey] != pmapis.ManagedByGithub {
+		t.Errorf("expected managed-by=%q, got %q", pmapis.ManagedByGithub, labels[pmapis.LabelManagedByKey])
 	}
-	if labels[LabelSourceASR] != "my-asr" {
-		t.Errorf("expected source-asr=my-asr, got %q", labels[LabelSourceASR])
+	if labels[pmapis.LabelSourceASR] != "my-asr" {
+		t.Errorf("expected source-asr=my-asr, got %q", labels[pmapis.LabelSourceASR])
 	}
-	if labels[LabelSourceNamespace] != "pm-system" {
-		t.Errorf("expected source-namespace=pm-system, got %q", labels[LabelSourceNamespace])
+	if labels[pmapis.LabelSourceNamespace] != "pm-system" {
+		t.Errorf("expected source-namespace=pm-system, got %q", labels[pmapis.LabelSourceNamespace])
 	}
 }
 

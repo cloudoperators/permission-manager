@@ -25,6 +25,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
+	github "github.com/cloudoperators/permission-manager/internal/controller/github"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/controller/k8s"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
@@ -38,6 +39,7 @@ type ASRReconciler struct {
 	Log          logr.Logger
 	AuditLog     *audit.Logger
 	k8sPhase     *pmk8s.Phase
+	ghPhase      *github.Phase
 	recorder     events.EventRecorder
 }
 
@@ -65,6 +67,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("cluster informer does not implement SharedIndexInformer")
 	}
 	r.k8sPhase = pmk8s.New(r.Client, r.AuditLog, r.Log, sharedInformer.GetStore())
+	r.ghPhase = github.New(r.Client, r.AuditLog, r.Log)
 
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
@@ -113,15 +116,20 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 	asr := obj.(*v1alpha1.ApplicationSpecificRole)
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
+		var errs []error
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
 				continue
 			}
 			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
-				r.Log.Info("github provider not implemented by this team, skipping", "asr", asr.Name)
-				break
+				if err := r.ghPhase.Reconcile(ctx, asr, cb); err != nil {
+					errs = append(errs, err)
+				}
 			}
+		}
+		if len(errs) > 0 {
+			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
 		}
 	}
 
@@ -149,6 +157,24 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 // EnsureDeleted cleans up resources owned by the ASR.
 func (r *ASRReconciler) EnsureDeleted(ctx context.Context, obj lifecycle.RuntimeObject) (ctrl.Result, lifecycle.ReconcileResult, error) {
 	asr := obj.(*v1alpha1.ApplicationSpecificRole)
+
+	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
+		var errs []error
+		for _, ref := range asr.Spec.ConnectorRefs {
+			cb := &v1alpha1.ConnectorBinding{}
+			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
+				continue
+			}
+			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
+				if err := r.ghPhase.ReconcileDelete(ctx, asr); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
+		if len(errs) > 0 {
+			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
+		}
+	}
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderKubernetes)) {
 		var errs []error

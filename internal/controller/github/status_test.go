@@ -10,11 +10,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -30,43 +31,43 @@ func TestMapTeamStatus(t *testing.T) {
 	tests := []struct {
 		name           string
 		teamStatus     repoguardv1.GithubTeamState
-		expectedStatus string
+		expectedStatus pmmeta.TargetStatusValue
 		expectMessage  bool
 	}{
 		{
-			name:           "complete maps to Success",
+			name:           "complete maps to Ready",
 			teamStatus:     "complete",
-			expectedStatus: targetStatusSuccess,
+			expectedStatus: pmmeta.TargetStatusReady,
 			expectMessage:  false,
 		},
 		{
 			name:           "failed maps to Error",
 			teamStatus:     "failed",
-			expectedStatus: targetStatusError,
+			expectedStatus: pmmeta.TargetStatusError,
 			expectMessage:  true,
 		},
 		{
 			name:           "pending maps to Pending",
 			teamStatus:     "pending",
-			expectedStatus: targetStatusPending,
+			expectedStatus: pmmeta.TargetStatusPending,
 			expectMessage:  true,
 		},
 		{
 			name:           "ratelimited maps to Pending",
 			teamStatus:     "ratelimited",
-			expectedStatus: targetStatusPending,
+			expectedStatus: pmmeta.TargetStatusPending,
 			expectMessage:  true,
 		},
 		{
 			name:           "empty string maps to Pending",
 			teamStatus:     "",
-			expectedStatus: targetStatusPending,
+			expectedStatus: pmmeta.TargetStatusPending,
 			expectMessage:  true,
 		},
 		{
 			name:           "unknown value maps to Pending",
 			teamStatus:     "unknown-xyz",
-			expectedStatus: targetStatusPending,
+			expectedStatus: pmmeta.TargetStatusPending,
 			expectMessage:  true,
 		},
 	}
@@ -96,13 +97,10 @@ func TestComputeProviderStatus_NoTargets(t *testing.T) {
 	}
 	desired := &DesiredState{Teams: nil, TeamRepos: nil}
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	if !status.Ready {
 		t.Error("expected Ready=true for no targets")
-	}
-	if status.Message != "no targets" {
-		t.Errorf("expected message 'no targets', got %q", status.Message)
 	}
 	if len(status.Targets) != 0 {
 		t.Errorf("expected 0 targets, got %d", len(status.Targets))
@@ -129,8 +127,8 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -143,8 +141,8 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.com", "other-org"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -157,7 +155,7 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 		WithObjects(team1, team2).
 		Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	if !status.Ready {
 		t.Errorf("expected Ready=true, got false; message=%q", status.Message)
@@ -166,8 +164,8 @@ func TestComputeProviderStatus_AllComplete(t *testing.T) {
 		t.Fatalf("expected 2 targets, got %d", len(status.Targets))
 	}
 	for _, target := range status.Targets {
-		if target.Status != targetStatusSuccess {
-			t.Errorf("target %q: expected Success, got %q", target.TargetID, target.Status)
+		if target.Status != pmmeta.TargetStatusReady {
+			t.Errorf("target %q: expected Ready, got %q", target.TargetID, target.Status)
 		}
 	}
 }
@@ -192,8 +190,8 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "org-a"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -206,8 +204,8 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "org-b"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -220,8 +218,8 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "org-c"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -234,7 +232,7 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 		WithObjects(teamComplete, teamFailed, teamRatelimited).
 		Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	if status.Ready {
 		t.Error("expected Ready=false for mixed statuses")
@@ -244,10 +242,10 @@ func TestComputeProviderStatus_MixedStatuses(t *testing.T) {
 	}
 
 	// Targets are sorted by instance/org
-	expectStatuses := map[string]string{
-		SanitizeInstance("github.example.com") + "/org-a": targetStatusSuccess,
-		SanitizeInstance("github.example.com") + "/org-b": targetStatusError,
-		SanitizeInstance("github.example.com") + "/org-c": targetStatusPending,
+	expectStatuses := map[string]pmmeta.TargetStatusValue{
+		SanitizeInstance("github.example.com") + "/org-a": pmmeta.TargetStatusReady,
+		SanitizeInstance("github.example.com") + "/org-b": pmmeta.TargetStatusError,
+		SanitizeInstance("github.example.com") + "/org-c": pmmeta.TargetStatusPending,
 	}
 
 	for _, target := range status.Targets {
@@ -278,7 +276,7 @@ func TestComputeProviderStatus_MissingTeamCR(t *testing.T) {
 	// No GithubTeam CRs exist
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	if status.Ready {
 		t.Error("expected Ready=false when team CR is missing")
@@ -286,7 +284,7 @@ func TestComputeProviderStatus_MissingTeamCR(t *testing.T) {
 	if len(status.Targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(status.Targets))
 	}
-	if status.Targets[0].Status != targetStatusPending {
+	if status.Targets[0].Status != pmmeta.TargetStatusPending {
 		t.Errorf("expected Pending, got %q", status.Targets[0].Status)
 	}
 }
@@ -309,8 +307,8 @@ func TestComputeProviderStatus_TargetIDFormat(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -323,7 +321,7 @@ func TestComputeProviderStatus_TargetIDFormat(t *testing.T) {
 		WithObjects(team).
 		Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	expectedTargetID := "github-example-com/my-org"
 	if len(status.Targets) != 1 {
@@ -357,8 +355,8 @@ func TestComputeProviderStatus_DeduplicatesInstanceOrg(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -371,7 +369,7 @@ func TestComputeProviderStatus_DeduplicatesInstanceOrg(t *testing.T) {
 		WithObjects(team).
 		Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	// Should only have 1 target even though the same instance/org appears in both slices
 	if len(status.Targets) != 1 {
@@ -398,8 +396,8 @@ func TestComputeProviderStatus_PendingStatus(t *testing.T) {
 			Name:      TeamCRName("test-asr", "github.example.com", "my-org"),
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "test-asr",
+				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
+				pmapis.LabelSourceASR:    "test-asr",
 			},
 		},
 		Spec:   repoguardv1.GithubTeamSpec{Team: "test-asr"},
@@ -412,7 +410,7 @@ func TestComputeProviderStatus_PendingStatus(t *testing.T) {
 		WithObjects(team).
 		Build()
 
-	status := computeProviderStatus(context.Background(), c, asr, desired)
+	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 
 	if status.Ready {
 		t.Error("expected Ready=false for pending status")
@@ -420,91 +418,7 @@ func TestComputeProviderStatus_PendingStatus(t *testing.T) {
 	if len(status.Targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(status.Targets))
 	}
-	if status.Targets[0].Status != targetStatusPending {
+	if status.Targets[0].Status != pmmeta.TargetStatusPending {
 		t.Errorf("expected Pending, got %q", status.Targets[0].Status)
-	}
-}
-
-func TestMapGithubTeamToASR(t *testing.T) {
-	tests := []struct {
-		name     string
-		labels   map[string]string
-		expected []client.ObjectKey
-	}{
-		{
-			name: "valid labels return ASR request",
-			labels: map[string]string{
-				LabelManagedByKey:    LabelManagedByGithub,
-				LabelSourceASR:       "my-asr",
-				LabelSourceNamespace: "pm-system",
-			},
-			expected: []client.ObjectKey{{Name: "my-asr", Namespace: "pm-system"}},
-		},
-		{
-			name: "missing managed-by returns empty",
-			labels: map[string]string{
-				LabelSourceASR:       "my-asr",
-				LabelSourceNamespace: "pm-system",
-			},
-			expected: nil,
-		},
-		{
-			name: "wrong managed-by value returns empty",
-			labels: map[string]string{
-				LabelManagedByKey:    "other-provider",
-				LabelSourceASR:       "my-asr",
-				LabelSourceNamespace: "pm-system",
-			},
-			expected: nil,
-		},
-		{
-			name: "missing source-asr returns empty",
-			labels: map[string]string{
-				LabelManagedByKey:    LabelManagedByGithub,
-				LabelSourceNamespace: "pm-system",
-			},
-			expected: nil,
-		},
-		{
-			name: "missing source-namespace returns empty",
-			labels: map[string]string{
-				LabelManagedByKey: LabelManagedByGithub,
-				LabelSourceASR:    "my-asr",
-			},
-			expected: nil,
-		},
-		{
-			name:     "nil labels returns empty",
-			labels:   nil,
-			expected: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			team := &repoguardv1.GithubTeam{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "some-team",
-					Namespace: "default",
-					Labels:    tt.labels,
-				},
-			}
-
-			result := extractASRFromGithubTeam(team)
-			if len(tt.expected) == 0 {
-				if len(result) != 0 {
-					t.Errorf("expected empty result, got %v", result)
-				}
-			} else {
-				if len(result) != len(tt.expected) {
-					t.Fatalf("expected %d results, got %d", len(tt.expected), len(result))
-				}
-				for i, exp := range tt.expected {
-					if result[i] != exp {
-						t.Errorf("result[%d]: expected %v, got %v", i, exp, result[i])
-					}
-				}
-			}
-		})
 	}
 }

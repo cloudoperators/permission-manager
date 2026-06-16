@@ -14,6 +14,7 @@ import (
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
 
@@ -49,14 +50,14 @@ func TestReconcileTeams_CreatesNewTeams(t *testing.T) {
 		if team.Spec.Team != "MY_TEAM" {
 			t.Errorf("team %q: expected teamName MY_TEAM, got %q", dt.CRName, team.Spec.Team)
 		}
-		if team.Labels[LabelSourceASR] != "test-asr" {
-			t.Errorf("team %q: expected label source-asr=test-asr, got %q", dt.CRName, team.Labels[LabelSourceASR])
+		if team.Labels[pmapis.LabelSourceASR] != "test-asr" {
+			t.Errorf("team %q: expected label source-asr=test-asr, got %q", dt.CRName, team.Labels[pmapis.LabelSourceASR])
 		}
-		if team.Labels[LabelManagedByKey] != LabelManagedByGithub {
-			t.Errorf("team %q: expected managed-by=github, got %q", dt.CRName, team.Labels[LabelManagedByKey])
+		if team.Labels[pmapis.LabelManagedByKey] != pmapis.ManagedByGithub {
+			t.Errorf("team %q: expected managed-by=github, got %q", dt.CRName, team.Labels[pmapis.LabelManagedByKey])
 		}
-		if team.Labels[LabelSourceNamespace] != "default" {
-			t.Errorf("team %q: expected source-namespace=default, got %q", dt.CRName, team.Labels[LabelSourceNamespace])
+		if team.Labels[pmapis.LabelSourceNamespace] != "default" {
+			t.Errorf("team %q: expected source-namespace=default, got %q", dt.CRName, team.Labels[pmapis.LabelSourceNamespace])
 		}
 	}
 }
@@ -71,7 +72,7 @@ func TestReconcileTeams_UpdatesExistingTeam(t *testing.T) {
 			Name:      "asr-test-github-example-com-cc",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamSpec{Team: "OLD_NAME"},
@@ -110,7 +111,7 @@ func TestReconcileTeams_DeletesStaleTeams(t *testing.T) {
 			Name:      "asr-test-github-example-com-old-org",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamSpec{Team: "MY_TEAM"},
@@ -148,7 +149,7 @@ func TestReconcileTeams_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 			Name:      "asr-other-github-example-com-cc",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "other-asr", // different ASR
+				pmapis.LabelSourceASR: "other-asr", // different ASR
 			},
 		},
 		Spec: repoguardv1.GithubTeamSpec{Team: "OTHER_TEAM"},

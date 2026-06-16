@@ -10,11 +10,9 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"k8s.io/client-go/util/retry"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
@@ -23,9 +21,6 @@ import (
 )
 
 const (
-	// DefaultOrgRequeueDelay is the requeue delay when a GithubOrganization CR is not found.
-	DefaultOrgRequeueDelay = 30 * time.Second
-
 	// AnnotationASRManagedConfig tracks which ASR names have contributed to this org.
 	AnnotationASRManagedConfig = "repo-guard.cloudoperators.dev/asr-managed-config"
 
@@ -40,15 +35,14 @@ type orgContribution struct {
 	OwnerTeams   []string                               `json:"ownerTeams,omitempty"`
 }
 
-// reconcileOrganizations processes all permissions in the ASR that target GithubOrganization resources.
-// It groups permissions by organization and patches each GithubOrganization CR.
-func (r *GithubReconciler) reconcileOrganizations(
+// reconcileOrganizations patches GithubOrganization CRs for org-level permissions in the ASR.
+func (p *Phase) reconcileOrganizations(
 	ctx context.Context,
 	asr *v1alpha1.ApplicationSpecificRole,
 	cbDef *GithubConnectorDefinition,
 	targetNamespace string,
-) (ctrl.Result, error) {
-	log := r.Log.WithValues("asr", asr.Name)
+) error {
+	log := p.Log.WithValues("asr", asr.Name)
 
 	// Collect org-level contributions from ASR permissions
 	orgContribs := make(map[string]*orgContribution) // keyed by org name
@@ -109,66 +103,56 @@ func (r *GithubReconciler) reconcileOrganizations(
 
 	// Patch each GithubOrganization with the contributions
 	for orgName, contrib := range orgContribs {
-		result, err := r.patchOrganization(ctx, asr.Spec.Name, orgName, targetNamespace, contrib)
-		if err != nil {
-			return result, err
-		}
-		if result.RequeueAfter > 0 {
-			return result, nil
+		if err := p.patchOrganization(ctx, asr.Spec.Name, orgName, targetNamespace, contrib); err != nil {
+			return err
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
-// patchOrganization applies the contribution from a single ASR to a GithubOrganization CR.
-// It uses RetryOnConflict to handle concurrent updates from multiple ASRs.
-func (r *GithubReconciler) patchOrganization(
+// patchOrganization merges one ASR's contribution into a GithubOrganization CR, retrying
+// on conflict for concurrent ASR updates. Returns an error if the CR does not exist yet,
+// so the lifecycle engine requeues.
+func (p *Phase) patchOrganization(
 	ctx context.Context,
 	asrName string,
 	orgName string,
 	namespace string,
 	contrib *orgContribution,
-) (ctrl.Result, error) {
-	log := r.Log.WithValues("asr", asrName, "org", orgName, "namespace", namespace)
+) error {
+	log := p.Log.WithValues("asr", asrName, "org", orgName, "namespace", namespace)
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Fetch the GithubOrganization CR
 		var org repoguardv1.GithubOrganization
 		orgKey := client.ObjectKey{Namespace: namespace, Name: orgName}
-		if err := r.Get(ctx, orgKey, &org); err != nil {
+		if err := p.Client.Get(ctx, orgKey, &org); err != nil {
 			return err
 		}
 
-		// Remove stale entries from this ASR before adding new ones
 		removeASRContributions(&org, asrName)
-
-		// Add new contributions
 		applyContributions(&org, asrName, contrib)
-
-		// Update the ASR tracking annotations
 		updateASRAnnotations(&org, asrName, contrib)
 
-		// Persist the update
-		return r.Update(ctx, &org)
+		return p.Client.Update(ctx, &org)
 	})
 
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			// GithubOrganization CR not found - requeue with delay
-			log.Info("GithubOrganization not found, requeueing", "org", orgName)
-			return ctrl.Result{RequeueAfter: DefaultOrgRequeueDelay}, nil
+			// GithubOrganization CR not found - return an error so the lifecycle engine requeues.
+			log.Info("GithubOrganization not found, will retry", "org", orgName)
+			return fmt.Errorf("GithubOrganization %s/%s not found", namespace, orgName)
 		}
-		r.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, audit.ResourceRef{
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, audit.ResourceRef{
 			Kind:      "GithubOrganization",
 			Name:      orgName,
 			Namespace: namespace,
 			Cluster:   "",
 		}, err)
-		return ctrl.Result{}, fmt.Errorf("failed to patch GithubOrganization %s/%s: %w", namespace, orgName, err)
+		return fmt.Errorf("failed to patch GithubOrganization %s/%s: %w", namespace, orgName, err)
 	}
 
-	r.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, audit.ResourceRef{
+	p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, audit.ResourceRef{
 		Kind:      "GithubOrganization",
 		Name:      orgName,
 		Namespace: namespace,
@@ -176,17 +160,17 @@ func (r *GithubReconciler) patchOrganization(
 	}, nil)
 
 	log.Info("patched GithubOrganization", "org", orgName)
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // removeASRFromOrg removes all entries contributed by a specific ASR from a GithubOrganization.
 // Used during cleanup (ASR deletion).
-func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrganization, asrName string) error {
+func (p *Phase) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrganization, asrName string) error {
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Re-fetch to get the latest version
 		var freshOrg repoguardv1.GithubOrganization
 		orgKey := client.ObjectKeyFromObject(org)
-		if err := r.Get(ctx, orgKey, &freshOrg); err != nil {
+		if err := p.Client.Get(ctx, orgKey, &freshOrg); err != nil {
 			if client.IgnoreNotFound(err) == nil {
 				// Org deleted, nothing to clean up
 				return nil
@@ -197,11 +181,11 @@ func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *repoguardv
 		removeASRContributions(&freshOrg, asrName)
 		removeASRFromAnnotations(&freshOrg, asrName)
 
-		return r.Update(ctx, &freshOrg)
+		return p.Client.Update(ctx, &freshOrg)
 	})
 
 	if err != nil {
-		r.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, audit.ResourceRef{
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, audit.ResourceRef{
 			Kind:      "GithubOrganization",
 			Name:      org.Name,
 			Namespace: org.Namespace,
@@ -210,7 +194,7 @@ func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *repoguardv
 		return err
 	}
 
-	r.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, audit.ResourceRef{
+	p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, audit.ResourceRef{
 		Kind:      "GithubOrganization",
 		Name:      org.Name,
 		Namespace: org.Namespace,
@@ -222,23 +206,17 @@ func (r *GithubReconciler) removeASRFromOrg(ctx context.Context, org *repoguardv
 
 // removeASRContributions removes all entries contributed by a specific ASR from the org spec.
 func removeASRContributions(org *repoguardv1.GithubOrganization, asrName string) {
-	// Get what this ASR previously contributed
 	prevContrib := getStoredContribution(org, asrName)
 	if prevContrib == nil {
 		return
 	}
 
-	// Remove owner teams
 	for _, team := range prevContrib.OwnerTeams {
 		org.Spec.OrganizationOwnerTeams = removeString(org.Spec.OrganizationOwnerTeams, team)
 	}
-
-	// Remove public teams
 	for _, team := range prevContrib.PublicTeams {
 		org.Spec.DefaultPublicRepositoryTeams = removeTeam(org.Spec.DefaultPublicRepositoryTeams, team)
 	}
-
-	// Remove private teams
 	for _, team := range prevContrib.PrivateTeams {
 		org.Spec.DefaultPrivateRepositoryTeams = removeTeam(org.Spec.DefaultPrivateRepositoryTeams, team)
 	}
@@ -246,17 +224,12 @@ func removeASRContributions(org *repoguardv1.GithubOrganization, asrName string)
 
 // applyContributions adds the new contributions to the org spec.
 func applyContributions(org *repoguardv1.GithubOrganization, asrName string, contrib *orgContribution) {
-	// Add owner teams
 	for _, team := range contrib.OwnerTeams {
 		org.Spec.OrganizationOwnerTeams = appendUniqueString(org.Spec.OrganizationOwnerTeams, team)
 	}
-
-	// Add public teams
 	for _, team := range contrib.PublicTeams {
 		org.Spec.DefaultPublicRepositoryTeams = appendUniqueTeam(org.Spec.DefaultPublicRepositoryTeams, team)
 	}
-
-	// Add private teams
 	for _, team := range contrib.PrivateTeams {
 		org.Spec.DefaultPrivateRepositoryTeams = appendUniqueTeam(org.Spec.DefaultPrivateRepositoryTeams, team)
 	}
@@ -338,8 +311,6 @@ func hasASRContribution(org *repoguardv1.GithubOrganization, asrName string) boo
 	_, ok := org.Annotations[annotationASRDefaultTeamsPrefix+asrName]
 	return ok
 }
-
-// --- Helper functions ---
 
 func getOrCreateContrib(m map[string]*orgContribution, orgName string) *orgContribution {
 	if c, ok := m[orgName]; ok {
