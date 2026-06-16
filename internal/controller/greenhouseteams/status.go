@@ -13,6 +13,7 @@ import (
 	greenhousemetav1alpha1 "github.com/cloudoperators/greenhouse/api/meta/v1alpha1"
 	greenhousev1alpha2 "github.com/cloudoperators/greenhouse/api/v1alpha2"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/provider"
 )
@@ -76,7 +77,7 @@ func ComputeProviderStatus(ctx context.Context, c client.Client, asr *v1alpha1.A
 	for _, s := range trbStatuses {
 		targets = append(targets, v1alpha1.TargetStatus{
 			TargetID:    s.Name,
-			Status:      s.Status,
+			Status:      pmmeta.TargetStatusValue(s.Status),
 			Message:     s.Message,
 			LastUpdated: metav1.Now(),
 		})

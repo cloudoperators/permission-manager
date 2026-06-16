@@ -12,13 +12,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
@@ -87,7 +85,7 @@ func TestReconcileOrganizations_OrgCCRN_AdminAddsOwnerTeam(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -110,23 +108,15 @@ func TestReconcileOrganizations_OrgCCRN_AdminAddsOwnerTeam(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	// Verify the org was patched
@@ -164,7 +154,7 @@ func TestReconcileOrganizations_OrgCCRN_NonAdminDoesNotAddOwnerTeam(t *testing.T
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -182,23 +172,15 @@ func TestReconcileOrganizations_OrgCCRN_NonAdminDoesNotAddOwnerTeam(t *testing.T
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	// Verify the org was NOT patched (no org-level changes for non-admin)
@@ -224,7 +206,7 @@ func TestReconcileOrganizations_WildcardPublicPatchesPublicTeams(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -242,23 +224,15 @@ func TestReconcileOrganizations_WildcardPublicPatchesPublicTeams(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	var updatedOrg repoguardv1.GithubOrganization
@@ -291,7 +265,7 @@ func TestReconcileOrganizations_WildcardPrivatePatchesPrivateTeams(t *testing.T)
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -309,23 +283,15 @@ func TestReconcileOrganizations_WildcardPrivatePatchesPrivateTeams(t *testing.T)
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	var updatedOrg repoguardv1.GithubOrganization
@@ -358,7 +324,7 @@ func TestReconcileOrganizations_WildcardStarPatchesBoth(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -376,23 +342,15 @@ func TestReconcileOrganizations_WildcardStarPatchesBoth(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	var updatedOrg repoguardv1.GithubOrganization
@@ -427,7 +385,7 @@ func TestReconcileOrganizations_AnnotationTracking(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -449,18 +407,14 @@ func TestReconcileOrganizations_AnnotationTracking(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	_, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
+	err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
 	if err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
 	}
@@ -522,7 +476,7 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -541,18 +495,14 @@ func TestReconcileOrganizations_StaleEntryRemoval(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	_, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
+	err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
 	if err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
 	}
@@ -596,7 +546,7 @@ func TestReconcileOrganizations_MultipleASRsNoConflict(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -622,26 +572,22 @@ func TestReconcileOrganizations_MultipleASRsNoConflict(t *testing.T) {
 		WithObjects(org, cb, asr1, asr2).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
 
 	// Reconcile ASR 1
-	_, err := r.reconcileOrganizations(context.Background(), asr1, cbDef, "test-ns")
+	err := p.reconcileOrganizations(context.Background(), asr1, cbDef, "test-ns")
 	if err != nil {
 		t.Fatalf("reconcileOrganizations for asr-1 failed: %v", err)
 	}
 
 	// Reconcile ASR 2
-	_, err = r.reconcileOrganizations(context.Background(), asr2, cbDef, "test-ns")
+	err = p.reconcileOrganizations(context.Background(), asr2, cbDef, "test-ns")
 	if err != nil {
 		t.Fatalf("reconcileOrganizations for asr-2 failed: %v", err)
 	}
@@ -668,7 +614,7 @@ func TestReconcileOrganizations_MultipleASRsNoConflict(t *testing.T) {
 	}
 }
 
-func TestReconcileOrganizations_MissingOrgRequeues(t *testing.T) {
+func TestReconcileOrganizations_MissingOrgReturnsError(t *testing.T) {
 	scheme := testScheme()
 	capMapping := map[string]string{
 		"ADMIN": "admin",
@@ -679,7 +625,7 @@ func TestReconcileOrganizations_MissingOrgRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -697,23 +643,16 @@ func TestReconcileOrganizations_MissingOrgRequeues(t *testing.T) {
 		WithObjects(cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
-		t.Fatalf("expected no error for missing org, got: %v", err)
-	}
-	if result.RequeueAfter != DefaultOrgRequeueDelay {
-		t.Errorf("expected requeue after %v, got %v", DefaultOrgRequeueDelay, result.RequeueAfter)
+	// A missing GithubOrganization now returns an error so the lifecycle engine requeues.
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err == nil {
+		t.Fatal("expected an error for missing org, got nil")
 	}
 }
 
@@ -728,7 +667,7 @@ func TestReconcileOrganizations_NonGithubCCRNSkipped(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -747,23 +686,15 @@ func TestReconcileOrganizations_NonGithubCCRNSkipped(t *testing.T) {
 		WithObjects(org, cb, asr).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
 	cbDef, _ := ParseConnectorDefinition(cb.Spec.Definition)
-	result, err := r.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns")
-	if err != nil {
+	if err := p.reconcileOrganizations(context.Background(), asr, cbDef, "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	// Org should remain unchanged
@@ -788,7 +719,7 @@ func TestFullReconcile_EndToEnd(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       "github-cb",
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: buildConnectorDef(capMapping),
 		},
 	}
@@ -808,37 +739,18 @@ func TestFullReconcile_EndToEnd(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(org, cb, asr).
-		WithStatusSubresource(&v1alpha1.ApplicationSpecificRole{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
-				if patch.Type() == types.ApplyPatchType {
-					// SSA not supported in fake client; accept silently for testing.
-					return nil
-				}
-				return c.Status().Patch(ctx, obj, patch, opts...)
-			},
-		}).
 		Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync([]v1alpha1.ConnectorBinding{*cb})
-
-	r := &GithubReconciler{
+	p := &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}
 
-	// Run a full reconcile
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-e2e"},
-	})
-	if err != nil {
+	// Run a full reconcile through the Phase. Provider status is written in-memory
+	// on the ASR; the lifecycle engine would patch it at the end of reconcile.
+	if err := p.Reconcile(context.Background(), asr, cb); err != nil {
 		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("unexpected requeue: %v", result)
 	}
 
 	// Verify org was patched
@@ -863,20 +775,14 @@ func TestFullReconcile_EndToEnd(t *testing.T) {
 		t.Errorf("unexpected private team: %+v", updatedOrg.Spec.DefaultPrivateRepositoryTeams[0])
 	}
 
-	// Verify finalizer was added
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-e2e"}, &updatedASR); err != nil {
-		t.Fatalf("failed to get ASR: %v", err)
+	// Verify the github provider status was written in-memory with the expected target.
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub)
+	if ps == nil {
+		t.Fatal("expected github provider status to be set on the ASR")
 	}
-	hasFinalizer := false
-	for _, f := range updatedASR.Finalizers {
-		if f == FinalizerGithub {
-			hasFinalizer = true
-			break
-		}
-	}
-	if !hasFinalizer {
-		t.Error("expected github finalizer on ASR")
+	targetID := SanitizeInstance("github.example.com") + "/my-org"
+	if pmmeta.GetTargetStatus(ps.Targets, targetID) == nil {
+		t.Errorf("expected target %q in provider status, got %+v", targetID, ps.Targets)
 	}
 }
 
@@ -1031,6 +937,3 @@ func TestHelpers_RemoveTeam(t *testing.T) {
 		}
 	}
 }
-
-// Suppress unused import warning - these are used in the test.
-var _ = client.ObjectKey{}

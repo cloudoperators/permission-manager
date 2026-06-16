@@ -23,6 +23,7 @@ type TargetStatusValue string
 
 const (
 	TargetStatusReady    TargetStatusValue = "Ready"
+	TargetStatusPending  TargetStatusValue = "Pending"
 	TargetStatusDegraded TargetStatusValue = "Degraded"
 	TargetStatusError    TargetStatusValue = "Error"
 )
@@ -35,8 +36,7 @@ type TargetStatus struct {
 	TargetID string `json:"targetID"`
 
 	// Status is the provisioning result.
-	// TODO: change to TargetStatusValue once github provider is updated.
-	Status string `json:"status"`
+	Status TargetStatusValue `json:"status"`
 
 	// Message is a human-readable description of the result.
 	// +optional
@@ -70,7 +70,7 @@ type ProviderStatus struct {
 func ProviderStatusFromTargets(targets []TargetStatus) ProviderStatus {
 	allReady := true
 	for _, t := range targets {
-		if t.Status != string(TargetStatusReady) {
+		if t.Status != TargetStatusReady {
 			allReady = false
 			break
 		}

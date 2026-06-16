@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
 
@@ -97,7 +98,7 @@ func deleteStaleTeams(
 	var teamList repoguardv1.GithubTeamList
 	if err := c.List(ctx, &teamList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{LabelSourceASR: asrName},
+		client.MatchingLabels{pmapis.LabelSourceASR: asrName},
 	); err != nil {
 		return fmt.Errorf("failed to list GithubTeams: %w", err)
 	}

@@ -15,11 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
@@ -34,19 +34,18 @@ func newDeletionScheme() *runtime.Scheme {
 	return scheme
 }
 
-// newDeletingASR creates an ASR with DeletionTimestamp set and the GitHub finalizer added.
+// newDeletingASR creates an ASR with the given spec for use in delete-path tests.
+// The lifecycle shell owns the DeletionTimestamp/finalizer; the Phase only performs
+// cleanup, so these fields are not required here.
 func newDeletingASR(name, specName, namespace string, permissions []v1alpha1.Permission, connectorRefs []string) *v1alpha1.ApplicationSpecificRole {
-	now := metav1.Now()
 	asr := &v1alpha1.ApplicationSpecificRole{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "permission-manager.cloudoperators.dev/v1",
 			Kind:       "ApplicationSpecificRole",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              name,
-			Namespace:         namespace,
-			DeletionTimestamp: &now,
-			Finalizers:        []string{FinalizerGithub},
+			Name:      name,
+			Namespace: namespace,
 		},
 		Spec: v1alpha1.ApplicationSpecificRoleSpec{
 			Name:          specName,
@@ -72,7 +71,7 @@ func newConnectorBinding(name, namespace string, capMapping map[string]string, t
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: v1alpha1.ConnectorBindingSpec{
 			Name:       name,
-			Provider:   ProviderGithub,
+			Provider:   string(pmmeta.ProviderGithub),
 			Definition: &runtime.RawExtension{Raw: raw},
 		},
 	}
@@ -137,132 +136,35 @@ func newGithubOrgWithContributions(namespace, orgName, asrName string, contrib *
 	return org
 }
 
-// reconcilerForDeletion creates a GithubReconciler for deletion tests with the given objects.
-func reconcilerForDeletion(scheme *runtime.Scheme, cbs []v1alpha1.ConnectorBinding, objects ...client.Object) (*GithubReconciler, client.Client) {
+// phaseForDeletion creates a Phase for deletion tests with the given objects.
+func phaseForDeletion(scheme *runtime.Scheme, objects ...client.Object) (*Phase, client.Client) {
 	builder := fake.NewClientBuilder().WithScheme(scheme)
 	if len(objects) > 0 {
 		builder = builder.WithObjects(objects...)
 	}
 	fakeClient := builder.Build()
 
-	indexer := NewGithubIndexer(logr.Discard())
-	indexer.Sync(cbs)
-
-	return &GithubReconciler{
+	return &Phase{
 		Client:   fakeClient,
 		Log:      logr.Discard(),
-		CBIndex:  indexer,
 		AuditLog: audit.Disabled(),
 	}, fakeClient
 }
 
-// --- Deletion trigger tests ---
-
-func TestDeletion_TriggeredByDeletionTimestamp(t *testing.T) {
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-del", "team-del", "default",
-		[]v1alpha1.Permission{
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/my-repo", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
-
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
-
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-del"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
-	}
-
-	// When a fake client object has DeletionTimestamp and all finalizers are removed,
-	// the fake client may garbage collect it. Either the ASR is gone (GC'd) or
-	// it exists without the finalizer - both indicate successful cleanup.
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-del"}, &updatedASR)
-	if err == nil {
-		// ASR still exists - verify finalizer was removed
-		if controllerutil.ContainsFinalizer(&updatedASR, FinalizerGithub) {
-			t.Error("expected finalizer to be removed after deletion")
-		}
-	}
-	// If err is NotFound, the object was GC'd which is also correct behavior
-}
-
-func TestDeletion_SkippedWhenNoGithubFinalizer(t *testing.T) {
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-
-	// ASR with DeletionTimestamp but only a NON-github finalizer (some other controller's finalizer)
-	now := metav1.Now()
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "asr-nofin",
-			Namespace:         "default",
-			DeletionTimestamp: &now,
-			Finalizers:        []string{"some-other-finalizer"}, // not the github finalizer
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-nofin",
-			ConnectorRefs: []string{"github-cb"},
-		},
-	}
-
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
-
-	// Should return success without doing cleanup (no github finalizer to process)
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-nofin"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
-	}
-}
-
 // --- GithubTeam cleanup tests ---
 
-func TestDeletion_DeletesAllOwnedTeams(t *testing.T) {
+func TestReconcileDelete_DeletesAllOwnedTeams(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-teams", "team-alpha", "default",
-		[]v1alpha1.Permission{
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-teams", "team-alpha", "default", nil, []string{"github-cb"})
 
 	// Create multiple teams owned by this ASR
 	team1 := newOwnedGithubTeam("asr-teams-github-example-com-org1", "target-ns", "asr-teams", "default")
 	team2 := newOwnedGithubTeam("asr-teams-github-example-com-org2", "target-ns", "asr-teams", "default")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team1, team2)
+	p, fakeClient := phaseForDeletion(scheme, team1, team2)
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-teams"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify all owned teams were deleted
@@ -275,11 +177,8 @@ func TestDeletion_DeletesAllOwnedTeams(t *testing.T) {
 	}
 }
 
-func TestDeletion_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
+func TestReconcileDelete_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 	asr := newDeletingASR("asr-del", "team-del", "default", nil, []string{"github-cb"})
 
 	// Team owned by deleting ASR
@@ -287,13 +186,10 @@ func TestDeletion_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 	// Team owned by a DIFFERENT ASR
 	otherTeam := newOwnedGithubTeam("asr-other-team1", "target-ns", "asr-other", "default")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, ownedTeam, otherTeam)
+	p, fakeClient := phaseForDeletion(scheme, ownedTeam, otherTeam)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-del"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify other ASR's team was NOT deleted
@@ -303,7 +199,7 @@ func TestDeletion_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 	}
 
 	// Verify our team WAS deleted
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-del-team1"}, &team)
+	err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-del-team1"}, &team)
 	if err == nil {
 		t.Error("owned team should have been deleted")
 	}
@@ -311,17 +207,9 @@ func TestDeletion_DoesNotDeleteTeamsFromOtherASRs(t *testing.T) {
 
 // --- GithubTeamRepository cleanup tests ---
 
-func TestDeletion_DeletesAllOwnedTeamRepos(t *testing.T) {
+func TestReconcileDelete_DeletesAllOwnedTeamRepos(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push", "READ": "pull"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-repos", "team-repos", "default",
-		[]v1alpha1.Permission{
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-repos", "team-repos", "default", nil, []string{"github-cb"})
 
 	// Create multiple team repos owned by this ASR
 	repo1 := newOwnedGithubTeamRepo("asr-repos-push", "target-ns", "asr-repos", "default",
@@ -329,16 +217,10 @@ func TestDeletion_DeletesAllOwnedTeamRepos(t *testing.T) {
 	repo2 := newOwnedGithubTeamRepo("asr-repos-pull", "target-ns", "asr-repos", "default",
 		[]string{"repo-c"}, "pull")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, repo1, repo2)
+	p, fakeClient := phaseForDeletion(scheme, repo1, repo2)
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-repos"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify all owned team repos were deleted
@@ -351,11 +233,8 @@ func TestDeletion_DeletesAllOwnedTeamRepos(t *testing.T) {
 	}
 }
 
-func TestDeletion_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
+func TestReconcileDelete_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 	asr := newDeletingASR("asr-del", "team-del", "default", nil, []string{"github-cb"})
 
 	// Repo owned by deleting ASR
@@ -365,13 +244,10 @@ func TestDeletion_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
 	otherRepo := newOwnedGithubTeamRepo("asr-other-repo1", "target-ns", "asr-other", "default",
 		[]string{"repo-b"}, "push")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, ownedRepo, otherRepo)
+	p, fakeClient := phaseForDeletion(scheme, ownedRepo, otherRepo)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-del"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify other ASR's repo was NOT deleted
@@ -381,7 +257,7 @@ func TestDeletion_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
 	}
 
 	// Verify our repo WAS deleted
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-del-repo1"}, &repo)
+	err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-del-repo1"}, &repo)
 	if err == nil {
 		t.Error("owned team repo should have been deleted")
 	}
@@ -389,17 +265,9 @@ func TestDeletion_DoesNotDeleteTeamReposFromOtherASRs(t *testing.T) {
 
 // --- GithubOrganization entry cleanup tests ---
 
-func TestDeletion_RemovesOrgEntriesContributedByASR(t *testing.T) {
+func TestReconcileDelete_RemovesOrgEntriesContributedByASR(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-org", "team-org", "default",
-		[]v1alpha1.Permission{
-			{Resource: "organization.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org", Capability: "ADMIN"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-org", "team-org", "default", nil, []string{"github-cb"})
 
 	// Create org with contributions from this ASR
 	contrib := &orgContribution{
@@ -409,16 +277,10 @@ func TestDeletion_RemovesOrgEntriesContributedByASR(t *testing.T) {
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-org", contrib)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org)
+	p, fakeClient := phaseForDeletion(scheme, org)
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-org"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify org entries were cleaned up
@@ -446,17 +308,9 @@ func TestDeletion_RemovesOrgEntriesContributedByASR(t *testing.T) {
 	}
 }
 
-func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
+func TestReconcileDelete_PreservesOtherASROrgEntries(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-del", "team-del", "default",
-		[]v1alpha1.Permission{
-			{Resource: "organization.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org", Capability: "ADMIN"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-del", "team-del", "default", nil, []string{"github-cb"})
 
 	// Create org with contributions from BOTH the deleting ASR and another ASR
 	delContrib := &orgContribution{
@@ -488,13 +342,10 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 		},
 	}
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org)
+	p, fakeClient := phaseForDeletion(scheme, org)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-del"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify ONLY the deleting ASR's entries were removed
@@ -528,34 +379,22 @@ func TestDeletion_PreservesOtherASROrgEntries(t *testing.T) {
 	}
 }
 
-func TestDeletion_CleansUpMultipleOrgs(t *testing.T) {
+func TestReconcileDelete_CleansUpMultipleOrgs(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-multi", "team-multi", "default",
-		[]v1alpha1.Permission{
-			{Resource: "organization.github.ccrn.cloudoperators.dev/v1/github.example.com/org1", Capability: "ADMIN"},
-			{Resource: "repository_type.github.ccrn.cloudoperators.dev/v1/github.example.com/org2/public", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-multi", "team-multi", "default", nil, []string{"github-cb"})
 
 	// Contributions to org1
 	contrib1 := &orgContribution{OwnerTeams: []string{"team-multi"}}
 	org1 := newGithubOrgWithContributions("target-ns", "org1", "team-multi", contrib1)
 
-	// Contributions to org2
+	// Contributions to org2 (different namespace)
 	contrib2 := &orgContribution{PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-multi", Permission: repoguardv1.GithubTeamPermission("push")}}}
 	org2 := newGithubOrgWithContributions("other-ns", "org2", "team-multi", contrib2)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org1, org2)
+	p, fakeClient := phaseForDeletion(scheme, org1, org2)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-multi"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify org1 was cleaned
@@ -577,148 +416,70 @@ func TestDeletion_CleansUpMultipleOrgs(t *testing.T) {
 	}
 }
 
-// --- Finalizer removal tests ---
+// --- Status cleanup tests ---
 
-func TestDeletion_FinalizerRemovedOnlyAfterCleanupSucceeds(t *testing.T) {
+func TestReconcileDelete_RemovesProviderStatus(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-fin", "team-fin", "default",
-		[]v1alpha1.Permission{
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
-
-	team := newOwnedGithubTeam("asr-fin-team1", "target-ns", "asr-fin", "default")
-	repo := newOwnedGithubTeamRepo("asr-fin-repo1", "target-ns", "asr-fin", "default",
-		[]string{"repo-a"}, "push")
-
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team, repo)
-
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-fin"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	asr := newDeletingASR("asr-status", "team-status", "default", nil, []string{"github-cb"})
+	// Seed an existing github provider status entry.
+	asr.Status.Providers = map[string]v1alpha1.ProviderStatus{
+		string(pmmeta.ProviderGithub): {Ready: true},
 	}
 
-	// Verify finalizer was removed (the fake client GCs the object when last finalizer removed
-	// from an object with deletionTimestamp - object being gone confirms cleanup succeeded)
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-fin"}, &updatedASR)
-	if err == nil {
-		// ASR still exists - finalizer should be gone
-		if controllerutil.ContainsFinalizer(&updatedASR, FinalizerGithub) {
-			t.Error("finalizer should be removed after successful cleanup")
-		}
-	}
-	// If NotFound: fake client GC'd it (all finalizers removed) - this is correct
+	p, _ := phaseForDeletion(scheme)
 
-	// Verify all resources were cleaned up
-	var teamList repoguardv1.GithubTeamList
-	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-fin"}); err != nil {
-		t.Fatalf("failed to list teams: %v", err)
-	}
-	if len(teamList.Items) != 0 {
-		t.Errorf("expected 0 teams, got %d", len(teamList.Items))
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
-	var repoList repoguardv1.GithubTeamRepositoryList
-	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-fin"}); err != nil {
-		t.Fatalf("failed to list repos: %v", err)
-	}
-	if len(repoList.Items) != 0 {
-		t.Errorf("expected 0 repos, got %d", len(repoList.Items))
+	if _, ok := asr.Status.Providers[string(pmmeta.ProviderGithub)]; ok {
+		t.Error("expected github provider status entry to be removed after successful cleanup")
 	}
 }
 
 // --- Idempotency tests ---
 
-func TestDeletion_IdempotentOnReRun(t *testing.T) {
+func TestReconcileDelete_IdempotentWithNoResources(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
+	asr := newDeletingASR("asr-idemp", "team-idemp", "default", nil, []string{"github-cb"})
 
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-idemp", "team-idemp", "default",
-		[]v1alpha1.Permission{
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
+	p, _ := phaseForDeletion(scheme)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
-
-	// First reconciliation - resources already don't exist (nothing to clean up)
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-idemp"},
-	})
-	if err != nil {
-		t.Fatalf("first reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue on first run: %v", result)
+	// First run - nothing to clean up
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("first ReconcileDelete failed: %v", err)
 	}
 
-	// Verify the ASR was processed (finalizer removed, object may be GC'd)
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-idemp"}, &updatedASR)
-	if err == nil {
-		if controllerutil.ContainsFinalizer(&updatedASR, FinalizerGithub) {
-			t.Error("finalizer should be removed even when no resources exist")
-		}
-	}
-	// If NotFound: object was GC'd by fake client (correct - all finalizers removed)
-
-	// Second reconciliation - ASR no longer exists, should be a no-op
-	result, err = r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-idemp"},
-	})
-	if err != nil {
-		t.Fatalf("second reconcile should succeed for missing ASR: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue on second run: %v", result)
+	// Second run - still a no-op, should succeed
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("second ReconcileDelete failed: %v", err)
 	}
 }
 
-func TestDeletion_IdempotentWithAlreadyDeletedResources(t *testing.T) {
+func TestReconcileDelete_IdempotentWithAlreadyDeletedResources(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 	asr := newDeletingASR("asr-idemp2", "team-idemp2", "default", nil, []string{"github-cb"})
 
 	// Create a team, then delete it manually before reconcile to simulate partial cleanup
 	team := newOwnedGithubTeam("asr-idemp2-team1", "target-ns", "asr-idemp2", "default")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team)
+	p, fakeClient := phaseForDeletion(scheme, team)
 
 	// Manually delete the team first
 	if err := fakeClient.Delete(context.Background(), team); err != nil {
 		t.Fatalf("failed to pre-delete team: %v", err)
 	}
 
-	// Reconcile should still succeed (idempotent)
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-idemp2"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed on already-deleted resources: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	// ReconcileDelete should still succeed (idempotent)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed on already-deleted resources: %v", err)
 	}
 }
 
 // --- Cross-namespace cleanup tests ---
 
-func TestDeletion_CrossNamespaceOrgCleanup(t *testing.T) {
+func TestReconcileDelete_CrossNamespaceOrgCleanup(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 	asr := newDeletingASR("asr-cross", "team-cross", "default", nil, []string{"github-cb"})
 
 	// Create orgs in different namespaces with contributions from this ASR
@@ -727,13 +488,10 @@ func TestDeletion_CrossNamespaceOrgCleanup(t *testing.T) {
 	org2 := newGithubOrgWithContributions("ns-b", "org2", "team-cross", contrib)
 	org3 := newGithubOrgWithContributions("ns-c", "org3", "team-cross", contrib)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org1, org2, org3)
+	p, fakeClient := phaseForDeletion(scheme, org1, org2, org3)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-cross"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify all orgs across all namespaces were cleaned up
@@ -755,52 +513,36 @@ func TestDeletion_CrossNamespaceOrgCleanup(t *testing.T) {
 
 // --- cleanupOwnedResources unit tests ---
 
-func TestCleanupOwnedResources_DeletesTeamsAndRepos(t *testing.T) {
+func TestCleanupOwnedResources_DeletesTeamsAndReposAcrossNamespaces(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push", "READ": "pull"}
+	asr := newDeletingASR("asr-cleanup", "team-cleanup", "default", nil, []string{"github-cb"})
 
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "asr-cleanup",
-			Namespace: "default",
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-cleanup",
-			ConnectorRefs: []string{"github-cb"},
-		},
-	}
-
+	// Owned resources are deleted by label across all namespaces.
 	team1 := newOwnedGithubTeam("asr-cleanup-t1", "target-ns", "asr-cleanup", "default")
-	team2 := newOwnedGithubTeam("asr-cleanup-t2", "target-ns", "asr-cleanup", "default")
+	team2 := newOwnedGithubTeam("asr-cleanup-t2", "other-ns", "asr-cleanup", "default")
 	repo1 := newOwnedGithubTeamRepo("asr-cleanup-r1", "target-ns", "asr-cleanup", "default",
 		[]string{"repo-a"}, "push")
-	repo2 := newOwnedGithubTeamRepo("asr-cleanup-r2", "target-ns", "asr-cleanup", "default",
+	repo2 := newOwnedGithubTeamRepo("asr-cleanup-r2", "other-ns", "asr-cleanup", "default",
 		[]string{"repo-b"}, "pull")
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team1, team2, repo1, repo2)
+	p, fakeClient := phaseForDeletion(scheme, team1, team2, repo1, repo2)
 
-	err := r.cleanupOwnedResources(context.Background(), asr, "github-cb", cb.Spec)
-	if err != nil {
+	if err := p.cleanupOwnedResources(context.Background(), asr); err != nil {
 		t.Fatalf("cleanupOwnedResources failed: %v", err)
 	}
 
-	// Verify all teams deleted
+	// Verify all teams deleted (cluster-wide)
 	var teamList repoguardv1.GithubTeamList
-	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns")); err != nil {
+	if err := fakeClient.List(context.Background(), &teamList); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
 	if len(teamList.Items) != 0 {
 		t.Errorf("expected 0 teams, got %d", len(teamList.Items))
 	}
 
-	// Verify all repos deleted
+	// Verify all repos deleted (cluster-wide)
 	var repoList repoguardv1.GithubTeamRepositoryList
-	if err := fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns")); err != nil {
+	if err := fakeClient.List(context.Background(), &repoList); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
 	if len(repoList.Items) != 0 {
@@ -808,55 +550,25 @@ func TestCleanupOwnedResources_DeletesTeamsAndRepos(t *testing.T) {
 	}
 }
 
-func TestCleanupOwnedResources_FallsBackToASRNamespaceWhenDefinitionInvalid(t *testing.T) {
+func TestCleanupOwnedResources_DoesNotDeleteOtherASRResources(t *testing.T) {
 	scheme := newDeletionScheme()
+	asr := newDeletingASR("asr-cleanup", "team-cleanup", "default", nil, []string{"github-cb"})
 
-	// Create a CB with invalid definition
-	cb := &v1alpha1.ConnectorBinding{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ConnectorBinding",
-		},
-		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
-		Spec: v1alpha1.ConnectorBindingSpec{
-			Name:       "github-cb",
-			Provider:   ProviderGithub,
-			Definition: &runtime.RawExtension{Raw: []byte(`invalid json`)},
-		},
-	}
+	owned := newOwnedGithubTeam("asr-cleanup-t1", "target-ns", "asr-cleanup", "default")
+	other := newOwnedGithubTeam("asr-other-t1", "target-ns", "asr-other", "default")
 
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "asr-fallback",
-			Namespace: "asr-namespace",
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-fallback",
-			ConnectorRefs: []string{"github-cb"},
-		},
-	}
+	p, fakeClient := phaseForDeletion(scheme, owned, other)
 
-	// Team in the ASR's namespace (the fallback)
-	team := newOwnedGithubTeam("asr-fallback-t1", "asr-namespace", "asr-fallback", "asr-namespace")
-
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team)
-
-	err := r.cleanupOwnedResources(context.Background(), asr, "github-cb", cb.Spec)
-	if err != nil {
+	if err := p.cleanupOwnedResources(context.Background(), asr); err != nil {
 		t.Fatalf("cleanupOwnedResources failed: %v", err)
 	}
 
-	// Verify team was deleted from the fallback namespace
-	var teamList repoguardv1.GithubTeamList
-	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("asr-namespace")); err != nil {
-		t.Fatalf("failed to list teams: %v", err)
+	var team repoguardv1.GithubTeam
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-other-t1"}, &team); err != nil {
+		t.Errorf("other ASR's team should not be deleted: %v", err)
 	}
-	if len(teamList.Items) != 0 {
-		t.Errorf("expected 0 teams in fallback namespace, got %d", len(teamList.Items))
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "asr-cleanup-t1"}, &team); err == nil {
+		t.Error("owned team should have been deleted")
 	}
 }
 
@@ -864,23 +576,8 @@ func TestCleanupOwnedResources_FallsBackToASRNamespaceWhenDefinitionInvalid(t *t
 
 func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "asr-orgclean",
-			Namespace: "default",
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-orgclean",
-			ConnectorRefs: []string{"github-cb"},
-		},
-	}
+	asr := newDeletingASR("asr-orgclean", "team-orgclean", "default", nil, []string{"github-cb"})
 
 	contrib := &orgContribution{OwnerTeams: []string{"team-orgclean"}}
 	org1 := newGithubOrgWithContributions("ns-1", "org-a", "team-orgclean", contrib)
@@ -890,10 +587,9 @@ func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 	otherContrib := &orgContribution{OwnerTeams: []string{"team-other"}}
 	org3 := newGithubOrgWithContributions("ns-3", "org-c", "team-other", otherContrib)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, org1, org2, org3)
+	p, fakeClient := phaseForDeletion(scheme, org1, org2, org3)
 
-	err := r.cleanupOrgEntries(context.Background(), asr)
-	if err != nil {
+	if err := p.cleanupOrgEntries(context.Background(), asr); err != nil {
 		t.Fatalf("cleanupOrgEntries failed: %v", err)
 	}
 
@@ -927,47 +623,22 @@ func TestCleanupOrgEntries_RemovesFromAllOrgs(t *testing.T) {
 
 func TestCleanupOrgEntries_NoOrgsExist(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "asr-noorg",
-			Namespace: "default",
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-noorg",
-			ConnectorRefs: []string{"github-cb"},
-		},
-	}
+	asr := newDeletingASR("asr-noorg", "team-noorg", "default", nil, []string{"github-cb"})
 
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
+	p, _ := phaseForDeletion(scheme)
 
 	// Should succeed gracefully with no orgs
-	err := r.cleanupOrgEntries(context.Background(), asr)
-	if err != nil {
+	if err := p.cleanupOrgEntries(context.Background(), asr); err != nil {
 		t.Fatalf("cleanupOrgEntries should not fail with no orgs: %v", err)
 	}
 }
 
 // --- Full deletion flow integration tests ---
 
-func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
+func TestReconcileDelete_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-full", "team-full", "default",
-		[]v1alpha1.Permission{
-			{Resource: "organization.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org", Capability: "ADMIN"},
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
+	asr := newDeletingASR("asr-full", "team-full", "default", nil, []string{"github-cb"})
 
 	// Create all resource types owned by this ASR
 	team := newOwnedGithubTeam("asr-full-team", "target-ns", "asr-full", "default")
@@ -979,16 +650,10 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-full", contrib)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team, repo, org)
+	p, fakeClient := phaseForDeletion(scheme, team, repo, org)
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-full"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify teams deleted
@@ -1020,161 +685,28 @@ func TestDeletion_FullFlow_TeamsReposAndOrgs(t *testing.T) {
 	if len(updatedOrg.Spec.DefaultPublicRepositoryTeams) != 0 {
 		t.Errorf("expected 0 public teams, got %v", updatedOrg.Spec.DefaultPublicRepositoryTeams)
 	}
-
-	// Verify finalizer removed (object may be GC'd by fake client)
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	err = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-full"}, &updatedASR)
-	if err == nil {
-		if controllerutil.ContainsFinalizer(&updatedASR, FinalizerGithub) {
-			t.Error("finalizer should be removed after full cleanup")
-		}
-	}
-	// If NotFound: object was GC'd (all finalizers removed) - correct
-}
-
-func TestDeletion_ASRNotFound_SkipsGracefully(t *testing.T) {
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, cb)
-
-	// Reconcile a non-existent ASR (already fully deleted)
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "does-not-exist"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile should not error for missing ASR: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue for missing ASR: %v", result)
-	}
-}
-
-func TestDeletion_ASRWithNoGithubRef_Skipped(t *testing.T) {
-	scheme := newDeletionScheme()
-
-	// No GitHub ConnectorBindings indexed
-	now := metav1.Now()
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "asr-nongithub",
-			Namespace:         "default",
-			DeletionTimestamp: &now,
-			Finalizers:        []string{FinalizerGithub},
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:          "team-nongithub",
-			ConnectorRefs: []string{"some-other-cb"},
-		},
-	}
-
-	r, _ := reconcilerForDeletion(scheme, nil, asr)
-
-	// Without a GitHub CB ref, reconciler should skip the ASR entirely
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-nongithub"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
-	}
 }
 
 // --- Edge case tests ---
 
-func TestDeletion_OrgAlreadyDeletedDuringCleanup(t *testing.T) {
+func TestReconcileDelete_OrgAlreadyDeletedDuringCleanup(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-
-	// ASR with contribution annotation referencing an org name that matches
 	asr := newDeletingASR("asr-orgdel", "team-orgdel", "default", nil, []string{"github-cb"})
 
-	// Create an org with contribution from this ASR, then we'll test that
-	// cleanup works even if the org doesn't exist (already deleted)
-	// By NOT creating the org, cleanupOrgEntries should list 0 orgs and succeed
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
+	// No orgs exist; cleanupOrgEntries should list 0 orgs and succeed.
+	p, _ := phaseForDeletion(scheme)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-orgdel"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile should succeed when orgs don't exist: %v", err)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete should succeed when orgs don't exist: %v", err)
 	}
 }
 
-func TestDeletion_WithAdvancedConfigTargetNamespace(t *testing.T) {
+func TestReconcileDelete_ManyTeamsAndRepos(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "default-target")
-
-	// ASR with advancedConfig that overrides the target namespace
-	advConfig := map[string]interface{}{
-		"github": map[string]string{
-			"targetNamespace": "custom-ns",
-		},
-	}
-	advConfigJSON, _ := json.Marshal(advConfig)
-
-	now := metav1.Now()
-	asr := &v1alpha1.ApplicationSpecificRole{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "permission-manager.cloudoperators.dev/v1",
-			Kind:       "ApplicationSpecificRole",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "asr-adv",
-			Namespace:         "default",
-			DeletionTimestamp: &now,
-			Finalizers:        []string{FinalizerGithub},
-		},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name:           "team-adv",
-			ConnectorRefs:  []string{"github-cb"},
-			AdvancedConfig: &runtime.RawExtension{Raw: advConfigJSON},
-		},
-	}
-
-	// Team in the custom namespace (from advancedConfig)
-	team := newOwnedGithubTeam("asr-adv-team1", "custom-ns", "asr-adv", "default")
-
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team)
-
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-adv"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-
-	// Verify team was deleted from the custom namespace
-	var teamList repoguardv1.GithubTeamList
-	if err := fakeClient.List(context.Background(), &teamList, client.InNamespace("custom-ns")); err != nil {
-		t.Fatalf("failed to list teams: %v", err)
-	}
-	if len(teamList.Items) != 0 {
-		t.Errorf("expected 0 teams in custom-ns, got %d", len(teamList.Items))
-	}
-}
-
-func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 	asr := newDeletingASR("asr-many", "team-many", "default", nil, []string{"github-cb"})
 
 	// Create many teams and repos
-	objects := []client.Object{asr, cb}
+	var objects []client.Object
 	for i := 0; i < 10; i++ {
 		team := newOwnedGithubTeam(
 			fmt.Sprintf("asr-many-team-%d", i), "target-ns", "asr-many", "default")
@@ -1187,23 +719,16 @@ func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
 		objects = append(objects, repo)
 	}
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, objects...)
+	p, fakeClient := phaseForDeletion(scheme, objects...)
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-many"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
+	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
 	}
 
 	// Verify all teams deleted
 	var teamList repoguardv1.GithubTeamList
 	if err := fakeClient.List(context.Background(), &teamList,
-		client.InNamespace("target-ns"),
-		client.MatchingLabels{LabelSourceASR: "asr-many"},
+		client.MatchingLabels{pmapis.LabelSourceASR: "asr-many"},
 	); err != nil {
 		t.Fatalf("failed to list teams: %v", err)
 	}
@@ -1214,8 +739,7 @@ func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
 	// Verify all repos deleted
 	var repoList repoguardv1.GithubTeamRepositoryList
 	if err := fakeClient.List(context.Background(), &repoList,
-		client.InNamespace("target-ns"),
-		client.MatchingLabels{LabelSourceASR: "asr-many"},
+		client.MatchingLabels{pmapis.LabelSourceASR: "asr-many"},
 	); err != nil {
 		t.Fatalf("failed to list repos: %v", err)
 	}
@@ -1224,41 +748,7 @@ func TestDeletion_ManyTeamsAndRepos(t *testing.T) {
 	}
 }
 
-// --- Requeue on failure tests ---
-
-func TestDeletion_OrgCleanupFailureRequeues(t *testing.T) {
-	// This test verifies the reconciler's behavior when org cleanup encounters
-	// a requeue scenario (e.g., org not found returns a delayed requeue in the reconcile flow).
-	// In the actual cleanupOrgEntries, if an org is not found during the removeASRFromOrg call,
-	// it's treated as success (nothing to clean up). The requeue only happens via
-	// the reconcileOrganizations path for non-deletion flow.
-	//
-	// For the deletion flow, cleanupOrgEntries handles NotFound gracefully:
-	// removeASRFromOrg returns nil when the org is not found (client.IgnoreNotFound).
-	// This is correct and the test verifies it.
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-
-	asr := newDeletingASR("asr-requeue", "team-requeue", "default", nil, []string{"github-cb"})
-
-	// The cleanupOrgEntries lists all orgs cluster-wide, then for each one that has
-	// a contribution from this ASR, it removes the contribution.
-	// If there are no orgs or no contributions, it's a no-op.
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb)
-
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-requeue"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile should not error: %v", err)
-	}
-	if result.RequeueAfter != 0 || result.Requeue {
-		t.Errorf("unexpected requeue: %v", result)
-	}
-}
-
-// --- deleteStaleTeams with nil desiredNames tests ---
+// --- deleteStaleTeams / deleteStaleTeamRepos with nil desiredNames tests ---
 
 func TestDeleteStaleTeams_NilDesiredDeletesAll(t *testing.T) {
 	scheme := newDeletionScheme()
@@ -1310,10 +800,8 @@ func TestDeleteStaleTeamRepos_NilDesiredDeletesAll(t *testing.T) {
 
 func TestRemoveASRFromOrg_OrgNotFound_Succeeds(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 
-	r, _ := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, cb)
+	p, _ := phaseForDeletion(scheme)
 
 	// Call removeASRFromOrg with a non-existent org
 	org := &repoguardv1.GithubOrganization{
@@ -1323,16 +811,13 @@ func TestRemoveASRFromOrg_OrgNotFound_Succeeds(t *testing.T) {
 		},
 	}
 
-	err := r.removeASRFromOrg(context.Background(), org, "team-x")
-	if err != nil {
+	if err := p.removeASRFromOrg(context.Background(), org, "team-x"); err != nil {
 		t.Fatalf("removeASRFromOrg should succeed for non-existent org: %v", err)
 	}
 }
 
 func TestRemoveASRFromOrg_RemovesContributionsAndAnnotations(t *testing.T) {
 	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin"}
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
 
 	contrib := &orgContribution{
 		OwnerTeams:   []string{"team-rem"},
@@ -1341,10 +826,9 @@ func TestRemoveASRFromOrg_RemovesContributionsAndAnnotations(t *testing.T) {
 	}
 	org := newGithubOrgWithContributions("target-ns", "my-org", "team-rem", contrib)
 
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, cb, org)
+	p, fakeClient := phaseForDeletion(scheme, org)
 
-	err := r.removeASRFromOrg(context.Background(), org, "team-rem")
-	if err != nil {
+	if err := p.removeASRFromOrg(context.Background(), org, "team-rem"); err != nil {
 		t.Fatalf("removeASRFromOrg failed: %v", err)
 	}
 
@@ -1364,68 +848,5 @@ func TestRemoveASRFromOrg_RemovesContributionsAndAnnotations(t *testing.T) {
 	}
 	if _, ok := updatedOrg.Annotations[annotationASRDefaultTeamsPrefix+"team-rem"]; ok {
 		t.Error("expected per-ASR annotation to be removed")
-	}
-}
-
-// --- Timing/ordering verification ---
-
-func TestDeletion_CleanupOrderIsResourcesThenOrgsThenFinalizer(t *testing.T) {
-	// This test verifies the correct ordering: resources first, then org entries,
-	// then finalizer removal. We test this by ensuring all resources are gone
-	// and org entries are cleaned before the finalizer is removed.
-	scheme := newDeletionScheme()
-	capMapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-
-	cb := newConnectorBinding("github-cb", "default", capMapping, "target-ns")
-	asr := newDeletingASR("asr-order", "team-order", "default",
-		[]v1alpha1.Permission{
-			{Resource: "organization.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org", Capability: "ADMIN"},
-			{Resource: "repository.github.ccrn.cloudoperators.dev/v1/github.example.com/my-org/repo-a", Capability: "WRITE"},
-		},
-		[]string{"github-cb"},
-	)
-
-	team := newOwnedGithubTeam("asr-order-team", "target-ns", "asr-order", "default")
-	repo := newOwnedGithubTeamRepo("asr-order-repo", "target-ns", "asr-order", "default",
-		[]string{"repo-a"}, "push")
-	contrib := &orgContribution{OwnerTeams: []string{"team-order"}}
-	org := newGithubOrgWithContributions("target-ns", "my-org", "team-order", contrib)
-
-	r, fakeClient := reconcilerForDeletion(scheme, []v1alpha1.ConnectorBinding{*cb}, asr, cb, team, repo, org)
-
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "asr-order"},
-	})
-	if err != nil {
-		t.Fatalf("Reconcile failed: %v", err)
-	}
-
-	// After reconcile: verify everything is cleaned in order
-	// 1. Teams gone
-	var teamList repoguardv1.GithubTeamList
-	_ = fakeClient.List(context.Background(), &teamList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-order"})
-	if len(teamList.Items) != 0 {
-		t.Errorf("teams should be deleted first")
-	}
-
-	// 2. Repos gone
-	var repoList repoguardv1.GithubTeamRepositoryList
-	_ = fakeClient.List(context.Background(), &repoList, client.InNamespace("target-ns"), client.MatchingLabels{LabelSourceASR: "asr-order"})
-	if len(repoList.Items) != 0 {
-		t.Errorf("repos should be deleted")
-	}
-
-	// 3. Org entries removed
-	var updatedOrg repoguardv1.GithubOrganization
-	_ = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "target-ns", Name: "my-org"}, &updatedOrg)
-	if len(updatedOrg.Spec.OrganizationOwnerTeams) != 0 {
-		t.Errorf("org entries should be cleaned")
-	}
-
-	// 4. Finalizer removed last
-	var updatedASR v1alpha1.ApplicationSpecificRole
-	_ = fakeClient.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "asr-order"}, &updatedASR)
-	if controllerutil.ContainsFinalizer(&updatedASR, FinalizerGithub) {
-		t.Error("finalizer should be removed last")
 	}
 }

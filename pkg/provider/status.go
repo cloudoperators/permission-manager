@@ -88,7 +88,7 @@ func buildStatusPatch(name, namespace, providerKey string, status pmmeta.Provide
 	for _, t := range status.Targets {
 		target := map[string]interface{}{
 			"targetID":    t.TargetID,
-			"status":      t.Status,
+			"status":      string(t.Status),
 			"lastUpdated": t.LastUpdated.UTC().Format(metav1.RFC3339Micro),
 		}
 		if t.Message != "" {

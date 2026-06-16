@@ -14,6 +14,7 @@ import (
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
 
@@ -53,11 +54,11 @@ func TestReconcileTeamRepos_CreatesNewRepos(t *testing.T) {
 	if repo.Spec.Repository[0] != "repo-a" || repo.Spec.Repository[1] != "repo-b" {
 		t.Errorf("expected repos [repo-a, repo-b], got %v", repo.Spec.Repository)
 	}
-	if repo.Labels[LabelSourceASR] != "test-asr" {
-		t.Errorf("expected source-asr label, got %q", repo.Labels[LabelSourceASR])
+	if repo.Labels[pmapis.LabelSourceASR] != "test-asr" {
+		t.Errorf("expected source-asr label, got %q", repo.Labels[pmapis.LabelSourceASR])
 	}
-	if repo.Labels[LabelManagedByKey] != LabelManagedByGithub {
-		t.Errorf("expected managed-by=github, got %q", repo.Labels[LabelManagedByKey])
+	if repo.Labels[pmapis.LabelManagedByKey] != pmapis.ManagedByGithub {
+		t.Errorf("expected managed-by=github, got %q", repo.Labels[pmapis.LabelManagedByKey])
 	}
 }
 
@@ -71,7 +72,7 @@ func TestReconcileTeamRepos_UpdatesExistingRepo(t *testing.T) {
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{
@@ -120,7 +121,7 @@ func TestReconcileTeamRepos_RemovesRepoFromList(t *testing.T) {
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{
@@ -172,7 +173,7 @@ func TestReconcileTeamRepos_DeletesCRWhenEmpty(t *testing.T) {
 			Name:      "asr-test-github-example-com-cc-push",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{
@@ -219,7 +220,7 @@ func TestReconcileTeamRepos_DeletesStaleRepos(t *testing.T) {
 			Name:      "asr-test-github-example-com-cc-admin",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "test-asr",
+				pmapis.LabelSourceASR: "test-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{
@@ -272,7 +273,7 @@ func TestReconcileTeamRepos_DoesNotDeleteReposFromOtherASRs(t *testing.T) {
 			Name:      "asr-other-github-example-com-cc-push",
 			Namespace: "pm-system",
 			Labels: map[string]string{
-				LabelSourceASR: "other-asr",
+				pmapis.LabelSourceASR: "other-asr",
 			},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{
@@ -350,7 +351,7 @@ func TestDeleteStaleTeamRepos_NilDesiredNamesDeletesAll(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-repo1",
 			Namespace: "pm-system",
-			Labels:    map[string]string{LabelSourceASR: "test-asr"},
+			Labels:    map[string]string{pmapis.LabelSourceASR: "test-asr"},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{Repository: []string{"r1"}, Permission: repoguardv1.GithubTeamPermission("push")},
 	}
@@ -360,7 +361,7 @@ func TestDeleteStaleTeamRepos_NilDesiredNamesDeletesAll(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "asr-test-repo2",
 			Namespace: "pm-system",
-			Labels:    map[string]string{LabelSourceASR: "test-asr"},
+			Labels:    map[string]string{pmapis.LabelSourceASR: "test-asr"},
 		},
 		Spec: repoguardv1.GithubTeamRepositorySpec{Repository: []string{"r2"}, Permission: repoguardv1.GithubTeamPermission("admin")},
 	}

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -114,7 +115,7 @@ func newSSAInterceptingClient(t *testing.T, scheme *runtime.Scheme, objs ...clie
 								ts.TargetID = id
 							}
 							if s, ok := targetMap["status"].(string); ok {
-								ts.Status = s
+								ts.Status = pmmeta.TargetStatusValue(s)
 							}
 							if m, ok := targetMap["message"].(string); ok {
 								ts.Message = m
