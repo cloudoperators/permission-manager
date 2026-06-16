@@ -10,14 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
-	"github.com/cloudoperators/permission-manager/pkg/provider"
 )
-
-// ProviderGithub is the provider name for GitHub ConnectorBindings.
-const ProviderGithub = provider.ProviderGithub
-
-// FinalizerGithub is the finalizer added to ASRs managed by the GitHub provider.
-const FinalizerGithub = "permission-manager.cloudoperators.dev/github"
 
 // GithubConnectorDefinition represents the definition field of a GitHub ConnectorBinding.
 type GithubConnectorDefinition struct {

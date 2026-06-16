@@ -444,7 +444,7 @@ func assertASRStatusOneOf(t *testing.T, ctx context.Context, mgmtClient client.C
 		for _, entry := range k8sProvider.Targets {
 			if entry.TargetID == clusterName {
 				for _, expected := range expectedStatuses {
-					if entry.Status == expected {
+					if string(entry.Status) == expected {
 						return true, nil
 					}
 				}

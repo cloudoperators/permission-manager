@@ -228,10 +228,10 @@ func (p *Phase) ensureProviderStatus(asr *v1alpha1.ApplicationSpecificRole, stat
 		for _, s := range statuses {
 			ts := pmmeta.TargetStatus{TargetID: s.name}
 			if s.err != nil {
-				ts.Status = string(pmmeta.TargetStatusError)
+				ts.Status = pmmeta.TargetStatusError
 				ts.Message = s.err.Error()
 			} else {
-				ts.Status = string(pmmeta.TargetStatusReady)
+				ts.Status = pmmeta.TargetStatusReady
 			}
 			targets = pmmeta.SetTargetStatus(targets, ts)
 		}
