@@ -47,46 +47,30 @@ func (p *Phase) reconcileOrganizations(
 	// Collect org-level contributions from ASR permissions
 	orgContribs := make(map[string]*orgContribution) // keyed by org name
 
-	for _, perm := range asr.Spec.Permissions {
-		resource := perm.Resource
-		// Ensure the resource has the urn:ccrn: prefix for parsing
-		if !strings.HasPrefix(resource, urnCCRNPrefix) {
-			resource = urnCCRNPrefix + resource
-		}
+	teamName := asr.Spec.Name
+	for _, p := range parseGithubPerms(asr) {
+		gh := p.gh
 
-		parsed, err := ccrn.Parse(resource)
-		if err != nil || !parsed.IsGithub() {
-			continue
-		}
-
-		gh := parsed.Github
-
-		// Map capability to permission using ConnectorBinding's capabilityMapping
-		mappedPermission, ok := cbDef.CapabilityMapping[perm.Capability]
+		mappedPermission, ok := cbDef.CapabilityMapping[p.capability]
 		if !ok {
-			log.V(1).Info("capability not in mapping, skipping", "capability", perm.Capability)
+			log.V(1).Info("capability not in mapping, skipping", "capability", p.capability)
 			continue
 		}
-
-		teamName := asr.Spec.Name
 
 		switch gh.ResourceType {
 		case ccrn.GithubResourceTypeOrganization:
-			// Organization CCRN: add to organizationOwnerTeams only if mapped permission is "admin"
+			// Org owner only when the capability maps to "admin".
 			if mappedPermission == "admin" {
 				contrib := getOrCreateContrib(orgContribs, gh.Org)
 				contrib.OwnerTeams = appendUniqueString(contrib.OwnerTeams, teamName)
 			}
 		case ccrn.GithubResourceTypeRepositoryType:
-			// repository_type CCRN: add to default teams based on visibility
-			visibility := gh.Visibility
 			teamEntry := repoguardv1.GithubTeamWithPermission{
 				Team:       teamName,
 				Permission: repoguardv1.GithubTeamPermission(mappedPermission),
 			}
-
 			contrib := getOrCreateContrib(orgContribs, gh.Org)
-			switch visibility {
+			switch gh.Visibility {
 			case "public":
 				contrib.PublicTeams = appendUniqueTeam(contrib.PublicTeams, teamEntry)
 			case "private":
@@ -95,7 +79,7 @@ func (p *Phase) reconcileOrganizations(
 				contrib.PublicTeams = appendUniqueTeam(contrib.PublicTeams, teamEntry)
 				contrib.PrivateTeams = appendUniqueTeam(contrib.PrivateTeams, teamEntry)
 			default:
-				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", visibility, "resource", perm.Resource)
+				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", gh.Visibility, "org", gh.Org)
 			}
 		}
 		// Non-wildcard repository CCRNs are handled by a different reconciler (team-repository)

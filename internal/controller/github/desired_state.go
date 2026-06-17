@@ -60,6 +60,30 @@ type repoKey struct {
 	permission string
 }
 
+// githubPerm is a parsed, github-scoped permission from an ASR.
+type githubPerm struct {
+	gh         *ccrn.GithubResource
+	capability string
+}
+
+// parseGithubPerms parses the ASR's permissions and keeps only the github ones.
+// The urn:ccrn: prefix is prepended when missing so bare CCRNs still parse.
+func parseGithubPerms(asr *v1alpha1.ApplicationSpecificRole) []githubPerm {
+	var perms []githubPerm
+	for _, perm := range asr.Spec.Permissions {
+		resource := perm.Resource
+		if !strings.HasPrefix(resource, urnCCRNPrefix) {
+			resource = urnCCRNPrefix + resource
+		}
+		parsed, err := ccrn.Parse(resource)
+		if err != nil || !parsed.IsGithub() {
+			continue
+		}
+		perms = append(perms, githubPerm{gh: parsed.Github, capability: perm.Capability})
+	}
+	return perms
+}
+
 // BuildDesiredState parses the ASR permissions and groups them into desired
 // GithubTeam and GithubTeamRepository CRs.
 //
@@ -76,45 +100,30 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 	unmappedSeen := make(map[string]struct{})
 	var unmappedCaps []string
 
-	for _, perm := range asr.Spec.Permissions {
-		resource := perm.Resource
-		// Ensure the resource has the urn:ccrn: prefix for parsing
-		if !strings.HasPrefix(resource, urnCCRNPrefix) {
-			resource = urnCCRNPrefix + resource
-		}
+	for _, p := range parseGithubPerms(asr) {
+		gh := p.gh
 
-		parsed, err := ccrn.Parse(resource)
-		if err != nil || !parsed.IsGithub() {
-			continue
-		}
-
-		gh := parsed.Github
-
-		// Skip wildcard/repository_type CCRNs - they are for org patching
+		// repository_type and wildcard repository CCRNs are handled by org patching.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepositoryType {
 			continue
 		}
-		// Also skip wildcard repository CCRNs
 		if gh.ResourceType == ccrn.GithubResourceTypeRepository && gh.Repo == "*" {
 			continue
 		}
 
-		// All valid CCRNs contribute to team creation
-		tk := teamKey{instance: gh.Instance, org: gh.Org}
-		teams[tk] = struct{}{}
+		// Every non-wildcard github CCRN contributes a team.
+		teams[teamKey{instance: gh.Instance, org: gh.Org}] = struct{}{}
 
-		// Organization CCRNs only create teams, NOT team repositories
+		// Organization CCRNs create only a team, no team repository.
 		if gh.ResourceType == ccrn.GithubResourceTypeOrganization {
 			continue
 		}
 
-		// Repository CCRNs aggregate into GithubTeamRepository
-		mappedPermission := mapCapability(perm.Capability, capabilityMapping)
+		mappedPermission := mapCapability(p.capability, capabilityMapping)
 		if mappedPermission == "" {
-			// Track unmapped capability (deduplicated)
-			if _, seen := unmappedSeen[perm.Capability]; !seen {
-				unmappedSeen[perm.Capability] = struct{}{}
-				unmappedCaps = append(unmappedCaps, perm.Capability)
+			if _, seen := unmappedSeen[p.capability]; !seen {
+				unmappedSeen[p.capability] = struct{}{}
+				unmappedCaps = append(unmappedCaps, p.capability)
 			}
 			continue
 		}
