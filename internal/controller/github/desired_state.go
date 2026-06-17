@@ -4,7 +4,8 @@
 package github
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
@@ -144,11 +145,11 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 	for k := range teams {
 		teamKeys = append(teamKeys, k)
 	}
-	sort.Slice(teamKeys, func(i, j int) bool {
-		if teamKeys[i].instance != teamKeys[j].instance {
-			return teamKeys[i].instance < teamKeys[j].instance
+	slices.SortFunc(teamKeys, func(a, b teamKey) int {
+		if c := cmp.Compare(a.instance, b.instance); c != 0 {
+			return c
 		}
-		return teamKeys[i].org < teamKeys[j].org
+		return cmp.Compare(a.org, b.org)
 	})
 
 	for _, tk := range teamKeys {
@@ -164,21 +165,20 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 	for k := range repos {
 		repoKeys = append(repoKeys, k)
 	}
-	sort.Slice(repoKeys, func(i, j int) bool {
-		if repoKeys[i].instance != repoKeys[j].instance {
-			return repoKeys[i].instance < repoKeys[j].instance
+	slices.SortFunc(repoKeys, func(a, b repoKey) int {
+		if c := cmp.Compare(a.instance, b.instance); c != 0 {
+			return c
 		}
-		if repoKeys[i].org != repoKeys[j].org {
-			return repoKeys[i].org < repoKeys[j].org
+		if c := cmp.Compare(a.org, b.org); c != 0 {
+			return c
 		}
-		return repoKeys[i].permission < repoKeys[j].permission
+		return cmp.Compare(a.permission, b.permission)
 	})
 
 	for _, rk := range repoKeys {
 		repositories := repos[rk]
-		// Deduplicate and sort repos
-		repositories = deduplicateStrings(repositories)
-		sort.Strings(repositories)
+		slices.Sort(repositories)
+		repositories = slices.Compact(repositories)
 
 		state.TeamRepos = append(state.TeamRepos, DesiredTeamRepo{
 			Instance:     rk.instance,
@@ -200,19 +200,6 @@ func mapCapability(capability string, capabilityMapping map[string]string) strin
 		return ""
 	}
 	return capabilityMapping[capability]
-}
-
-// deduplicateStrings removes duplicates from a string slice.
-func deduplicateStrings(ss []string) []string {
-	seen := make(map[string]struct{}, len(ss))
-	result := make([]string, 0, len(ss))
-	for _, s := range ss {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			result = append(result, s)
-		}
-	}
-	return result
 }
 
 // BuildLabels returns the standard labels for a generated CR.

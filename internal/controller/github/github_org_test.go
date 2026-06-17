@@ -869,7 +869,7 @@ func TestHelpers_AppendUniqueString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := appendUniqueString(tt.slice, tt.item)
+			result := appendUnique(tt.slice, tt.item)
 			if len(result) != tt.expected {
 				t.Errorf("expected length %d, got %d", tt.expected, len(result))
 			}
@@ -883,26 +883,26 @@ func TestHelpers_AppendUniqueTeam(t *testing.T) {
 	}
 
 	// Different team name
-	result := appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-b", Permission: repoguardv1.GithubTeamPermission("push")})
+	result := appendUnique(existing, repoguardv1.GithubTeamWithPermission{Team: "team-b", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 2 {
 		t.Errorf("expected 2 teams, got %d", len(result))
 	}
 
 	// Same team, same permission (duplicate)
-	result = appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
+	result = appendUnique(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 1 {
 		t.Errorf("expected 1 team (no duplicate), got %d", len(result))
 	}
 
 	// Same team, different permission
-	result = appendUniqueTeam(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("pull")})
+	result = appendUnique(existing, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("pull")})
 	if len(result) != 2 {
 		t.Errorf("expected 2 teams (different permission), got %d", len(result))
 	}
 }
 
 func TestHelpers_RemoveString(t *testing.T) {
-	result := removeString([]string{"a", "b", "c"}, "b")
+	result := remove([]string{"a", "b", "c"}, "b")
 	if len(result) != 2 {
 		t.Errorf("expected 2 items, got %d", len(result))
 	}
@@ -913,7 +913,7 @@ func TestHelpers_RemoveString(t *testing.T) {
 	}
 
 	// Remove non-existent
-	result = removeString([]string{"a", "b"}, "z")
+	result = remove([]string{"a", "b"}, "z")
 	if len(result) != 2 {
 		t.Errorf("expected 2 items (nothing removed), got %d", len(result))
 	}
@@ -926,7 +926,7 @@ func TestHelpers_RemoveTeam(t *testing.T) {
 		{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("admin")},
 	}
 
-	result := removeTeam(teams, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
+	result := remove(teams, repoguardv1.GithubTeamWithPermission{Team: "team-a", Permission: repoguardv1.GithubTeamPermission("push")})
 	if len(result) != 2 {
 		t.Fatalf("expected 2 teams, got %d", len(result))
 	}
