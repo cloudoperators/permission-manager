@@ -26,15 +26,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pmv1 "github.com/cloudoperators/permission-manager/api/v1alpha1"
-	greenhouse "github.com/cloudoperators/permission-manager/pkg/greenhouse"
 )
 
-// testScheme registers all types needed by the E2E test clients (core k8s + PM CRDs + Greenhouse).
+// testScheme registers all types needed by the E2E test clients (core k8s + PM CRDs).
 var testScheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(pmv1.AddToScheme(s))
-	utilruntime.Must(greenhouse.AddToScheme(s))
 	return s
 }()
 
