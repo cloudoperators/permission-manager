@@ -64,7 +64,6 @@ import (
 	pmmetrics "github.com/cloudoperators/permission-manager/pkg/metrics"
 
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
-	greenhousev1alpha2 "github.com/cloudoperators/greenhouse/api/v1alpha2"
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -80,7 +79,6 @@ func init() {
 
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	utilruntime.Must(greenhousev1alpha1.AddToScheme(scheme))
-	utilruntime.Must(greenhousev1alpha2.AddToScheme(scheme))
 	utilruntime.Must(repoguardv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 
