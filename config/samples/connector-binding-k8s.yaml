@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Example: ConnectorBinding for Kubernetes provider
+# Links ASRs to the Kubernetes RBAC provider with capability mapping.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ConnectorBinding
+metadata:
+  name: k8s-connector
+spec:
+  name: Kubernetes Production
+  provider: kubernetes
+  definition:
+    capabilityMapping:
+      READ: "get,list,watch"
+      WRITE: "create,update,patch,delete"
+      OPERATE: "exec,port-forward,proxy"
+      MANAGE: "bind,escalate,impersonate"
+      "*": "*"
