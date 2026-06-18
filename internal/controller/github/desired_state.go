@@ -4,7 +4,8 @@
 package github
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
@@ -60,6 +61,30 @@ type repoKey struct {
 	permission string
 }
 
+// githubPerm is a parsed, github-scoped permission from an ASR.
+type githubPerm struct {
+	gh         *ccrn.GithubResource
+	capability string
+}
+
+// parseGithubPerms parses the ASR's permissions and keeps only the github ones.
+// The urn:ccrn: prefix is prepended when missing so bare CCRNs still parse.
+func parseGithubPerms(asr *v1alpha1.ApplicationSpecificRole) []githubPerm {
+	var perms []githubPerm
+	for _, perm := range asr.Spec.Permissions {
+		resource := perm.Resource
+		if !strings.HasPrefix(resource, urnCCRNPrefix) {
+			resource = urnCCRNPrefix + resource
+		}
+		parsed, err := ccrn.Parse(resource)
+		if err != nil || !parsed.IsGithub() {
+			continue
+		}
+		perms = append(perms, githubPerm{gh: parsed.Github, capability: perm.Capability})
+	}
+	return perms
+}
+
 // BuildDesiredState parses the ASR permissions and groups them into desired
 // GithubTeam and GithubTeamRepository CRs.
 //
@@ -76,45 +101,30 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 	unmappedSeen := make(map[string]struct{})
 	var unmappedCaps []string
 
-	for _, perm := range asr.Spec.Permissions {
-		resource := perm.Resource
-		// Ensure the resource has the urn:ccrn: prefix for parsing
-		if !strings.HasPrefix(resource, urnCCRNPrefix) {
-			resource = urnCCRNPrefix + resource
-		}
+	for _, p := range parseGithubPerms(asr) {
+		gh := p.gh
 
-		parsed, err := ccrn.Parse(resource)
-		if err != nil || !parsed.IsGithub() {
-			continue
-		}
-
-		gh := parsed.Github
-
-		// Skip wildcard/repository_type CCRNs - they are for org patching
+		// repository_type and wildcard repository CCRNs are handled by org patching.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepositoryType {
 			continue
 		}
-		// Also skip wildcard repository CCRNs
 		if gh.ResourceType == ccrn.GithubResourceTypeRepository && gh.Repo == "*" {
 			continue
 		}
 
-		// All valid CCRNs contribute to team creation
-		tk := teamKey{instance: gh.Instance, org: gh.Org}
-		teams[tk] = struct{}{}
+		// Every non-wildcard github CCRN contributes a team.
+		teams[teamKey{instance: gh.Instance, org: gh.Org}] = struct{}{}
 
-		// Organization CCRNs only create teams, NOT team repositories
+		// Organization CCRNs create only a team, no team repository.
 		if gh.ResourceType == ccrn.GithubResourceTypeOrganization {
 			continue
 		}
 
-		// Repository CCRNs aggregate into GithubTeamRepository
-		mappedPermission := mapCapability(perm.Capability, capabilityMapping)
+		mappedPermission := mapCapability(p.capability, capabilityMapping)
 		if mappedPermission == "" {
-			// Track unmapped capability (deduplicated)
-			if _, seen := unmappedSeen[perm.Capability]; !seen {
-				unmappedSeen[perm.Capability] = struct{}{}
-				unmappedCaps = append(unmappedCaps, perm.Capability)
+			if _, seen := unmappedSeen[p.capability]; !seen {
+				unmappedSeen[p.capability] = struct{}{}
+				unmappedCaps = append(unmappedCaps, p.capability)
 			}
 			continue
 		}
@@ -135,11 +145,11 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 	for k := range teams {
 		teamKeys = append(teamKeys, k)
 	}
-	sort.Slice(teamKeys, func(i, j int) bool {
-		if teamKeys[i].instance != teamKeys[j].instance {
-			return teamKeys[i].instance < teamKeys[j].instance
+	slices.SortFunc(teamKeys, func(a, b teamKey) int {
+		if c := cmp.Compare(a.instance, b.instance); c != 0 {
+			return c
 		}
-		return teamKeys[i].org < teamKeys[j].org
+		return cmp.Compare(a.org, b.org)
 	})
 
 	for _, tk := range teamKeys {
@@ -155,21 +165,20 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 	for k := range repos {
 		repoKeys = append(repoKeys, k)
 	}
-	sort.Slice(repoKeys, func(i, j int) bool {
-		if repoKeys[i].instance != repoKeys[j].instance {
-			return repoKeys[i].instance < repoKeys[j].instance
+	slices.SortFunc(repoKeys, func(a, b repoKey) int {
+		if c := cmp.Compare(a.instance, b.instance); c != 0 {
+			return c
 		}
-		if repoKeys[i].org != repoKeys[j].org {
-			return repoKeys[i].org < repoKeys[j].org
+		if c := cmp.Compare(a.org, b.org); c != 0 {
+			return c
 		}
-		return repoKeys[i].permission < repoKeys[j].permission
+		return cmp.Compare(a.permission, b.permission)
 	})
 
 	for _, rk := range repoKeys {
 		repositories := repos[rk]
-		// Deduplicate and sort repos
-		repositories = deduplicateStrings(repositories)
-		sort.Strings(repositories)
+		slices.Sort(repositories)
+		repositories = slices.Compact(repositories)
 
 		state.TeamRepos = append(state.TeamRepos, DesiredTeamRepo{
 			Instance:     rk.instance,
@@ -191,19 +200,6 @@ func mapCapability(capability string, capabilityMapping map[string]string) strin
 		return ""
 	}
 	return capabilityMapping[capability]
-}
-
-// deduplicateStrings removes duplicates from a string slice.
-func deduplicateStrings(ss []string) []string {
-	seen := make(map[string]struct{}, len(ss))
-	result := make([]string, 0, len(ss))
-	for _, s := range ss {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			result = append(result, s)
-		}
-	}
-	return result
 }
 
 // BuildLabels returns the standard labels for a generated CR.

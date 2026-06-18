@@ -6,7 +6,6 @@ package github
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,39 +29,9 @@ func computeProviderStatus(
 		return pmmeta.DegradedProviderStatus(fmt.Sprintf("unmapped capabilities: %v", unmappedCaps))
 	}
 
-	// Collect all unique (instance, org) pairs from the desired state.
-	// These represent all targets the provider should report on.
-	type instanceOrg struct {
-		instance string
-		org      string
-	}
-	seen := make(map[instanceOrg]struct{})
-	var targets []instanceOrg
-
-	for _, dt := range desired.Teams {
-		key := instanceOrg{instance: dt.Instance, org: dt.Org}
-		if _, ok := seen[key]; !ok {
-			seen[key] = struct{}{}
-			targets = append(targets, key)
-		}
-	}
-	for _, dtr := range desired.TeamRepos {
-		key := instanceOrg{instance: dtr.Instance, org: dtr.Org}
-		if _, ok := seen[key]; !ok {
-			seen[key] = struct{}{}
-			targets = append(targets, key)
-		}
-	}
-
-	// Sort targets for deterministic output
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].instance != targets[j].instance {
-			return targets[i].instance < targets[j].instance
-		}
-		return targets[i].org < targets[j].org
-	})
-
-	if len(targets) == 0 {
+	// desired.Teams is already deduped and sorted by (instance, org), and every team-repo
+	// target also has a team, so it is the complete set of targets to report on.
+	if len(desired.Teams) == 0 {
 		return pmmeta.ProviderStatusFromTargets(nil)
 	}
 
@@ -85,19 +54,15 @@ func computeProviderStatus(
 		teamStatuses[team.Name] = team.Status.TeamStatus
 	}
 
-	// Compute per-target status
 	var targetStatuses []pmmeta.TargetStatus
-	for _, t := range targets {
-		targetID := SanitizeInstance(t.instance) + "/" + t.org
+	for _, dt := range desired.Teams {
+		targetID := SanitizeInstance(dt.Instance) + "/" + dt.Org
 
-		// Find the GithubTeam CR for this instance/org
-		crName := TeamCRName(asr.Name, t.instance, t.org)
-		teamStatus, found := teamStatuses[crName]
+		teamStatus, found := teamStatuses[dt.CRName]
 
 		var status pmmeta.TargetStatusValue
 		var message string
 		if !found {
-			// Team CR doesn't exist yet or org is missing
 			status = pmmeta.TargetStatusPending
 			message = "GithubTeam CR not found"
 		} else {
