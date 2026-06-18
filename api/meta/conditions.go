@@ -56,19 +56,19 @@ func UnknownCondition(t ConditionType, reason ConditionReason, msg string) metav
 // SetCondition upserts a condition into the slice.
 // If a condition of the same type already exists, it is updated.
 // LastTransitionTime is only updated when Status changes.
-func SetCondition(conditions []metav1.Condition, new metav1.Condition) []metav1.Condition {
+func SetCondition(conditions []metav1.Condition, incoming metav1.Condition) []metav1.Condition {
 	for i, existing := range conditions {
-		if existing.Type != new.Type {
+		if existing.Type != incoming.Type {
 			continue
 		}
-		if existing.Status == new.Status {
+		if existing.Status == incoming.Status {
 			// preserve the original transition time when status hasn't changed
-			new.LastTransitionTime = existing.LastTransitionTime
+			incoming.LastTransitionTime = existing.LastTransitionTime
 		}
-		conditions[i] = new
+		conditions[i] = incoming
 		return conditions
 	}
-	return append(conditions, new)
+	return append(conditions, incoming)
 }
 
 // RemoveCondition removes the condition with the given type from the slice.

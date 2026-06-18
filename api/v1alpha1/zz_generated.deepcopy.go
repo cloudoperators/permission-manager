@@ -21,6 +21,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"github.com/cloudoperators/permission-manager/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -134,7 +135,7 @@ func (in *ApplicationSpecificRoleStatus) DeepCopyInto(out *ApplicationSpecificRo
 	*out = *in
 	if in.Providers != nil {
 		in, out := &in.Providers, &out.Providers
-		*out = make(map[string]ProviderStatus, len(*in))
+		*out = make(map[meta.ProviderType]meta.ProviderStatus, len(*in))
 		for key, val := range *in {
 			(*out)[key] = *val.DeepCopy()
 		}

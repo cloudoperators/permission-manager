@@ -58,10 +58,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+	"github.com/cloudoperators/permission-manager/internal/audit"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
 	pmcontroller "github.com/cloudoperators/permission-manager/internal/controller"
-	"github.com/cloudoperators/permission-manager/pkg/audit"
-	pmmetrics "github.com/cloudoperators/permission-manager/pkg/metrics"
+	pmmetrics "github.com/cloudoperators/permission-manager/internal/metrics"
 
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
@@ -143,7 +143,7 @@ func main() {
 		TLSOpts: webhookTLSOpts,
 	}
 
-	if len(webhookCertPath) > 0 {
+	if webhookCertPath != "" {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
 			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
 
@@ -164,7 +164,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	if len(metricsCertPath) > 0 {
+	if metricsCertPath != "" {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
 

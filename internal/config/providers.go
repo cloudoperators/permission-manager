@@ -5,6 +5,7 @@ package config
 
 import (
 	"context"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,9 +42,7 @@ func NewProviderConfig(ctx context.Context, c client.Reader, namespace string) (
 		return nil, err
 	}
 	data := make(map[string]string, len(cm.Data))
-	for k, v := range cm.Data {
-		data[k] = v
-	}
+	maps.Copy(data, cm.Data)
 	return &ProviderConfig{data: data}, nil
 }
 
