@@ -7,7 +7,6 @@ package controller
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
@@ -24,11 +23,11 @@ import (
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+	"github.com/cloudoperators/permission-manager/internal/audit"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
-	github "github.com/cloudoperators/permission-manager/internal/controller/github"
-	pmk8s "github.com/cloudoperators/permission-manager/internal/controller/k8s"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
-	"github.com/cloudoperators/permission-manager/pkg/audit"
+	"github.com/cloudoperators/permission-manager/internal/provider/github"
+	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
 )
 
 // ASRReconciler is the single controller for ApplicationSpecificRole.
@@ -64,7 +63,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	sharedInformer, ok := clusterInformer.(toolscache.SharedIndexInformer)
 	if !ok {
-		return fmt.Errorf("cluster informer does not implement SharedIndexInformer")
+		return errors.New("cluster informer does not implement SharedIndexInformer")
 	}
 	r.k8sPhase = pmk8s.New(r.Client, r.AuditLog, r.Log, sharedInformer.GetStore())
 	r.ghPhase = github.New(r.Client, r.AuditLog, r.Log)

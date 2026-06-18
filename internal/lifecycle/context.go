@@ -48,7 +48,7 @@ type dummyEventRecorder struct {
 	logger logr.Logger
 }
 
-func (d dummyEventRecorder) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
+func (d dummyEventRecorder) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...any) {
 	d.logger.Info(msgEventDiscarded, "type", eventtype, "reason", reason, "action", action, "note", note)
 }
 
