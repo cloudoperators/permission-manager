@@ -219,6 +219,7 @@ linters:
     rules:
       - linters:
           - bodyclose
+          - errcheck
           - revive
         path: _test\.go
       # It is idiomatic Go to reuse the name 'err' with ':=' for subsequent errors.
