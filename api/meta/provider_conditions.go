@@ -136,32 +136,31 @@ func GetTargetStatus(targets []TargetStatus, targetID string) *TargetStatus {
 // SetProviderStatus upserts a ProviderStatus into the providers map by providerKey.
 // LastReconciled is only updated when Ready, Message, or Targets change.
 // Allocates the map if nil.
-func SetProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType, incoming ProviderStatus) map[string]ProviderStatus {
+func SetProviderStatus(providers map[ProviderType]ProviderStatus, providerKey ProviderType, incoming ProviderStatus) map[ProviderType]ProviderStatus {
 	if providers == nil {
-		providers = make(map[string]ProviderStatus)
+		providers = make(map[ProviderType]ProviderStatus)
 	}
-	key := string(providerKey)
-	if existing, ok := providers[key]; ok {
+	if existing, ok := providers[providerKey]; ok {
 		if existing.Ready == incoming.Ready && existing.Message == incoming.Message && targetsSemanticEqual(existing.Targets, incoming.Targets) {
 			incoming.LastReconciled = existing.LastReconciled
 		}
 	}
-	providers[key] = incoming
+	providers[providerKey] = incoming
 	return providers
 }
 
 // RemoveProviderStatus removes the provider entry with the given key from the map.
-func RemoveProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType) map[string]ProviderStatus {
-	delete(providers, string(providerKey))
+func RemoveProviderStatus(providers map[ProviderType]ProviderStatus, providerKey ProviderType) map[ProviderType]ProviderStatus {
+	delete(providers, providerKey)
 	return providers
 }
 
 // GetProviderStatus returns a pointer to the ProviderStatus for the given key, or nil.
-func GetProviderStatus(providers map[string]ProviderStatus, providerKey ProviderType) *ProviderStatus {
+func GetProviderStatus(providers map[ProviderType]ProviderStatus, providerKey ProviderType) *ProviderStatus {
 	if providers == nil {
 		return nil
 	}
-	ps, ok := providers[string(providerKey)]
+	ps, ok := providers[providerKey]
 	if !ok {
 		return nil
 	}

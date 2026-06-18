@@ -48,12 +48,6 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// Deprecated: use pmmeta.TargetStatus from api/meta directly.
-type TargetStatus = pmmeta.TargetStatus
-
-// Deprecated: use pmmeta.ProviderStatus from api/meta directly.
-type ProviderStatus = pmmeta.ProviderStatus
-
 // ApplicationSpecificRoleSpec defines the desired state of ApplicationSpecificRole
 type ApplicationSpecificRoleSpec struct {
 	// Name is the unique slugified identifier used as metadata.name.
@@ -128,9 +122,8 @@ type Approver struct {
 // ApplicationSpecificRoleStatus defines the observed state of ApplicationSpecificRole.
 type ApplicationSpecificRoleStatus struct {
 	// Providers maps provider type to its reconciliation status.
-	// TODO: migrate key to pmmeta.ProviderType and values to pmmeta.ProviderStatus directly once github provider is migrated to api/meta.
 	// +optional
-	Providers map[string]ProviderStatus `json:"providers,omitempty"`
+	Providers map[pmmeta.ProviderType]pmmeta.ProviderStatus `json:"providers,omitempty"`
 
 	// Conditions represent the latest available observations of the ASR's state.
 	// +optional
@@ -184,5 +177,8 @@ func (asr *ApplicationSpecificRole) RemoveCondition(t pmmeta.ConditionType) {
 }
 
 func init() {
-	SchemeBuilder.Register(&ApplicationSpecificRole{}, &ApplicationSpecificRoleList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &ApplicationSpecificRole{}, &ApplicationSpecificRoleList{})
+		return nil
+	})
 }

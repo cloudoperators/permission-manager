@@ -96,5 +96,8 @@ type ConnectorBindingList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&ConnectorBinding{}, &ConnectorBindingList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &ConnectorBinding{}, &ConnectorBindingList{})
+		return nil
+	})
 }
