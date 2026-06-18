@@ -10,7 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/cloudoperators/permission-manager/pkg/audit"
+	"github.com/cloudoperators/permission-manager/internal/audit"
 )
 
 func auditRef(kind string, obj client.Object) audit.ResourceRef {
