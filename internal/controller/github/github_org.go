@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
@@ -47,55 +46,39 @@ func (p *Phase) reconcileOrganizations(
 	// Collect org-level contributions from ASR permissions
 	orgContribs := make(map[string]*orgContribution) // keyed by org name
 
-	for _, perm := range asr.Spec.Permissions {
-		resource := perm.Resource
-		// Ensure the resource has the urn:ccrn: prefix for parsing
-		if !strings.HasPrefix(resource, urnCCRNPrefix) {
-			resource = urnCCRNPrefix + resource
-		}
+	teamName := asr.Spec.Name
+	for _, p := range parseGithubPerms(asr) {
+		gh := p.gh
 
-		parsed, err := ccrn.Parse(resource)
-		if err != nil || !parsed.IsGithub() {
-			continue
-		}
-
-		gh := parsed.Github
-
-		// Map capability to permission using ConnectorBinding's capabilityMapping
-		mappedPermission, ok := cbDef.CapabilityMapping[perm.Capability]
+		mappedPermission, ok := cbDef.CapabilityMapping[p.capability]
 		if !ok {
-			log.V(1).Info("capability not in mapping, skipping", "capability", perm.Capability)
+			log.V(1).Info("capability not in mapping, skipping", "capability", p.capability)
 			continue
 		}
-
-		teamName := asr.Spec.Name
 
 		switch gh.ResourceType {
 		case ccrn.GithubResourceTypeOrganization:
-			// Organization CCRN: add to organizationOwnerTeams only if mapped permission is "admin"
+			// Org owner only when the capability maps to "admin".
 			if mappedPermission == "admin" {
 				contrib := getOrCreateContrib(orgContribs, gh.Org)
-				contrib.OwnerTeams = appendUniqueString(contrib.OwnerTeams, teamName)
+				contrib.OwnerTeams = appendUnique(contrib.OwnerTeams, teamName)
 			}
 		case ccrn.GithubResourceTypeRepositoryType:
-			// repository_type CCRN: add to default teams based on visibility
-			visibility := gh.Visibility
 			teamEntry := repoguardv1.GithubTeamWithPermission{
 				Team:       teamName,
 				Permission: repoguardv1.GithubTeamPermission(mappedPermission),
 			}
-
 			contrib := getOrCreateContrib(orgContribs, gh.Org)
-			switch visibility {
+			switch gh.Visibility {
 			case "public":
-				contrib.PublicTeams = appendUniqueTeam(contrib.PublicTeams, teamEntry)
+				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
 			case "private":
-				contrib.PrivateTeams = appendUniqueTeam(contrib.PrivateTeams, teamEntry)
+				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
 			case "*":
-				contrib.PublicTeams = appendUniqueTeam(contrib.PublicTeams, teamEntry)
-				contrib.PrivateTeams = appendUniqueTeam(contrib.PrivateTeams, teamEntry)
+				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
+				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
 			default:
-				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", visibility, "resource", perm.Resource)
+				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", gh.Visibility, "org", gh.Org)
 			}
 		}
 		// Non-wildcard repository CCRNs are handled by a different reconciler (team-repository)
@@ -212,26 +195,26 @@ func removeASRContributions(org *repoguardv1.GithubOrganization, asrName string)
 	}
 
 	for _, team := range prevContrib.OwnerTeams {
-		org.Spec.OrganizationOwnerTeams = removeString(org.Spec.OrganizationOwnerTeams, team)
+		org.Spec.OrganizationOwnerTeams = remove(org.Spec.OrganizationOwnerTeams, team)
 	}
 	for _, team := range prevContrib.PublicTeams {
-		org.Spec.DefaultPublicRepositoryTeams = removeTeam(org.Spec.DefaultPublicRepositoryTeams, team)
+		org.Spec.DefaultPublicRepositoryTeams = remove(org.Spec.DefaultPublicRepositoryTeams, team)
 	}
 	for _, team := range prevContrib.PrivateTeams {
-		org.Spec.DefaultPrivateRepositoryTeams = removeTeam(org.Spec.DefaultPrivateRepositoryTeams, team)
+		org.Spec.DefaultPrivateRepositoryTeams = remove(org.Spec.DefaultPrivateRepositoryTeams, team)
 	}
 }
 
 // applyContributions adds the new contributions to the org spec.
 func applyContributions(org *repoguardv1.GithubOrganization, asrName string, contrib *orgContribution) {
 	for _, team := range contrib.OwnerTeams {
-		org.Spec.OrganizationOwnerTeams = appendUniqueString(org.Spec.OrganizationOwnerTeams, team)
+		org.Spec.OrganizationOwnerTeams = appendUnique(org.Spec.OrganizationOwnerTeams, team)
 	}
 	for _, team := range contrib.PublicTeams {
-		org.Spec.DefaultPublicRepositoryTeams = appendUniqueTeam(org.Spec.DefaultPublicRepositoryTeams, team)
+		org.Spec.DefaultPublicRepositoryTeams = appendUnique(org.Spec.DefaultPublicRepositoryTeams, team)
 	}
 	for _, team := range contrib.PrivateTeams {
-		org.Spec.DefaultPrivateRepositoryTeams = appendUniqueTeam(org.Spec.DefaultPrivateRepositoryTeams, team)
+		org.Spec.DefaultPrivateRepositoryTeams = appendUnique(org.Spec.DefaultPrivateRepositoryTeams, team)
 	}
 }
 
@@ -249,7 +232,7 @@ func updateASRAnnotations(org *repoguardv1.GithubOrganization, asrName string, c
 	managedASRs := getManagedASRNames(org)
 	if !slices.Contains(managedASRs, asrName) {
 		managedASRs = append(managedASRs, asrName)
-		sort.Strings(managedASRs)
+		slices.Sort(managedASRs)
 	}
 	org.Annotations[AnnotationASRManagedConfig] = strings.Join(managedASRs, ",")
 }
@@ -265,7 +248,7 @@ func removeASRFromAnnotations(org *repoguardv1.GithubOrganization, asrName strin
 
 	// Update the managed-config annotation
 	managedASRs := getManagedASRNames(org)
-	managedASRs = removeString(managedASRs, asrName)
+	managedASRs = remove(managedASRs, asrName)
 	if len(managedASRs) == 0 {
 		delete(org.Annotations, AnnotationASRManagedConfig)
 	} else {
@@ -321,40 +304,13 @@ func getOrCreateContrib(m map[string]*orgContribution, orgName string) *orgContr
 	return c
 }
 
-func appendUniqueString(slice []string, s string) []string {
-	for _, existing := range slice {
-		if existing == s {
-			return slice
-		}
+func appendUnique[E comparable](s []E, v E) []E {
+	if slices.Contains(s, v) {
+		return s
 	}
-	return append(slice, s)
+	return append(s, v)
 }
 
-func appendUniqueTeam(slice []repoguardv1.GithubTeamWithPermission, team repoguardv1.GithubTeamWithPermission) []repoguardv1.GithubTeamWithPermission {
-	for _, existing := range slice {
-		if existing.Team == team.Team && existing.Permission == team.Permission {
-			return slice
-		}
-	}
-	return append(slice, team)
-}
-
-func removeString(slice []string, s string) []string {
-	result := make([]string, 0, len(slice))
-	for _, item := range slice {
-		if item != s {
-			result = append(result, item)
-		}
-	}
-	return result
-}
-
-func removeTeam(slice []repoguardv1.GithubTeamWithPermission, team repoguardv1.GithubTeamWithPermission) []repoguardv1.GithubTeamWithPermission {
-	result := make([]repoguardv1.GithubTeamWithPermission, 0, len(slice))
-	for _, item := range slice {
-		if item.Team != team.Team || item.Permission != team.Permission {
-			result = append(result, item)
-		}
-	}
-	return result
+func remove[E comparable](s []E, v E) []E {
+	return slices.DeleteFunc(s, func(e E) bool { return e == v })
 }

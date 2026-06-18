@@ -10,15 +10,14 @@ import (
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
 )
 
 // ReconcileTeamRepos creates/updates GithubTeamRepository CRs for the desired state
-// and deletes stale ones that are no longer needed.
-// If a DesiredTeamRepo has an empty Repositories list, the CR is deleted.
+// and deletes stale ones that are no longer needed. A DesiredTeamRepo with an empty
+// Repositories list is skipped and cleaned up as stale.
 func ReconcileTeamRepos(
 	ctx context.Context,
 	c client.Client,
@@ -31,11 +30,8 @@ func ReconcileTeamRepos(
 ) error {
 	labels := BuildLabels(asrName, asrNamespace)
 
-	// Build set of desired CR names for stale detection
 	desiredNames := make(map[string]struct{}, len(desired))
-
 	for _, dr := range desired {
-		// If the repo list is empty, we don't create a CR (it will be cleaned up as stale)
 		if len(dr.Repositories) == 0 {
 			continue
 		}
@@ -47,8 +43,7 @@ func ReconcileTeamRepos(
 				Namespace: targetNamespace,
 			},
 		}
-
-		opResult, err := controllerutil.CreateOrUpdate(ctx, c, teamRepo, func() error {
+		err := upsertWithAudit(ctx, c, al, teamRepo, "GithubTeamRepository", asrName, func() error {
 			teamRepo.Labels = labels
 			teamRepo.Spec = repoguardv1.GithubTeamRepositorySpec{
 				Github:       dr.Instance,
@@ -60,29 +55,10 @@ func ReconcileTeamRepos(
 			return nil
 		})
 		if err != nil {
-			al.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, audit.ResourceRef{
-				Kind:      "GithubTeamRepository",
-				Name:      dr.CRName,
-				Namespace: targetNamespace,
-				Cluster:   "",
-			}, err)
-			return fmt.Errorf("failed to reconcile GithubTeamRepository %q: %w", dr.CRName, err)
-		}
-		if opResult != controllerutil.OperationResultNone {
-			action := audit.ActionUpdate
-			if opResult == controllerutil.OperationResultCreated {
-				action = audit.ActionCreate
-			}
-			al.Log(ctx, action, audit.OutcomeSuccess, asrName, audit.ResourceRef{
-				Kind:      "GithubTeamRepository",
-				Name:      dr.CRName,
-				Namespace: targetNamespace,
-				Cluster:   "",
-			}, nil)
+			return err
 		}
 	}
 
-	// Delete stale team repos (owned by this ASR but no longer in desired state)
 	if err := deleteStaleTeamRepos(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
 		return fmt.Errorf("failed to delete stale GithubTeamRepositories: %w", err)
 	}
@@ -90,8 +66,7 @@ func ReconcileTeamRepos(
 	return nil
 }
 
-// deleteStaleTeamRepos finds and deletes GithubTeamRepository CRs that are managed
-// by this ASR but are no longer in the desired state.
+// deleteStaleTeamRepos deletes GithubTeamRepository CRs managed by this ASR that are no longer desired.
 func deleteStaleTeamRepos(
 	ctx context.Context,
 	c client.Client,
@@ -110,25 +85,11 @@ func deleteStaleTeamRepos(
 
 	for i := range repoList.Items {
 		repo := &repoList.Items[i]
-		if _, desired := desiredNames[repo.Name]; !desired {
-			if err := c.Delete(ctx, repo); err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					al.Log(ctx, audit.ActionDelete, audit.OutcomeFailure, asrName, audit.ResourceRef{
-						Kind:      "GithubTeamRepository",
-						Name:      repo.Name,
-						Namespace: namespace,
-						Cluster:   "",
-					}, err)
-					return fmt.Errorf("failed to delete stale GithubTeamRepository %q: %w", repo.Name, err)
-				}
-			} else {
-				al.Log(ctx, audit.ActionDelete, audit.OutcomeSuccess, asrName, audit.ResourceRef{
-					Kind:      "GithubTeamRepository",
-					Name:      repo.Name,
-					Namespace: namespace,
-					Cluster:   "",
-				}, nil)
-			}
+		if _, ok := desiredNames[repo.Name]; ok {
+			continue
+		}
+		if err := deleteWithAudit(ctx, c, al, repo, "GithubTeamRepository", asrName); err != nil {
+			return err
 		}
 	}
 
