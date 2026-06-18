@@ -663,7 +663,7 @@ func TestReconcileOrganizations_NonGithubCCRNSkipped(t *testing.T) {
 		"ADMIN": "admin",
 	}
 
-	org := newGithubOrg("org", "other-org")
+	org := newGithubOrg("test-ns", "my-org")
 	cb := &v1alpha1.ConnectorBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "github-cb", Namespace: "default"},
 		Spec: v1alpha1.ConnectorBindingSpec{
