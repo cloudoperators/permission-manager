@@ -10,7 +10,6 @@ import (
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	"github.com/cloudoperators/permission-manager/pkg/audit"
@@ -30,13 +29,11 @@ func ReconcileTeams(
 ) error {
 	labels := BuildLabels(asrName, asrNamespace)
 
-	// Build set of desired CR names for stale detection
 	desiredNames := make(map[string]struct{}, len(desired))
 	for _, dt := range desired {
 		desiredNames[dt.CRName] = struct{}{}
 	}
 
-	// Create or update desired teams
 	for _, dt := range desired {
 		team := &repoguardv1.GithubTeam{
 			ObjectMeta: metav1.ObjectMeta{
@@ -44,8 +41,7 @@ func ReconcileTeams(
 				Namespace: targetNamespace,
 			},
 		}
-
-		opResult, err := controllerutil.CreateOrUpdate(ctx, c, team, func() error {
+		err := upsertWithAudit(ctx, c, al, team, "GithubTeam", asrName, func() error {
 			team.Labels = labels
 			team.Spec = repoguardv1.GithubTeamSpec{
 				Github:       dt.Instance,
@@ -55,29 +51,10 @@ func ReconcileTeams(
 			return nil
 		})
 		if err != nil {
-			al.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, audit.ResourceRef{
-				Kind:      "GithubTeam",
-				Name:      dt.CRName,
-				Namespace: targetNamespace,
-				Cluster:   "",
-			}, err)
-			return fmt.Errorf("failed to reconcile GithubTeam %q: %w", dt.CRName, err)
-		}
-		if opResult != controllerutil.OperationResultNone {
-			action := audit.ActionUpdate
-			if opResult == controllerutil.OperationResultCreated {
-				action = audit.ActionCreate
-			}
-			al.Log(ctx, action, audit.OutcomeSuccess, asrName, audit.ResourceRef{
-				Kind:      "GithubTeam",
-				Name:      dt.CRName,
-				Namespace: targetNamespace,
-				Cluster:   "",
-			}, nil)
+			return err
 		}
 	}
 
-	// Delete stale teams (owned by this ASR but no longer in desired state)
 	if err := deleteStaleTeams(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
 		return fmt.Errorf("failed to delete stale GithubTeams: %w", err)
 	}
@@ -85,8 +62,7 @@ func ReconcileTeams(
 	return nil
 }
 
-// deleteStaleTeams finds and deletes GithubTeam CRs that are managed by this ASR
-// but are no longer in the desired state.
+// deleteStaleTeams deletes GithubTeam CRs managed by this ASR that are no longer desired.
 func deleteStaleTeams(
 	ctx context.Context,
 	c client.Client,
@@ -105,25 +81,11 @@ func deleteStaleTeams(
 
 	for i := range teamList.Items {
 		team := &teamList.Items[i]
-		if _, desired := desiredNames[team.Name]; !desired {
-			if err := c.Delete(ctx, team); err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					al.Log(ctx, audit.ActionDelete, audit.OutcomeFailure, asrName, audit.ResourceRef{
-						Kind:      "GithubTeam",
-						Name:      team.Name,
-						Namespace: namespace,
-						Cluster:   "",
-					}, err)
-					return fmt.Errorf("failed to delete stale GithubTeam %q: %w", team.Name, err)
-				}
-			} else {
-				al.Log(ctx, audit.ActionDelete, audit.OutcomeSuccess, asrName, audit.ResourceRef{
-					Kind:      "GithubTeam",
-					Name:      team.Name,
-					Namespace: namespace,
-					Cluster:   "",
-				}, nil)
-			}
+		if _, ok := desiredNames[team.Name]; ok {
+			continue
+		}
+		if err := deleteWithAudit(ctx, c, al, team, "GithubTeam", asrName); err != nil {
+			return err
 		}
 	}
 
