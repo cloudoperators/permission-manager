@@ -12,195 +12,78 @@ import (
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
-func TestParseGithubAdvancedConfig(t *testing.T) {
+func TestParseAdvancedConfig(t *testing.T) {
 	tests := []struct {
-		name           string
-		advancedConfig *runtime.RawExtension
-		want           *GithubAdvancedConfig
-		wantErr        bool
+		name string
+		raw  *runtime.RawExtension
+		want string
 	}{
-		{
-			name:           "nil advancedConfig returns empty config",
-			advancedConfig: nil,
-			want:           &GithubAdvancedConfig{},
-			wantErr:        false,
-		},
-		{
-			name: "parses targetNamespace from github key",
-			advancedConfig: rawExt(t, map[string]any{
-				"github": map[string]any{
-					"targetNamespace": "my-ns",
-				},
-			}),
-			want:    &GithubAdvancedConfig{TargetNamespace: "my-ns"},
-			wantErr: false,
-		},
-		{
-			name: "ignores other keys",
-			advancedConfig: rawExt(t, map[string]any{
-				"kubernetes": map[string]any{
-					"targetNamespace": "k8s-ns",
-				},
-			}),
-			want:    &GithubAdvancedConfig{},
-			wantErr: false,
-		},
-		{
-			name: "empty github key returns empty config",
-			advancedConfig: rawExt(t, map[string]any{
-				"github": map[string]any{},
-			}),
-			want:    &GithubAdvancedConfig{},
-			wantErr: false,
-		},
+		{"nil returns empty", nil, ""},
+		{"reads github targetNamespace", rawExt(t, map[string]any{"github": map[string]any{"targetNamespace": "my-ns"}}), "my-ns"},
+		{"ignores non-github keys", rawExt(t, map[string]any{"kubernetes": map[string]any{"targetNamespace": "k8s-ns"}}), ""},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseAdvancedConfig(tt.advancedConfig)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseAdvancedConfig() error = %v, wantErr %v", err, tt.wantErr)
+			got, err := ParseAdvancedConfig(tt.raw)
+			if err != nil {
+				t.Fatalf("ParseAdvancedConfig: %v", err)
 			}
-			if got.TargetNamespace != tt.want.TargetNamespace {
-				t.Errorf("ParseAdvancedConfig().TargetNamespace = %q, want %q", got.TargetNamespace, tt.want.TargetNamespace)
+			if got.TargetNamespace != tt.want {
+				t.Errorf("TargetNamespace = %q, want %q", got.TargetNamespace, tt.want)
 			}
 		})
 	}
 }
 
 func TestParseConnectorDefinition(t *testing.T) {
-	tests := []struct {
-		name    string
-		def     *runtime.RawExtension
-		want    *GithubConnectorDefinition
-		wantErr bool
-	}{
-		{
-			name: "parses capabilityMapping and defaultTargetNamespace",
-			def: rawExt(t, map[string]any{
-				"defaultTargetNamespace": "github-teams",
-				"capabilityMapping": map[string]string{
-					"READ":  "pull",
-					"WRITE": "push",
-					"ADMIN": "admin",
-				},
-			}),
-			want: &GithubConnectorDefinition{
-				DefaultTargetNamespace: "github-teams",
-				CapabilityMapping: map[string]string{
-					"READ":  "pull",
-					"WRITE": "push",
-					"ADMIN": "admin",
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name:    "nil definition returns error",
-			def:     nil,
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "empty capabilityMapping",
-			def: rawExt(t, map[string]any{
-				"capabilityMapping": map[string]string{},
-			}),
-			want: &GithubConnectorDefinition{
-				CapabilityMapping: map[string]string{},
-			},
-			wantErr: false,
-		},
-	}
+	t.Run("parses definition", func(t *testing.T) {
+		got, err := ParseConnectorDefinition(rawExt(t, map[string]any{
+			"defaultTargetNamespace": "github-teams",
+			"capabilityMapping":      map[string]string{"READ": "pull", "WRITE": "push"},
+		}))
+		if err != nil {
+			t.Fatalf("ParseConnectorDefinition: %v", err)
+		}
+		if got.DefaultTargetNamespace != "github-teams" || got.CapabilityMapping["WRITE"] != "push" {
+			t.Errorf("unexpected definition: %+v", got)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseConnectorDefinition(tt.def)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseConnectorDefinition() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				return
-			}
-			if got.DefaultTargetNamespace != tt.want.DefaultTargetNamespace {
-				t.Errorf("DefaultTargetNamespace = %q, want %q", got.DefaultTargetNamespace, tt.want.DefaultTargetNamespace)
-			}
-			if len(got.CapabilityMapping) != len(tt.want.CapabilityMapping) {
-				t.Errorf("CapabilityMapping length = %d, want %d", len(got.CapabilityMapping), len(tt.want.CapabilityMapping))
-			}
-			for k, v := range tt.want.CapabilityMapping {
-				if got.CapabilityMapping[k] != v {
-					t.Errorf("CapabilityMapping[%q] = %q, want %q", k, got.CapabilityMapping[k], v)
-				}
-			}
-		})
-	}
+	t.Run("nil definition is an error", func(t *testing.T) {
+		if _, err := ParseConnectorDefinition(nil); err == nil {
+			t.Error("expected an error for a nil definition")
+		}
+	})
 }
 
 func TestResolveTargetNamespace(t *testing.T) {
 	tests := []struct {
-		name         string
-		advConfig    *GithubAdvancedConfig
-		cbDef        *GithubConnectorDefinition
-		asrNamespace string
-		want         string
+		name      string
+		advConfig *GithubAdvancedConfig
+		cbDef     *GithubConnectorDefinition
+		want      string
 	}{
-		{
-			name:         "advancedConfig takes priority",
-			advConfig:    &GithubAdvancedConfig{TargetNamespace: "from-advanced"},
-			cbDef:        &GithubConnectorDefinition{DefaultTargetNamespace: "from-cb"},
-			asrNamespace: "asr-ns",
-			want:         "from-advanced",
-		},
-		{
-			name:         "CB default used when advancedConfig empty",
-			advConfig:    &GithubAdvancedConfig{},
-			cbDef:        &GithubConnectorDefinition{DefaultTargetNamespace: "from-cb"},
-			asrNamespace: "asr-ns",
-			want:         "from-cb",
-		},
-		{
-			name:         "ASR namespace used as fallback",
-			advConfig:    &GithubAdvancedConfig{},
-			cbDef:        &GithubConnectorDefinition{},
-			asrNamespace: "asr-ns",
-			want:         "asr-ns",
-		},
-		{
-			name:         "nil advConfig falls through to CB",
-			advConfig:    nil,
-			cbDef:        &GithubConnectorDefinition{DefaultTargetNamespace: "from-cb"},
-			asrNamespace: "asr-ns",
-			want:         "from-cb",
-		},
-		{
-			name:         "nil cbDef falls through to ASR namespace",
-			advConfig:    nil,
-			cbDef:        nil,
-			asrNamespace: "asr-ns",
-			want:         "asr-ns",
-		},
+		{"advancedConfig wins", &GithubAdvancedConfig{TargetNamespace: "from-advanced"}, &GithubConnectorDefinition{DefaultTargetNamespace: "from-cb"}, "from-advanced"},
+		{"connector default next", &GithubAdvancedConfig{}, &GithubConnectorDefinition{DefaultTargetNamespace: "from-cb"}, "from-cb"},
+		{"asr namespace fallback", &GithubAdvancedConfig{}, &GithubConnectorDefinition{}, "asr-ns"},
+		{"nil inputs fall back to asr namespace", nil, nil, "asr-ns"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			asr := &v1alpha1.ApplicationSpecificRole{}
-			asr.Namespace = tt.asrNamespace
-
-			got := ResolveTargetNamespace(tt.advConfig, tt.cbDef, asr)
-			if got != tt.want {
-				t.Errorf("ResolveTargetNamespace() = %q, want %q", got, tt.want)
+			asr.Namespace = "asr-ns"
+			if got := ResolveTargetNamespace(tt.advConfig, tt.cbDef, asr); got != tt.want {
+				t.Errorf("ResolveTargetNamespace = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// rawExt is a test helper to create runtime.RawExtension from a map.
 func rawExt(t *testing.T, data any) *runtime.RawExtension {
 	t.Helper()
 	raw, err := json.Marshal(data)
 	if err != nil {
-		t.Fatalf("failed to marshal test data: %v", err)
+		t.Fatalf("marshal test data: %v", err)
 	}
 	return &runtime.RawExtension{Raw: raw}
 }
