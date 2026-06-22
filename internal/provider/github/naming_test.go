@@ -24,12 +24,12 @@ func TestSanitizeInstance(t *testing.T) {
 }
 
 func TestCRNames(t *testing.T) {
-	if got := TeamCRName("my-asr", "github.example.com", "cc"); got != "asr-my-asr-github-example-com-cc" {
-		t.Errorf("TeamCRName = %q", got)
+	if got, want := TeamCRName("my-asr", "github.example.com", "cc"), "asr-my-asr-github-example-com-cc"; got != want {
+		t.Errorf("TeamCRName = %q, want %q", got, want)
 	}
 	// Underscores in segments are sanitized to hyphens.
-	if got := TeamRepoCRName("my-asr", "github.com", "my_org", "admin"); got != "asr-my-asr-github-com-my-org-admin" {
-		t.Errorf("TeamRepoCRName = %q", got)
+	if got, want := TeamRepoCRName("my-asr", "github.com", "my_org", "admin"), "asr-my-asr-github-com-my-org-admin"; got != want {
+		t.Errorf("TeamRepoCRName = %q, want %q", got, want)
 	}
 }
 

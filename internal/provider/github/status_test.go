@@ -45,7 +45,11 @@ func TestMapTeamStatus(t *testing.T) {
 		{"something-unknown", pmmeta.TargetStatusPending, true},
 	}
 	for _, tt := range tests {
-		t.Run(string(tt.state), func(t *testing.T) {
+		name := string(tt.state)
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			got, msg := mapTeamStatus(tt.state)
 			if got != tt.want {
 				t.Errorf("status = %q, want %q", got, tt.want)
