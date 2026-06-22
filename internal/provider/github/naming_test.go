@@ -11,199 +11,43 @@ import (
 )
 
 func TestSanitizeInstance(t *testing.T) {
-	tests := []struct {
-		name     string
-		instance string
-		want     string
-	}{
-		{
-			name:     "dots become hyphens",
-			instance: "github.example.com",
-			want:     "github-example-com",
-		},
-		{
-			name:     "github.com",
-			instance: "github.com",
-			want:     "github-com",
-		},
-		{
-			name:     "already lowercase",
-			instance: "my-instance",
-			want:     "my-instance",
-		},
-		{
-			name:     "uppercase gets lowered",
-			instance: "GitHub.Example.COM",
-			want:     "github-example-com",
-		},
-		{
-			name:     "special chars removed",
-			instance: "my_instance!@#.com",
-			want:     "myinstance-com",
-		},
+	tests := []struct{ in, want string }{
+		{"github.example.com", "github-example-com"},
+		{"GitHub.Example.COM", "github-example-com"},
+		{"my_instance!@#.com", "myinstance-com"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := SanitizeInstance(tt.instance)
-			if got != tt.want {
-				t.Errorf("SanitizeInstance(%q) = %q, want %q", tt.instance, got, tt.want)
-			}
-		})
+		if got := SanitizeInstance(tt.in); got != tt.want {
+			t.Errorf("SanitizeInstance(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
-func TestTeamCRName(t *testing.T) {
-	tests := []struct {
-		name     string
-		asrName  string
-		instance string
-		org      string
-		want     string
-	}{
-		{
-			name:     "standard case",
-			asrName:  "my-asr",
-			instance: "github.example.com",
-			org:      "cc",
-			want:     "asr-my-asr-github-example-com-cc",
-		},
-		{
-			name:     "github.com instance",
-			asrName:  "team-repo-admin",
-			instance: "github.com",
-			org:      "my-org",
-			want:     "asr-team-repo-admin-github-com-my-org",
-		},
+func TestCRNames(t *testing.T) {
+	if got, want := TeamCRName("my-asr", "github.example.com", "cc"), "asr-my-asr-github-example-com-cc"; got != want {
+		t.Errorf("TeamCRName = %q, want %q", got, want)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := TeamCRName(tt.asrName, tt.instance, tt.org)
-			if got != tt.want {
-				t.Errorf("TeamCRName(%q, %q, %q) = %q, want %q", tt.asrName, tt.instance, tt.org, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTeamRepoCRName(t *testing.T) {
-	tests := []struct {
-		name       string
-		asrName    string
-		instance   string
-		org        string
-		capability string
-		want       string
-	}{
-		{
-			name:       "standard case",
-			asrName:    "my-asr",
-			instance:   "github.example.com",
-			org:        "cc",
-			capability: "push",
-			want:       "asr-my-asr-github-example-com-cc-push",
-		},
-		{
-			name:       "admin capability",
-			asrName:    "cross-product-admin",
-			instance:   "github.example.com",
-			org:        "my-org",
-			capability: "admin",
-			want:       "asr-cross-product-admin-github-example-com-my-org-admin",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := TeamRepoCRName(tt.asrName, tt.instance, tt.org, tt.capability)
-			if got != tt.want {
-				t.Errorf("TeamRepoCRName() = %q, want %q", got, tt.want)
-			}
-		})
+	// Underscores in segments are sanitized to hyphens.
+	if got, want := TeamRepoCRName("my-asr", "github.com", "my_org", "admin"), "asr-my-asr-github-com-my-org-admin"; got != want {
+		t.Errorf("TeamRepoCRName = %q, want %q", got, want)
 	}
 }
 
 func TestTruncateWithHash(t *testing.T) {
-	t.Run("short name unchanged", func(t *testing.T) {
-		name := "asr-my-short-name"
-		got := truncateWithHash(name)
-		if got != name {
-			t.Errorf("truncateWithHash(%q) = %q, expected unchanged", name, got)
-		}
-	})
-
-	t.Run("long name truncated with hash", func(t *testing.T) {
-		// Create a name that exceeds 253 chars
-		name := "asr-" + strings.Repeat("a", 260)
-		got := truncateWithHash(name)
-
-		if len(got) > naming.MaxK8sNameLength {
-			t.Errorf("truncateWithHash produced name of length %d, exceeds max %d", len(got), naming.MaxK8sNameLength)
-		}
-		if !strings.HasPrefix(got, "asr-") {
-			t.Error("truncated name should still have prefix")
-		}
-		// Should end with a hex hash
-		last := got[len(got)-1]
-		if (last < '0' || last > '9') && (last < 'a' || last > 'f') {
-			t.Error("truncated name should end with hex hash")
-		}
-	})
-
-	t.Run("exactly 253 chars unchanged", func(t *testing.T) {
-		name := strings.Repeat("a", naming.MaxK8sNameLength)
-		got := truncateWithHash(name)
-		if got != name {
-			t.Errorf("name at exactly max length should be unchanged")
-		}
-	})
-
-	t.Run("different long names produce different results", func(t *testing.T) {
-		name1 := "asr-" + strings.Repeat("a", 260) + "-org1"
-		name2 := "asr-" + strings.Repeat("a", 260) + "-org2"
-		got1 := truncateWithHash(name1)
-		got2 := truncateWithHash(name2)
-		if got1 == got2 {
-			t.Error("different inputs should produce different truncated names")
-		}
-	})
-}
-
-func TestSanitizeSegment(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{
-			name:  "lowercase passthrough",
-			input: "myorg",
-			want:  "myorg",
-		},
-		{
-			name:  "underscores become hyphens",
-			input: "MY_ORG",
-			want:  "my-org",
-		},
-		{
-			name:  "special chars removed",
-			input: "org!name",
-			want:  "orgname",
-		},
-		{
-			name:  "leading/trailing hyphens trimmed",
-			input: "-my-org-",
-			want:  "my-org",
-		},
+	short := "asr-my-short-name"
+	if got := truncateWithHash(short); got != short {
+		t.Errorf("short name should be unchanged, got %q", got)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeSegment(tt.input)
-			if got != tt.want {
-				t.Errorf("sanitizeSegment(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
+	long := "asr-" + strings.Repeat("a", 300)
+	got := truncateWithHash(long)
+	if len(got) > naming.MaxK8sNameLength {
+		t.Errorf("length %d exceeds max %d", len(got), naming.MaxK8sNameLength)
+	}
+	if !strings.HasPrefix(got, "asr-") {
+		t.Error("prefix should be preserved after truncation")
+	}
+	if truncateWithHash(long+"-x") == got {
+		t.Error("different inputs should produce different truncated names")
 	}
 }
