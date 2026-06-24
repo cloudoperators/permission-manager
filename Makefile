@@ -152,20 +152,14 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: crd rbac ## Generate CRD and RBAC manifests and sync to Helm chart.
+manifests: controller-gen kustomize ## Generate CRD and RBAC manifests.
+	"$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=charts/permission-manager/crds
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role paths="./..." output:artifacts:config=bin/rbac
 
-.PHONY: crd
-crd: controller-gen kustomize ## Generate CRDs and sync to charts/permission-manager/crds.
-	"$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=config/crd/bases
-	"$(KUSTOMIZE)" build config/crd -o charts/permission-manager/crds
-	rm -rf config/crd
-
-.PHONY: rbac
-rbac: controller-gen ## Generate RBAC and sync to charts/permission-manager/templates/rbac.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role paths="./..." output:artifacts:config=config/rbac
-	kubebuilder edit --plugins=helm/v2-alpha --output-dir=bin/helm-scratch
-	cp bin/helm-scratch/chart/templates/rbac/* charts/permission-manager/templates/rbac/
-	rm -rf bin/helm-scratch
+.PHONY: helmify
+helmify: manifests ## Sync RBAC rules into the Helm chart manager-role template.
+	{ head -n 11 charts/permission-manager/templates/rbac/manager-role.yaml; yq '{"rules": .rules}' bin/rbac/role.yaml; } > bin/rbac/manager-role-new.yaml
+	mv bin/rbac/manager-role-new.yaml charts/permission-manager/templates/rbac/manager-role.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -266,11 +260,9 @@ helm-lint: ## Lint the Helm chart.
 	helm lint charts/permission-manager
 
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
 
 ##@ Deployment
 

@@ -1,6 +1,0 @@
-namespace: greenhouse
-
-namePrefix: pm-
-
-resources:
-- ../rbac

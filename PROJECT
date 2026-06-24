@@ -9,7 +9,7 @@ layout:
 plugins:
   helm.kubebuilder.io/v2-alpha:
     manifests: dist/install.yaml
-    output: charts/permission-manager
+    output: bin/helm-scratch
 projectName: permission-manager
 repo: github.com/cloudoperators/permission-manager
 resources:
