@@ -152,8 +152,20 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: crd rbac ## Generate CRD and RBAC manifests and sync to Helm chart.
+
+.PHONY: crd
+crd: controller-gen kustomize ## Generate CRDs and sync to charts/permission-manager/crds.
+	"$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=config/crd/bases
+	"$(KUSTOMIZE)" build config/crd -o charts/permission-manager/crds
+	rm -rf config/crd
+
+.PHONY: rbac
+rbac: controller-gen ## Generate RBAC and sync to charts/permission-manager/templates/rbac.
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role paths="./..." output:artifacts:config=config/rbac
+	kubebuilder edit --plugins=helm/v2-alpha --output-dir=bin/helm-scratch
+	cp bin/helm-scratch/chart/templates/rbac/* charts/permission-manager/templates/rbac/
+	rm -rf bin/helm-scratch
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -249,6 +261,10 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm kubebuilder-scaffold-builder
 	rm Dockerfile.cross
 
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart.
+	helm lint charts/permission-manager
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
@@ -259,14 +275,12 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 ##@ Deployment
 
 .PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -; else echo "No CRDs to install; skipping."; fi
+install: ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	"$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f charts/permission-manager/crds
 
 .PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+uninstall: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+	"$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f charts/permission-manager/crds
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.

@@ -37,7 +37,7 @@ resources:
 - metrics_reader_role.yaml
 # For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
 # default, aiding admins in cluster management. Those roles are
-# not used by the kubebuilder-scaffold itself. You can comment the following lines
+# not used by the permission-manager itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
 - functionalrole_admin_role.yaml
 - functionalrole_editor_role.yaml

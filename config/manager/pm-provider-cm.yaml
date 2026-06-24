@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: provider-cm
-  namespace: system
-data:
-  github: "false"
-  kubernetes: "true"
