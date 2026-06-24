@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    uses: cloudoperators/common/.github/workflows/shared-go-lint.yaml@main
+
+  test:
+    uses: cloudoperators/common/.github/workflows/shared-go-test.yaml@main
+    with:
+      working-directory: controller
+
+  build:
+    uses: cloudoperators/common/.github/workflows/shared-go-build.yaml@main
+    with:
+      working-directory: controller
