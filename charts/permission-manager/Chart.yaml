@@ -1,0 +1,24 @@
+apiVersion: v2
+name: permission-manager
+description: A Helm chart for Permission Manager, a Kubernetes operator for managing GitHub and Kubernetes permissions as code
+type: application
+kubeVersion: ">=1.30.0-0"
+
+version: 0.1.0
+appVersion: "0.0.1"
+
+home: https://github.com/cloudoperators/permission-manager
+sources:
+  - https://github.com/cloudoperators/permission-manager
+
+keywords:
+  - kubernetes
+  - operator
+  - rbac
+  - permissions
+  - github
+
+maintainers:
+  - name: mikolajkucinski
+  - name: abhijith-darshan
+  - name: onuryilmaz

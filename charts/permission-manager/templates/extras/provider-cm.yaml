@@ -1,0 +1,8 @@
+apiVersion: v1
+data:
+  github: {{ .Values.providers.github | quote }}
+  kubernetes: {{ .Values.providers.kubernetes | quote }}
+kind: ConfigMap
+metadata:
+  name: {{ include "permission-manager.resourceName" (dict "suffix" "provider-cm" "context" $) }}
+  namespace: {{ .Release.Namespace }}
