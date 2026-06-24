@@ -33,13 +33,14 @@ import (
 // ASRReconciler is the single controller for ApplicationSpecificRole.
 type ASRReconciler struct {
 	client.Client
-	Cfg          *pmconfig.ProviderConfig
-	PodNamespace string
-	Log          logr.Logger
-	AuditLog     *audit.Logger
-	k8sPhase     *pmk8s.Phase
-	ghPhase      *github.Phase
-	recorder     events.EventRecorder
+	Cfg                *pmconfig.ProviderConfig
+	PodNamespace       string
+	ProviderConfigName string
+	Log                logr.Logger
+	AuditLog           *audit.Logger
+	k8sPhase           *pmk8s.Phase
+	ghPhase            *github.Phase
+	recorder           events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=applicationspecificroles,verbs=get;list;watch;update;patch
@@ -88,7 +89,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.reconcileAllASRs),
-			builder.WithPredicates(lifecycle.ProviderConfigPredicate(r.PodNamespace)),
+			builder.WithPredicates(lifecycle.ProviderConfigPredicate(r.ProviderConfigName, r.PodNamespace)),
 		).
 		Watches(
 			&v1alpha1.ConnectorBinding{},
@@ -203,7 +204,7 @@ func (r *ASRReconciler) GetEventRecorder() events.EventRecorder {
 
 // reconcileAllASRs reloads pm-provider-cm and enqueues all ASRs.
 func (r *ASRReconciler) reconcileAllASRs(ctx context.Context, _ client.Object) []ctrl.Request {
-	newCfg, err := pmconfig.ReloadProviderConfig(ctx, r.Client, r.PodNamespace)
+	newCfg, err := pmconfig.ReloadProviderConfig(ctx, r.Client, r.ProviderConfigName, r.PodNamespace)
 	if err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "failed to reload provider config")
 		return nil

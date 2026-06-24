@@ -95,6 +95,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var enableAuditLog bool
+	var providerConfigName string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -114,6 +115,7 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableAuditLog, "audit-log", true, "Enable audit logging to stdout.")
+	flag.StringVar(&providerConfigName, "provider-config-name", "pm-provider-cm", "Name of the ConfigMap used as provider feature-gate config.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -188,7 +190,7 @@ func main() {
 
 	podNamespace := os.Getenv("POD_NAMESPACE")
 
-	providerCfg, err := pmconfig.NewProviderConfig(context.Background(), mgr.GetAPIReader(), podNamespace)
+	providerCfg, err := pmconfig.NewProviderConfig(context.Background(), mgr.GetAPIReader(), providerConfigName, podNamespace)
 	if err != nil {
 		setupLog.Error(err, "Failed to load provider config")
 		os.Exit(1)
@@ -200,11 +202,12 @@ func main() {
 	}
 
 	if err := (&pmcontroller.ASRReconciler{
-		Client:       mgr.GetClient(),
-		Cfg:          providerCfg,
-		PodNamespace: podNamespace,
-		Log:          ctrl.Log.WithName("controllers").WithName("asr"),
-		AuditLog:     auditLogger,
+		Client:             mgr.GetClient(),
+		Cfg:                providerCfg,
+		PodNamespace:       podNamespace,
+		ProviderConfigName: providerConfigName,
+		Log:                ctrl.Log.WithName("controllers").WithName("asr"),
+		AuditLog:           auditLogger,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "asr")
 		os.Exit(1)

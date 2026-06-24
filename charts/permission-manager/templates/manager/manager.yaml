@@ -84,6 +84,7 @@ spec:
         - --metrics-bind-address=0
         {{- end }}
         - --health-probe-bind-address=:8081
+        - --provider-config-name={{ include "permission-manager.resourceName" (dict "suffix" "provider-cm" "context" $) }}
         {{- range .Values.manager.args }}
         - {{ . }}
         {{- end }}
