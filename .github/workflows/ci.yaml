@@ -15,10 +15,6 @@ jobs:
 
   test:
     uses: cloudoperators/common/.github/workflows/shared-go-test.yaml@main
-    with:
-      working-directory: controller
 
   build:
     uses: cloudoperators/common/.github/workflows/shared-go-build.yaml@main
-    with:
-      working-directory: controller
