@@ -152,12 +152,9 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen kustomize ## Generate CRD and RBAC manifests.
+manifests: controller-gen ## Generate CRD and RBAC manifests.
 	"$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=charts/permission-manager/crds
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role paths="./..." output:artifacts:config=bin/rbac
-
-.PHONY: helmify
-helmify: manifests ## Sync RBAC rules into the Helm chart manager-role template.
 	{ head -n 11 charts/permission-manager/templates/rbac/manager-role.yaml; yq '{"rules": .rules}' bin/rbac/role.yaml; } > bin/rbac/manager-role-new.yaml
 	mv bin/rbac/manager-role-new.yaml charts/permission-manager/templates/rbac/manager-role.yaml
 
