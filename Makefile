@@ -256,11 +256,6 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 helm-lint: ## Lint the Helm chart.
 	helm lint charts/permission-manager
 
-.PHONY: build-installer
-build-installer: kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
-
 ##@ Deployment
 
 .PHONY: install
