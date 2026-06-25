@@ -6,7 +6,6 @@
 *.dylib
 bin/*
 Dockerfile.cross
-bin
 .claude
 .mcp.json
 # Test binary, built with `go test -c`
@@ -30,5 +29,3 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
-
-kubebuilder-scaffold

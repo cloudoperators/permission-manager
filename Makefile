@@ -152,8 +152,11 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: controller-gen ## Generate CRD and RBAC manifests.
+	"$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=charts/permission-manager/crds
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role paths="./..." output:artifacts:config=bin/rbac
+	{ head -n 11 charts/permission-manager/templates/rbac/manager-role.yaml; yq '{"rules": .rules}' bin/rbac/role.yaml; } > bin/rbac/manager-role-new.yaml
+	mv bin/rbac/manager-role-new.yaml charts/permission-manager/templates/rbac/manager-role.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -249,38 +252,34 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm kubebuilder-scaffold-builder
 	rm Dockerfile.cross
 
-.PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart.
+	helm lint charts/permission-manager
 
 ##@ Deployment
 
 .PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -; else echo "No CRDs to install; skipping."; fi
+install: ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	"$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f charts/permission-manager/crds
 
 .PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+uninstall: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+	"$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f charts/permission-manager/crds
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
+deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	helm template permission-manager charts/permission-manager --namespace greenhouse --include-crds \
+		--set manager.image.repository=$(word 1,$(subst :, ,$(IMG))) --set manager.image.tag=$(word 2,$(subst :, ,$(IMG))) \
+		| "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
 
 .PHONY: kind-load
 kind-load: ## Load docker image into the Kind cluster.
 	$(KIND) load docker-image ${IMG} --name $(KIND_CLUSTER)
 
 .PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -
+undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	helm template permission-manager charts/permission-manager --namespace greenhouse --skip-crds \
+		| "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 

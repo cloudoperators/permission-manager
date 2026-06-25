@@ -6,16 +6,14 @@ package lifecycle
 import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-
-	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
 )
 
 // ProviderConfigPredicate returns a predicate that passes only update events
-// for pm-provider-cm in the given namespace.
-func ProviderConfigPredicate(namespace string) predicate.Predicate {
+// for the given configmap name in the given namespace.
+func ProviderConfigPredicate(name, namespace string) predicate.Predicate {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return e.ObjectNew.GetName() == pmconfig.ProviderConfigName &&
+			return e.ObjectNew.GetName() == name &&
 				e.ObjectNew.GetNamespace() == namespace
 		},
 		CreateFunc:  func(event.CreateEvent) bool { return false },

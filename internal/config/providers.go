@@ -13,8 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const ProviderConfigName = "pm-provider-cm"
-
 // ProviderConfig holds the provider feature-gate state loaded from pm-provider-cm.
 type ProviderConfig struct {
 	data map[string]string
@@ -29,14 +27,14 @@ func (c *ProviderConfig) Enabled(name string) bool {
 	return v == "true"
 }
 
-// NewProviderConfig loads pm-provider-cm from the given namespace.
+// NewProviderConfig loads the provider config ConfigMap from the given namespace.
 // If the ConfigMap is not found, it returns a fail-open config and logs a warning.
-func NewProviderConfig(ctx context.Context, c client.Reader, namespace string) (*ProviderConfig, error) {
+func NewProviderConfig(ctx context.Context, c client.Reader, name, namespace string) (*ProviderConfig, error) {
 	log := ctrl.LoggerFrom(ctx)
 	cm := &corev1.ConfigMap{}
-	if err := c.Get(ctx, types.NamespacedName{Name: ProviderConfigName, Namespace: namespace}, cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cm); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			log.Info("provider config not found, defaulting all providers enabled", "configmap", ProviderConfigName)
+			log.Info("provider config not found, defaulting all providers enabled", "configmap", name)
 			return &ProviderConfig{data: map[string]string{}}, nil
 		}
 		return nil, err
@@ -46,7 +44,7 @@ func NewProviderConfig(ctx context.Context, c client.Reader, namespace string) (
 	return &ProviderConfig{data: data}, nil
 }
 
-// ReloadProviderConfig reloads pm-provider-cm and returns a fresh ProviderConfig.
-func ReloadProviderConfig(ctx context.Context, c client.Reader, namespace string) (*ProviderConfig, error) {
-	return NewProviderConfig(ctx, c, namespace)
+// ReloadProviderConfig reloads the provider config ConfigMap and returns a fresh ProviderConfig.
+func ReloadProviderConfig(ctx context.Context, c client.Reader, name, namespace string) (*ProviderConfig, error) {
+	return NewProviderConfig(ctx, c, name, namespace)
 }
