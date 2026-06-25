@@ -267,18 +267,19 @@ uninstall: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
 	"$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f charts/permission-manager/crds
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=controller:latest
+deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	helm template permission-manager charts/permission-manager --namespace greenhouse --include-crds \
+		--set manager.image.repository=$(word 1,$(subst :, ,$(IMG))) --set manager.image.tag=$(word 2,$(subst :, ,$(IMG))) \
+		| "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
 
 .PHONY: kind-load
 kind-load: ## Load docker image into the Kind cluster.
 	$(KIND) load docker-image ${IMG} --name $(KIND_CLUSTER)
 
 .PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -
+undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	helm template permission-manager charts/permission-manager --namespace greenhouse --skip-crds \
+		| "$(KUBECTL)" --context kind-$(KIND_CLUSTER) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 
