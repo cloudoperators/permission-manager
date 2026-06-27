@@ -15,22 +15,29 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-
-	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 )
 
 type ReconcileResult string
 
+// conditionReason is the lifecycle package's local condition reason type.
+type conditionReason string
+
 const (
-	CommonCleanupFinalizer = "pm.cloudoperators.dev/cleanup"
+	commonCleanupFinalizer = "pm.cloudoperators.dev/cleanup"
 
-	CreatedReason         pmmeta.ConditionReason = "Created"
-	PendingCreationReason pmmeta.ConditionReason = "PendingCreation"
-	FailingCreationReason pmmeta.ConditionReason = "FailingCreation"
+	// readyConditionType is the type string the wrapper writes for the rollup Ready.
+	readyConditionType = "Ready"
 
-	PendingDeletionReason pmmeta.ConditionReason = "PendingDeletion"
-	FailingDeletionReason pmmeta.ConditionReason = "FailingDeletion"
-	DeletedReason         pmmeta.ConditionReason = "Deleted"
+	// deleteCondition tracks the delete phase. Read by isResourceDeleted, written by setupDeleteState.
+	deleteCondition = "Delete"
+
+	createdReason         conditionReason = "Created"
+	pendingCreationReason conditionReason = "PendingCreation"
+	failingCreationReason conditionReason = "FailingCreation"
+
+	pendingDeletionReason conditionReason = "PendingDeletion"
+	failingDeletionReason conditionReason = "FailingDeletion"
+	deletedReason         conditionReason = "Deleted"
 
 	eventReasonReconciled = "Reconciled"
 	eventReasonDeleted    = "Deleted"
@@ -53,7 +60,8 @@ type RuntimeObject interface {
 	metav1.Object
 	GetConditions() []metav1.Condition
 	SetCondition(metav1.Condition)
-	RemoveCondition(pmmeta.ConditionType)
+	// GetReadyCondition returns the Ready condition, or nil.
+	GetReadyCondition() *metav1.Condition
 }
 
 // Reconciler is the interface controllers must implement.
@@ -75,10 +83,10 @@ func Reconcile(ctx context.Context, kubeClient client.Client, namespacedName typ
 	ctx = createContextFromRuntimeObject(ctx, runtimeObject, reconciler.GetEventRecorder())
 
 	shouldBeDeleted := runtimeObject.GetDeletionTimestamp() != nil
-	hasFinalizer := controllerutil.ContainsFinalizer(runtimeObject, CommonCleanupFinalizer)
+	hasFinalizer := controllerutil.ContainsFinalizer(runtimeObject, commonCleanupFinalizer)
 
 	if !shouldBeDeleted && !hasFinalizer {
-		return ctrl.Result{}, ensureFinalizer(ctx, kubeClient, runtimeObject, CommonCleanupFinalizer)
+		return ctrl.Result{}, ensureFinalizer(ctx, kubeClient, runtimeObject, commonCleanupFinalizer)
 	}
 
 	var (
@@ -91,7 +99,7 @@ func Reconcile(ctx context.Context, kubeClient client.Client, namespacedName typ
 			return ctrl.Result{}, nil
 		}
 		if isResourceDeleted(runtimeObject) {
-			return ctrl.Result{}, client.IgnoreNotFound(removeFinalizer(ctx, kubeClient, runtimeObject, CommonCleanupFinalizer))
+			return ctrl.Result{}, client.IgnoreNotFound(removeFinalizer(ctx, kubeClient, runtimeObject, commonCleanupFinalizer))
 		}
 		result, err = ensureDeleted(ctx, logger, reconciler, runtimeObject)
 	} else {
@@ -103,8 +111,22 @@ func Reconcile(ctx context.Context, kubeClient client.Client, namespacedName typ
 
 // isResourceDeleted returns true when the Delete condition is True with reason Deleted.
 func isResourceDeleted(o RuntimeObject) bool {
-	c := pmmeta.GetConditionByType(o.GetConditions(), pmmeta.DeleteCondition)
-	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == string(DeletedReason)
+	for _, c := range o.GetConditions() {
+		if c.Type == deleteCondition {
+			return c.Status == metav1.ConditionTrue && c.Reason == string(deletedReason)
+		}
+	}
+	return false
+}
+
+// eventTypeFor maps a reconcile outcome to a Kubernetes Event type. Anything
+// other than a clean Success surfaces as Warning so kubectl describe and
+// dashboards flag the resource instead of burying the failure in a Normal event.
+func eventTypeFor(r ReconcileResult, err error) string {
+	if err != nil || r == Failed {
+		return corev1.EventTypeWarning
+	}
+	return corev1.EventTypeNormal
 }
 
 // ensureCreated invokes EnsureCreated and applies status conditions.
@@ -117,7 +139,7 @@ func ensureCreated(ctx context.Context, logger logr.Logger, reconciler Reconcile
 		setupCreateState(o, reconcileResult, err)
 	}
 	recorder := GetEventRecorderFromContext(ctx)
-	recorder.Eventf(o, nil, corev1.EventTypeNormal, eventReasonReconciled, "EnsureCreated", "reconcile result: %s", string(reconcileResult))
+	recorder.Eventf(o, nil, eventTypeFor(reconcileResult, err), eventReasonReconciled, "EnsureCreated", "reconcile result: %s", string(reconcileResult))
 	return result, err
 }
 
@@ -128,23 +150,44 @@ func ensureDeleted(ctx context.Context, logger logr.Logger, reconciler Reconcile
 	result, reconcileResult, err := reconciler.EnsureDeleted(ctx, o)
 	setupDeleteState(o, reconcileResult, err)
 	recorder := GetEventRecorderFromContext(ctx)
-	recorder.Eventf(o, nil, corev1.EventTypeNormal, eventReasonDeleted, "EnsureDeleted", "delete result: %s", string(reconcileResult))
+	recorder.Eventf(o, nil, eventTypeFor(reconcileResult, err), eventReasonDeleted, "EnsureDeleted", "delete result: %s", string(reconcileResult))
 	return result, err
 }
 
-// setupCreateState maps ReconcileResult to a Ready condition.
+// setupCreateState maps ReconcileResult to a Ready condition. Skipped when
+// Ready was already written by a subroutine this reconcile (reason other than
+// the wrapper's PendingCreation placeholder).
 func setupCreateState(o RuntimeObject, r ReconcileResult, err error) {
+	if existing := o.GetReadyCondition(); existing != nil &&
+		existing.Reason != string(pendingCreationReason) {
+		return
+	}
 	switch r {
 	case Success:
-		o.SetCondition(pmmeta.TrueCondition(pmmeta.ReadyCondition, CreatedReason, "resource is successfully reconciled"))
+		o.SetCondition(metav1.Condition{
+			Type:    readyConditionType,
+			Status:  metav1.ConditionTrue,
+			Reason:  string(createdReason),
+			Message: "resource is successfully reconciled",
+		})
 	case Failed:
 		msg := ""
 		if err != nil {
 			msg = err.Error()
 		}
-		o.SetCondition(pmmeta.FalseCondition(pmmeta.ReadyCondition, FailingCreationReason, "reconciliation failed: "+msg))
+		o.SetCondition(metav1.Condition{
+			Type:    readyConditionType,
+			Status:  metav1.ConditionFalse,
+			Reason:  string(failingCreationReason),
+			Message: "reconciliation failed: " + msg,
+		})
 	default:
-		o.SetCondition(pmmeta.UnknownCondition(pmmeta.ReadyCondition, PendingCreationReason, "reconciliation is pending"))
+		o.SetCondition(metav1.Condition{
+			Type:    readyConditionType,
+			Status:  metav1.ConditionUnknown,
+			Reason:  string(pendingCreationReason),
+			Message: "reconciliation is pending",
+		})
 	}
 }
 
@@ -152,15 +195,30 @@ func setupCreateState(o RuntimeObject, r ReconcileResult, err error) {
 func setupDeleteState(o RuntimeObject, r ReconcileResult, err error) {
 	switch r {
 	case Success:
-		o.SetCondition(pmmeta.TrueCondition(pmmeta.DeleteCondition, DeletedReason, "resource is successfully deleted"))
+		o.SetCondition(metav1.Condition{
+			Type:    deleteCondition,
+			Status:  metav1.ConditionTrue,
+			Reason:  string(deletedReason),
+			Message: "resource is successfully deleted",
+		})
 	case Failed:
 		msg := ""
 		if err != nil {
 			msg = err.Error()
 		}
-		o.SetCondition(pmmeta.FalseCondition(pmmeta.DeleteCondition, FailingDeletionReason, "deletion failed: "+msg))
+		o.SetCondition(metav1.Condition{
+			Type:    deleteCondition,
+			Status:  metav1.ConditionFalse,
+			Reason:  string(failingDeletionReason),
+			Message: "deletion failed: " + msg,
+		})
 	default:
-		o.SetCondition(pmmeta.FalseCondition(pmmeta.DeleteCondition, PendingDeletionReason, "deletion is pending"))
+		o.SetCondition(metav1.Condition{
+			Type:    deleteCondition,
+			Status:  metav1.ConditionFalse,
+			Reason:  string(pendingDeletionReason),
+			Message: "deletion is pending",
+		})
 	}
 }
 

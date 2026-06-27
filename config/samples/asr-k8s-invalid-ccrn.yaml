@@ -1,0 +1,17 @@
+# Scenario: well-formed CCRN URN but with an unsupported type segment.
+# The parser only knows: cluster.k8s.*, namespace.k8s.*, organization.github.*,
+# repository.github.*, repository_type.github.*. A type like "pod.k8s.*" looks
+# valid at a glance but is rejected by ccrn.Parse with "unsupported CCRN type".
+# Expected: EnsureASRValidity records the resource in p.invalidCCRNs; status
+# goes Degraded naming the bad CCRN. No RBAC provisioned.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-invalid-ccrn
+spec:
+  name: SCENARIO_INVALID_CCRN
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:pod.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/monitoring/my-pod"
+      capability: READ

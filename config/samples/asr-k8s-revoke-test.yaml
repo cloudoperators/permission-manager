@@ -1,0 +1,23 @@
+# Scenario: ConnectorBinding revoke audit.
+#
+# Pairs with connector-binding-k8s-revoke-test.yaml. Apply both, wait
+# for Provisioned=True/ProvisioningSucceeded, then delete the CB and
+# observe:
+#   - InvalidConfig=True/MissingConnectorBinding stamped on the ASR
+#   - Ready=False/MissingConnectorBinding mirrors it
+#   - Provisioned condition removed
+#   - status.providers.kubernetes shows Degraded (no leftover targets
+#     unless a cluster was unreachable during revoke)
+#   - On the remote cluster: pm-managed ClusterRole and ClusterRoleBinding
+#     for this ASR are GONE (active revoke, not just status flip).
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-revoke-test
+spec:
+  name: SCENARIO_REVOKE_TEST
+  connectorRefs:
+    - k8s-connector-revoke-test
+  permissions:
+    - resource: urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/monitoring
+      capability: READ

@@ -37,8 +37,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"slices"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -171,9 +169,57 @@ func (asr *ApplicationSpecificRole) SetCondition(c metav1.Condition) {
 }
 
 func (asr *ApplicationSpecificRole) RemoveCondition(t pmmeta.ConditionType) {
-	asr.Status.Conditions = slices.DeleteFunc(asr.Status.Conditions, func(c metav1.Condition) bool {
-		return c.Type == string(t)
-	})
+	asr.Status.Conditions = pmmeta.RemoveCondition(asr.Status.Conditions, t)
+}
+
+// GetReadyCondition returns the Ready condition, or nil.
+func (asr *ApplicationSpecificRole) GetReadyCondition() *metav1.Condition {
+	return pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ReadyCondition)
+}
+
+// ClearInvalidConfigIfReason removes the InvalidConfig condition iff its
+// current reason matches one of the given reasons. Lets each subroutine clear
+// only the reasons it owns.
+func (asr *ApplicationSpecificRole) ClearInvalidConfigIfReason(reasons ...pmmeta.ConditionReason) {
+	existing := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	if existing == nil {
+		return
+	}
+	for _, r := range reasons {
+		if existing.Reason == string(r) {
+			asr.RemoveCondition(pmmeta.InvalidConfigCondition)
+			return
+		}
+	}
+}
+
+// HasInvalidConfig reports whether InvalidConfig is True.
+func (asr *ApplicationSpecificRole) HasInvalidConfig() bool {
+	c := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	return c != nil && c.Status == metav1.ConditionTrue
+}
+
+// CalculateReady writes the Ready condition by mirroring the terminal sub-type:
+// InvalidConfig=True wins (mirrored as Ready=False); otherwise Ready mirrors
+// Provisioned. Ready never carries a reason that doesn't trace back to a sub-type.
+func (asr *ApplicationSpecificRole) CalculateReady() {
+	conditions := asr.GetConditions()
+	if invalid := pmmeta.GetConditionByType(conditions, pmmeta.InvalidConfigCondition); invalid != nil && invalid.Status == metav1.ConditionTrue {
+		asr.SetCondition(pmmeta.FalseCondition(
+			pmmeta.ReadyCondition,
+			pmmeta.ConditionReason(invalid.Reason),
+			invalid.Message,
+		))
+		return
+	}
+	if provisioned := pmmeta.GetConditionByType(conditions, pmmeta.ProvisionedCondition); provisioned != nil {
+		asr.SetCondition(metav1.Condition{
+			Type:    string(pmmeta.ReadyCondition),
+			Status:  provisioned.Status,
+			Reason:  provisioned.Reason,
+			Message: provisioned.Message,
+		})
+	}
 }
 
 func init() {

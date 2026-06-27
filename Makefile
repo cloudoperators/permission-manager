@@ -162,6 +162,12 @@ manifests: controller-gen ## Generate CRD and RBAC manifests.
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
+# Install mockery locally (e.g. `go install github.com/vektra/mockery/v2@latest`).
+MOCKERY ?= mockery
+.PHONY: mockery
+mockery: ## Generate mocks per .mockery.yaml configuration.
+	@command -v $(MOCKERY) >/dev/null || (echo "mockery not found; install it first" && exit 1)
+	$(MOCKERY) --config .mockery.yaml
 .PHONY: goimports
 goimports: $(GOIMPORTS)
 $(GOIMPORTS): $(LOCALBIN)

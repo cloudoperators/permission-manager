@@ -1,0 +1,14 @@
+# Scenario: namespace-slot wildcard (explicitly rejected per scenarios doc §373)
+# Expected: EnsureASRValidity flags the `*` namespace as invalid; status goes
+# Degraded with the offending CCRN. No RBAC provisioned.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-namespace-wildcard
+spec:
+  name: SCENARIO_NAMESPACE_WILDCARD
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/*"
+      capability: READ
