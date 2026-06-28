@@ -64,6 +64,15 @@ admin-cluster: ## Create the greenhouse-admin Kind cluster if it does not alread
 		$(KIND) create cluster --name $(ADMIN_CLUSTER) --config $(ADMIN_CLUSTER_CONFIG); \
 	fi
 
+.PHONY: remote-cluster
+remote-cluster: ## Create the greenhouse-remote Kind cluster if it does not already exist.
+	@if [ "$(call kind-cluster-exists,$(REMOTE_CLUSTER))" = "yes" ]; then \
+		echo "Kind cluster '$(REMOTE_CLUSTER)' already exists. Skipping creation."; \
+	else \
+		echo "Creating Kind cluster '$(REMOTE_CLUSTER)' from $(REMOTE_CLUSTER_CONFIG)..."; \
+		$(KIND) create cluster --name $(REMOTE_CLUSTER) --config $(REMOTE_CLUSTER_CONFIG); \
+	fi
+
 # admin-ca extracts the admin cluster's kube-root-ca.crt and writes it to bin/.
 # Required for rendering the remote cluster's structured-auth.yaml.
 .PHONY: admin-ca

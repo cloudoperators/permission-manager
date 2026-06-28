@@ -2,11 +2,15 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-cliVersion: 4.14.0
+cliVersion: 4.15.0
 domain: cloudoperators.dev
 layout:
 - go.kubebuilder.io/v4
-projectName: kubebuilder-scaffold
+plugins:
+  helm.kubebuilder.io/v2-alpha:
+    manifests: dist/install.yaml
+    output: bin/helm-scratch
+projectName: permission-manager
 repo: github.com/cloudoperators/permission-manager
 resources:
 - api:
