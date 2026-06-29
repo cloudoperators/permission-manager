@@ -28,6 +28,7 @@ import (
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	"github.com/cloudoperators/permission-manager/internal/provider/github"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
+	pmutils "github.com/cloudoperators/permission-manager/internal/utils"
 )
 
 // ASRReconciler is the single controller for ApplicationSpecificRole.
@@ -38,7 +39,7 @@ type ASRReconciler struct {
 	ProviderConfigName string
 	Log                logr.Logger
 	AuditLog           *audit.Logger
-	k8sPhase           *pmk8s.Phase
+	k8sClusterStore    toolscache.Store
 	ghPhase            *github.Phase
 	recorder           events.EventRecorder
 }
@@ -66,7 +67,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if !ok {
 		return errors.New("cluster informer does not implement SharedIndexInformer")
 	}
-	r.k8sPhase = pmk8s.New(r.Client, r.AuditLog, r.Log, sharedInformer.GetStore())
+	r.k8sClusterStore = sharedInformer.GetStore()
 	r.ghPhase = github.New(r.Client, r.AuditLog, r.Log)
 
 	if err := mgr.GetFieldIndexer().IndexField(
@@ -134,21 +135,7 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 	}
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderKubernetes)) {
-		var errs []error
-		for _, ref := range asr.Spec.ConnectorRefs {
-			cb := &v1alpha1.ConnectorBinding{}
-			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
-				continue
-			}
-			if cb.Spec.Provider == string(pmmeta.ProviderKubernetes) {
-				if err := r.k8sPhase.Reconcile(ctx, asr); err != nil {
-					errs = append(errs, err)
-				}
-			}
-		}
-		if len(errs) > 0 {
-			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
-		}
+		return r.reconcileKubernetes(ctx, asr)
 	}
 
 	return ctrl.Result{}, lifecycle.Success, nil
@@ -177,24 +164,54 @@ func (r *ASRReconciler) EnsureDeleted(ctx context.Context, obj lifecycle.Runtime
 	}
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderKubernetes)) {
-		var errs []error
-		for _, ref := range asr.Spec.ConnectorRefs {
-			cb := &v1alpha1.ConnectorBinding{}
-			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
-				continue
-			}
-			if cb.Spec.Provider == string(pmmeta.ProviderKubernetes) {
-				if err := r.k8sPhase.ReconcileDelete(ctx, asr); err != nil {
-					errs = append(errs, err)
-				}
-			}
-		}
-		if len(errs) > 0 {
-			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
-		}
+		return r.cleanUpKubernetes(ctx, asr)
 	}
 
 	return ctrl.Result{}, lifecycle.Success, nil
+}
+
+// defaultRemoteClientFactory adapts pmutils.NewRemoteClient's variadic
+// signature to the non-variadic pmk8s.RemoteClientFactory.
+func defaultRemoteClientFactory(ctx context.Context, c client.Client, clusterName, namespace string) (client.Client, error) {
+	return pmutils.NewRemoteClient(ctx, c, clusterName, namespace)
+}
+
+// reconcileKubernetes constructs a fresh k8s Phase and runs the create/update
+// subroutine chain. The Phase fetches its own ConnectorBindings via
+// EnsureConnectorBindings — the controller passes nothing beyond the ASR.
+func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole) (ctrl.Result, lifecycle.ReconcileResult, error) {
+	p := &pmk8s.Phase{
+		Client:       r.Client,
+		RemoteClient: defaultRemoteClientFactory,
+		AuditLog:     r.AuditLog,
+		Log:          r.Log,
+		ClusterStore: r.k8sClusterStore,
+	}
+	routines := []lifecycle.SubRoutine{
+		p.EnsureASRValidity(asr),
+		p.EnsureConnectorBindings(asr),
+		p.EnsureRbacCompiled(asr),
+		p.EnsureOrphansCleanedUp(asr),
+		p.EnsureRbacApplied(asr),
+		p.EnsureProviderStatus(asr),
+	}
+	return lifecycle.ExecuteSubRoutine(ctx, routines)
+}
+
+// cleanUpKubernetes constructs a fresh k8s Phase and runs the delete-path
+// subroutine chain. Operates off status alone — no CBs needed.
+func (r *ASRReconciler) cleanUpKubernetes(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole) (ctrl.Result, lifecycle.ReconcileResult, error) {
+	p := &pmk8s.Phase{
+		Client:       r.Client,
+		RemoteClient: defaultRemoteClientFactory,
+		AuditLog:     r.AuditLog,
+		Log:          r.Log,
+		ClusterStore: r.k8sClusterStore,
+	}
+	routines := []lifecycle.SubRoutine{
+		p.EnsureRbacRemoved(asr),
+	}
+	return lifecycle.ExecuteSubRoutine(ctx, routines)
 }
 
 // GetEventRecorder returns the event recorder.

@@ -6,6 +6,8 @@ package utils
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -13,10 +15,23 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const greenhouseKubeconfigKey = "greenhousekubeconfig"
+const (
+	greenhouseKubeconfigKey = "greenhousekubeconfig"
+
+	// apiServerOverrideAnnotation lets a developer running the controller
+	// outside the kind docker network point the remote client at a host-
+	// reachable address (e.g. https://127.0.0.1:53097) while keeping the
+	// kubeconfig's CA + auth intact. Honored only when the controller is
+	// started with DEV_API_SERVER_OVERRIDE set to a truthy value; production
+	// deployments must not set the env var, so a stray annotation on a Secret
+	// cannot redirect credentials to an attacker-controlled endpoint.
+	apiServerOverrideAnnotation = "greenhouse.cloudoperators.dev/api-server-override"
+	apiServerOverrideEnv        = "DEV_API_SERVER_OVERRIDE"
+)
 
 // NewRemoteClient builds a controller-runtime client for the named cluster
 // by reading its greenhousekubeconfig Secret from the management cluster.
@@ -36,6 +51,14 @@ func NewRemoteClient(ctx context.Context, c client.Client, clusterName, namespac
 	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigBytes)
 	if err != nil {
 		return nil, fmt.Errorf("malformed kubeconfig: %w", err)
+	}
+
+	if allow, err := strconv.ParseBool(os.Getenv(apiServerOverrideEnv)); err == nil && allow {
+		if override := secret.Annotations[apiServerOverrideAnnotation]; override != "" {
+			ctrl.LoggerFrom(ctx).Info("api server override active",
+				"cluster", clusterName, "from", restConfig.Host, "to", override)
+			restConfig.Host = override
+		}
 	}
 
 	scheme := runtime.NewScheme()

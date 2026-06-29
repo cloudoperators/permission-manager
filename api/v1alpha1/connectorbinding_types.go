@@ -38,15 +38,6 @@ type ConnectorBindingSpec struct {
 	// Definition is the provider-specific connection configuration.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Definition *runtime.RawExtension `json:"definition"`
-
-	// SupportsServiceIdentities indicates whether this connector supports ServiceIdentity resources.
-	// +optional
-	SupportsServiceIdentities bool `json:"supportsServiceIdentities,omitempty"`
-
-	// ServiceIdentityDefaults are default values applied to ServiceIdentity resources using this connector.
-	// +optional
-	// +kubebuilder:pruning:PreserveUnknownFields
-	ServiceIdentityDefaults *runtime.RawExtension `json:"serviceIdentityDefaults,omitempty"`
 }
 
 // ConnectorBindingStatus defines the observed state of ConnectorBinding.

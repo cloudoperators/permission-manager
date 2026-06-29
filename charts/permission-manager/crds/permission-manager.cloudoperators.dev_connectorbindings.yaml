@@ -59,15 +59,6 @@ spec:
               provider:
                 description: Provider is the provider identifier.
                 type: string
-              serviceIdentityDefaults:
-                description: ServiceIdentityDefaults are default values applied to
-                  ServiceIdentity resources using this connector.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              supportsServiceIdentities:
-                description: SupportsServiceIdentities indicates whether this connector
-                  supports ServiceIdentity resources.
-                type: boolean
             required:
             - definition
             - name

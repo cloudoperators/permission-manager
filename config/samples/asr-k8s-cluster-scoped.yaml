@@ -1,0 +1,16 @@
+# Scenario: cluster-scoped (not namespace-scoped) permission with ADMIN.
+# CCRN is the cluster URN with no namespace component, so EnsureRbacCompiled
+# emits a ClusterRole + ClusterRoleBinding instead of Role/RoleBinding.
+# Expected: pm-<asr> ClusterRole on kind-greenhouse-remote with verbs ["*"]
+# on */*, bound cluster-wide via ClusterRoleBinding. Status Ready=True.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-cluster-scoped
+spec:
+  name: SCENARIO_CLUSTER_SCOPED
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote"
+      capability: ADMIN

@@ -115,7 +115,7 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableAuditLog, "audit-log", true, "Enable audit logging to stdout.")
-	flag.StringVar(&providerConfigName, "provider-config-name", "pm-provider-cm", "Name of the ConfigMap used as provider feature-gate config.")
+	flag.StringVar(&providerConfigName, "provider-config-name", "permission-manager-provider-cm", "Name of the ConfigMap used as provider feature-gate config.")
 	opts := zap.Options{
 		Development: true,
 	}

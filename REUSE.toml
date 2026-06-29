@@ -1,22 +1,28 @@
 # SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Permission Manager contributors
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Permission Manager contributors
 # SPDX-License-Identifier: Apache-2.0
 
 version = 1
 
 [[annotations]]
 path = ["**/*.go", "**/*.yaml", "**/*.yml", "**/*.md", "**/*.mod", "**/*.sum", "**/*.tpl"]
-SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and Permission Manager contributors"
+SPDX-FileCopyrightText = "2026 SAP SE or an SAP affiliate company and Permission Manager contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = ["LICENSE"]
-SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and Permission Manager contributors"
+SPDX-FileCopyrightText = "2026 SAP SE or an SAP affiliate company and Permission Manager contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["internal/lifecycle/mocks/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 SAP SE or an SAP affiliate company and Permission Manager contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = ["**/*.json", ".github/CODEOWNERS", "**/.gitignore", "**/Dockerfile*", "**/Makefile", "**/*.mk", "**/*.txt", "PROJECT"]
-SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and Permission Manager contributors"
+SPDX-FileCopyrightText = "2026 SAP SE or an SAP affiliate company and Permission Manager contributors"
 SPDX-License-Identifier = "Apache-2.0"

@@ -1,0 +1,15 @@
+# Scenario: capability not present in the ConnectorBinding's capabilityMapping
+# (the CB only defines READ / WRITE / ADMIN — OPERATE is unmapped).
+# Expected: EnsureRbacCompiled records "OPERATE" in p.unmappedCaps; status goes
+# Degraded with the unmapped capability named. No RBAC provisioned.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-unmapped-capability
+spec:
+  name: SCENARIO_UNMAPPED_CAPABILITY
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/monitoring"
+      capability: OPERATE

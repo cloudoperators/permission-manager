@@ -1,0 +1,16 @@
+# Dedicated ConnectorBinding for the CB-revoke audit scenario.
+# Paired with asr-k8s-revoke-test.yaml — deleting THIS CB triggers
+# active RBAC revoke on the paired ASR without disturbing the other
+# scenarios that reference k8s-connector.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ConnectorBinding
+metadata:
+  name: k8s-connector-revoke-test
+spec:
+  name: Kubernetes Revoke Test
+  provider: kubernetes
+  definition:
+    capabilityMapping:
+      READ:  [get, list, watch]
+      WRITE: [get, list, watch, create, update, patch, delete]
+      ADMIN: ["*"]

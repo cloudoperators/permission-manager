@@ -1,0 +1,16 @@
+# Scenario: cluster pattern matches nothing in the informer store.
+# Expected: EnsureRbacCompiled produces an empty p.compiled (no targets).
+# EnsureRbacApplied has nothing to do; EnsureProviderStatus writes a provider
+# status with no targets — ASR is "successfully reconciled" against an empty
+# target set. No RBAC provisioned.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-unknown-cluster
+spec:
+  name: SCENARIO_UNKNOWN_CLUSTER
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/does-not-exist/monitoring"
+      capability: READ

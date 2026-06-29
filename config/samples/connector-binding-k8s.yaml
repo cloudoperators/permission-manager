@@ -3,6 +3,11 @@
 
 # Example: ConnectorBinding for Kubernetes provider
 # Links ASRs to the Kubernetes RBAC provider with capability mapping.
+#
+# The capabilityMapping is operator-curated vocabulary read at reconcile time:
+# each capability name (READ/WRITE/ADMIN) maps to the list of RBAC verbs the
+# resulting Role/ClusterRole should grant. WRITE explicitly repeats READ verbs
+# because the controller does not inject them — "trust the CB".
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ConnectorBinding
 metadata:
@@ -12,8 +17,6 @@ spec:
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ: "get,list,watch"
-      WRITE: "create,update,patch,delete"
-      OPERATE: "exec,port-forward,proxy"
-      MANAGE: "bind,escalate,impersonate"
-      "*": "*"
+      READ:  [get, list, watch]
+      WRITE: [get, list, watch, create, update, patch, delete]
+      ADMIN: ["*"]

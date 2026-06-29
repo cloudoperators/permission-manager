@@ -4,7 +4,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  build-license-eye:
+  license-check:
     permissions:
       contents: write
     uses: cloudoperators/common/.github/workflows/shared-license.yaml@main

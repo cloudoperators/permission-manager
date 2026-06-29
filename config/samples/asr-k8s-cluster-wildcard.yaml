@@ -1,0 +1,16 @@
+# Scenario: cluster-slot wildcard. The pattern "kind-*" should match
+# kind-greenhouse-remote (and any other kind-prefixed cluster in inventory).
+# Expected: EnsureRbacCompiled expands the wildcard into matched cluster names
+# in p.compiled; RBAC is provisioned in `monitoring` on each matched cluster.
+# Status Ready=True with one target per matched cluster.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: scenario-cluster-wildcard
+spec:
+  name: SCENARIO_CLUSTER_WILDCARD
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/kind-*/monitoring"
+      capability: READ

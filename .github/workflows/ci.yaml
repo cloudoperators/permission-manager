@@ -16,3 +16,28 @@ jobs:
 
   build:
     uses: cloudoperators/common/.github/workflows/shared-go-build.yaml@main
+    with:
+      docker-build: true
+
+  checksOK:
+    name: checksOK
+    needs: [lint, test, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR checks
+        run: |
+          fail=0
+          for r in \
+            "${{ needs.lint.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.build.result }}"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              fail=1
+            fi
+          done
+          if [ "$fail" -eq 1 ]; then
+            echo "::error ::One or more checks failed (lint=${{ needs.lint.result }}, test=${{ needs.test.result }}, build=${{ needs.build.result }})"
+            exit 1
+          fi
+          echo "All checks passed"

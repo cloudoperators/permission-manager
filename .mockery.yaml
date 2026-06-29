@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+dir: internal/lifecycle/mocks
+pkgname: mocks
+template: testify
+template-data:
+  unroll-variadic: true
+packages:
+  sigs.k8s.io/controller-runtime/pkg/client:
+    interfaces:
+      Client:
+        config:
+          filename: "mock_{{.InterfaceName}}.go"
+      SubResourceWriter:
+        config:
+          filename: "mock_{{.InterfaceName}}.go"
