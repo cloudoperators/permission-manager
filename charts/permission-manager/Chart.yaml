@@ -8,7 +8,7 @@ type: application
 kubeVersion: ">=1.30.0-0"
 
 version: 0.1.0
-appVersion: "0.0.1"
+appVersion: "v0.0.1"
 
 home: https://github.com/cloudoperators/permission-manager
 sources:

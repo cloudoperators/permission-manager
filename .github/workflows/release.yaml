@@ -8,13 +8,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - cmd/**
-      - internal/**
-      - api/**
-      - Dockerfile
-      - go.mod
-      - go.sum
     tags:
       - v*.*.*
 
@@ -57,10 +50,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # No v prefix so the release tag matches Chart.appVersion.
+          # Keep the leading v so image tags match the vX.Y.Z Chart.appVersion convention.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},prefix=v
+            type=semver,pattern={{major}}.{{minor}},prefix=v
             type=ref,event=branch
             type=sha
 
@@ -76,9 +69,9 @@ jobs:
 
       - name: Sign the published image
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   helm:
     name: Package and push chart
