@@ -1,41 +1,39 @@
 # SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
 # SPDX-License-Identifier: Apache-2.0
 
-name: Release - Build and Publish Container Images
+name: Release
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch: # allows manual testing from any branch
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - cmd/**
+      - internal/**
+      - api/**
+      - Dockerfile
+      - go.mod
+      - go.sum
+    tags:
+      - v*.*.*
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
-    name: Build ${{ matrix.image }}
+  docker:
+    name: Build, push and sign image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write # for cosign keyless signing and GitHub attestations
-      attestations: write # for actions/attest-build-provenance
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: kubernetes
-            image: pm-controller-kubernetes
-          - target: aggregator
-            image: pm-controller-aggregator
-          - target: github
-            image: pm-controller-github
-          - target: greenhouse-teams
-            image: pm-controller-greenhouse-teams
-
+      id-token: write # keyless cosign signing
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install cosign
@@ -47,59 +45,94 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to ghcr.io
+      - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No v prefix so the release tag matches Chart.appVersion.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
             type=sha
 
-      - name: Build and push
+      - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./controller
-          target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
+          context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Attest build provenance (GitHub)
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+      - name: Sign the published image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
 
-      - name: Generate SBOM with Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
-          format: cyclonedx
-          output: sbom.cdx.json
+  helm:
+    name: Package and push chart
+    needs: docker
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Attest SBOM (GitHub)
-        uses: actions/attest-sbom@v2
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          sbom-path: sbom.cdx.json
-          push-to-registry: true
+      - name: Install Helm
+        uses: azure/setup-helm@v5
 
-      - name: Attest SBOM with cosign
+      - name: Package and push Helm chart to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          cosign attest --yes \
-            --predicate sbom.cdx.json \
-            --type cyclonedx \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          CHART_NAME=$(grep '^name:' charts/permission-manager/Chart.yaml | awk '{print $2}')
+          CHART_VERSION=$(grep '^version:' charts/permission-manager/Chart.yaml | awk '{print $2}')
+
+          echo "Packaging chart $CHART_NAME version $CHART_VERSION"
+          helm package charts/permission-manager
+
+          echo "Logging in to $REGISTRY"
+          echo "$GHCR_TOKEN" | helm registry login "$REGISTRY" --username "$GHCR_USER" --password-stdin
+
+          echo "Pushing chart to $REGISTRY"
+          helm push "${CHART_NAME}-${CHART_VERSION}.tgz" "oci://${REGISTRY}/${OWNER}/charts"
+
+  vulnerability-scan:
+    name: Vulnerability scan
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.docker.outputs.digest }}
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
