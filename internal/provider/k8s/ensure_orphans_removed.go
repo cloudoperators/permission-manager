@@ -64,9 +64,6 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 			p.Log.Info("orphan RBAC cleaned up", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
 		}
 		for _, target := range p.compiled {
-			if _, stillTargeted := current[target.clusterName]; !stillTargeted {
-				continue
-			}
 			prior := pmmeta.GetTargetStatus(ps.Targets, target.clusterName)
 			if prior == nil || len(prior.AppliedResources) == 0 {
 				continue
@@ -221,6 +218,10 @@ func appliedRefKey(r pmmeta.AppliedResourceRef) string {
 
 // deleteSpecificRBAC deletes a single RBAC resource identified by ref.
 func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Client, ref pmmeta.AppliedResourceRef, asrName, clusterName string) error {
+	if ref.Name != resourceNamePrefix+asrName {
+		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedName", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+		return nil
+	}
 	switch ref.Kind {
 	case kindClusterRole:
 		obj := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: ref.Name}}
