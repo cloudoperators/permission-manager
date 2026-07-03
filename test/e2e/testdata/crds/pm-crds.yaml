@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
 # SPDX-License-Identifier: Apache-2.0
 
 ---
@@ -6,7 +6,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: applicationspecificroles.permission-manager.cloudoperators.dev
 spec:
   group: permission-manager.cloudoperators.dev
@@ -14,14 +14,23 @@ spec:
     kind: ApplicationSpecificRole
     listKind: ApplicationSpecificRoleList
     plural: applicationspecificroles
+    shortNames:
+    - asr
     singular: applicationspecificrole
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ApplicationSpecificRole defines an access level with permissions
-          and connector references.
+        description: ApplicationSpecificRole is the Schema for the applicationspecificroles
+          API
         properties:
           apiVersion:
             description: |-
@@ -41,8 +50,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ApplicationSpecificRoleSpec defines the desired state of
-              ApplicationSpecificRole.
+            description: spec defines the desired state of ApplicationSpecificRole
             properties:
               advancedConfig:
                 description: AdvancedConfig is implementation-specific configuration
@@ -136,23 +144,14 @@ spec:
             - name
             type: object
           status:
-            description: ApplicationSpecificRoleStatus defines the observed state
-              of ApplicationSpecificRole.
+            description: status defines the observed state of ApplicationSpecificRole
             properties:
               conditions:
                 description: Conditions represent the latest available observations
                   of the ASR's state.
                 items:
-                  description: "Condition contains details for one aspect of the current
-                    state of this API Resource.\n---\nThis struct is intended for
-                    direct use as an array at the field path .status.conditions.  For
-                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
-                    observations of a foo's current state.\n\t    // Known .status.conditions.type
-                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
-                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
-                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
-                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
-                    \   // other fields\n\t}"
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
                       description: |-
@@ -193,12 +192,7 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: |-
-                        type of condition in CamelCase or in foo.example.com/CamelCase.
-                        ---
-                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
-                        useful (see .node.status.conditions), the ability to deconflict is important.
-                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
@@ -234,6 +228,29 @@ spec:
                         description: TargetStatus tracks the provisioning state for
                           a single target within a provider.
                         properties:
+                          appliedResources:
+                            description: AppliedResources is the list of RBAC resources
+                              applied to this target on the last successful reconcile.
+                            items:
+                              description: AppliedResourceRef identifies a single
+                                RBAC resource that was applied to a target.
+                              properties:
+                                kind:
+                                  description: Kind is the Kubernetes resource kind
+                                    (e.g., Role, ClusterRole).
+                                  type: string
+                                name:
+                                  description: Name is the name of the resource.
+                                  type: string
+                                namespace:
+                                  description: Namespace is the namespace of the resource.
+                                    Empty for cluster-scoped resources.
+                                  type: string
+                              required:
+                              - kind
+                              - name
+                              type: object
+                            type: array
                           lastUpdated:
                             description: LastUpdated is the timestamp of the last
                               provisioning attempt for this target.
@@ -244,8 +261,7 @@ spec:
                               the result.
                             type: string
                           status:
-                            description: Status is the provisioning result (e.g.,
-                              Success, Error, Unreachable).
+                            description: Status is the provisioning result.
                             type: string
                           targetID:
                             description: TargetID is the identifier of the target
@@ -261,7 +277,7 @@ spec:
                   - lastReconciled
                   - ready
                   type: object
-                description: Providers maps provider name to its reconciliation status.
+                description: Providers maps provider type to its reconciliation status.
                 type: object
             type: object
         required:
@@ -271,304 +287,3 @@ spec:
     storage: true
     subresources:
       status: {}
----
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
-  name: connectorbindings.permission-manager.cloudoperators.dev
-spec:
-  group: permission-manager.cloudoperators.dev
-  names:
-    kind: ConnectorBinding
-    listKind: ConnectorBindingList
-    plural: connectorbindings
-    singular: connectorbinding
-  scope: Namespaced
-  versions:
-  - name: v1
-    schema:
-      openAPIV3Schema:
-        description: ConnectorBinding defines a connection to an external identity
-          provider.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: ConnectorBindingSpec defines the desired state of ConnectorBinding.
-            properties:
-              definition:
-                description: Definition is the provider-specific connection configuration.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              name:
-                description: Name is the unique connector name referenced by ApplicationSpecificRole
-                  connectorRefs.
-                type: string
-              provider:
-                description: Provider is the provider identifier.
-                type: string
-              serviceIdentityDefaults:
-                description: ServiceIdentityDefaults are default values applied to
-                  ServiceIdentity resources using this connector.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              supportsServiceIdentities:
-                description: SupportsServiceIdentities indicates whether this connector
-                  supports ServiceIdentity resources.
-                type: boolean
-            required:
-            - definition
-            - name
-            - provider
-            type: object
-        required:
-        - spec
-        type: object
-    served: true
-    storage: true
----
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
-  name: functionalroles.permission-manager.cloudoperators.dev
-spec:
-  group: permission-manager.cloudoperators.dev
-  names:
-    kind: FunctionalRole
-    listKind: FunctionalRoleList
-    plural: functionalroles
-    singular: functionalrole
-  scope: Namespaced
-  versions:
-  - name: v1
-    schema:
-      openAPIV3Schema:
-        description: |-
-          FunctionalRole defines a profile that groups access levels (ApplicationSpecificRoles)
-          with approvers, validity, and access prerequisites.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: FunctionalRoleSpec defines the desired state of FunctionalRole.
-            properties:
-              advancedConfig:
-                description: AdvancedConfig is implementation-specific configuration
-                  passed through to the connector.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              approvers:
-                description: Approvers is the list of approvers for this profile.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              description:
-                description: Description is a human-readable description.
-                type: string
-              displayName:
-                description: DisplayName is the human-readable profile name displayed
-                  in the CAM UI.
-                type: string
-              externalRoles:
-                description: ExternalRoles are environment-nested references to roles
-                  from external connectors.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              longDescription:
-                description: LongDescription is an extended description for the profile.
-                type: string
-              name:
-                description: Name is the unique slugified identifier used as metadata.name.
-                type: string
-              passports:
-                description: Passports are required passport profile names (user must
-                  hold these to request this profile).
-                items:
-                  type: string
-                type: array
-              roles:
-                description: Roles are access level references included in this profile.
-                items:
-                  description: RoleReference is a reference to an ApplicationSpecificRole
-                    (access level).
-                  properties:
-                    name:
-                      description: Name is the name of the ApplicationSpecificRole.
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
-              tags:
-                description: Tags for categorization and filtering.
-                items:
-                  type: string
-                type: array
-              type:
-                description: Type is the profile type classification.
-                enum:
-                - access
-                - elevated
-                - passport
-                type: string
-              validity:
-                description: Validity defines validity durations in ISO 8601 format.
-                properties:
-                  default:
-                    description: Default is the default validity duration (e.g., P6M,
-                      PT8H, P1D).
-                    type: string
-                  maximum:
-                    description: Maximum is the maximum validity duration.
-                    type: string
-                type: object
-            required:
-            - name
-            type: object
-        required:
-        - spec
-        type: object
-    served: true
-    storage: true
----
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
-  name: serviceidentities.permission-manager.cloudoperators.dev
-spec:
-  group: permission-manager.cloudoperators.dev
-  names:
-    kind: ServiceIdentity
-    listKind: ServiceIdentityList
-    plural: serviceidentities
-    singular: serviceidentity
-  scope: Namespaced
-  versions:
-  - name: v1
-    schema:
-      openAPIV3Schema:
-        description: ServiceIdentity defines a technical user or service account template
-          provisioned through a connector.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: ServiceIdentitySpec defines the desired state of ServiceIdentity.
-            properties:
-              advancedConfig:
-                description: AdvancedConfig is implementation-specific configuration
-                  passed through to the connector.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              approvers:
-                description: Approvers for this service identity.
-                items:
-                  description: ServiceIdentityApprover defines an approver for a service
-                    identity.
-                  properties:
-                    step:
-                      description: Step is the approval step number.
-                      type: integer
-                    userID:
-                      description: UserID is the ID of the approving user.
-                      type: string
-                  type: object
-                type: array
-              connectorRefs:
-                description: ConnectorRefs are references to ConnectorBinding names
-                  that provide tool configuration.
-                items:
-                  type: string
-                minItems: 1
-                type: array
-              description:
-                description: Description is a human-readable description.
-                type: string
-              displayName:
-                description: DisplayName is the human-readable service identity name
-                  displayed in the CAM UI.
-                type: string
-              name:
-                description: Name is the unique slugified identifier used as metadata.name.
-                type: string
-              roles:
-                description: Roles are ApplicationSpecificRoles associated with this
-                  service identity.
-                items:
-                  description: RoleReference is a reference to an ApplicationSpecificRole
-                    (access level).
-                  properties:
-                    name:
-                      description: Name is the name of the ApplicationSpecificRole.
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
-              tags:
-                description: Tags for environment filtering (e.g., qa, prod).
-                items:
-                  type: string
-                type: array
-            required:
-            - connectorRefs
-            - name
-            type: object
-        required:
-        - spec
-        type: object
-    served: true
-    storage: true

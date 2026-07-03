@@ -196,3 +196,38 @@ func Test_EnsureProviderStatus_Invalid_Override(t *testing.T) {
 	require.NotNil(t, ready)
 	require.Equal(t, metav1.ConditionFalse, ready.Status)
 }
+
+func Test_EnsureProviderStatus_OrphanError_PreservesAppliedResources(t *testing.T) {
+	priorRefs := []pmmeta.AppliedResourceRef{
+		{Kind: "Role", Namespace: "monitoring", Name: testResource},
+		{Kind: "Role", Namespace: "observability", Name: testResource},
+	}
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{
+						{TargetID: testClusterName, Status: pmmeta.TargetStatusReady, AppliedResources: priorRefs},
+					},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+	}
+	p.SetOrphanStatuses([]pmk8s.ExportClusterStatus{{Name: testClusterName, Err: errors.New("delete failed")}})
+	p.SetOrphanErrs([]error{errors.New("delete failed")})
+
+	_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+	require.NotNil(t, ps)
+	require.Len(t, ps.Targets, 1)
+	target := ps.Targets[0]
+	require.Equal(t, pmmeta.TargetStatusError, target.Status)
+	require.Equal(t, priorRefs, target.AppliedResources, "prior applied resources must survive a failed orphan delete")
+}

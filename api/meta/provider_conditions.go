@@ -30,6 +30,21 @@ const (
 
 // +kubebuilder:object:generate=true
 
+// AppliedResourceRef identifies a single RBAC resource that was applied to a target.
+type AppliedResourceRef struct {
+	// Kind is the Kubernetes resource kind (e.g., Role, ClusterRole).
+	Kind string `json:"kind"`
+
+	// Namespace is the namespace of the resource. Empty for cluster-scoped resources.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Name is the name of the resource.
+	Name string `json:"name"`
+}
+
+// +kubebuilder:object:generate=true
+
 // TargetStatus tracks the provisioning state for a single target within a provider.
 type TargetStatus struct {
 	// TargetID is the identifier of the target (e.g., cluster name).
@@ -44,6 +59,10 @@ type TargetStatus struct {
 
 	// LastUpdated is the timestamp of the last provisioning attempt for this target.
 	LastUpdated metav1.Time `json:"lastUpdated"`
+
+	// AppliedResources is the list of RBAC resources applied to this target on the last successful reconcile.
+	// +optional
+	AppliedResources []AppliedResourceRef `json:"appliedResources,omitempty"`
 }
 
 // +kubebuilder:object:generate=true
@@ -173,6 +192,21 @@ func targetsSemanticEqual(a, b []TargetStatus) bool {
 	}
 	for i := range a {
 		if a[i].TargetID != b[i].TargetID || a[i].Status != b[i].Status || a[i].Message != b[i].Message {
+			return false
+		}
+		if !appliedResourcesEqual(a[i].AppliedResources, b[i].AppliedResources) {
+			return false
+		}
+	}
+	return true
+}
+
+func appliedResourcesEqual(a, b []AppliedResourceRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

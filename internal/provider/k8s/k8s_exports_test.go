@@ -6,6 +6,7 @@ package k8s
 import (
 	rbacv1 "k8s.io/api/rbac/v1"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -42,7 +43,7 @@ func (p *Phase) SetUnmatchedClusterPatterns(patterns []string) {
 func (p *Phase) SetProvisionStatuses(entries []ExportClusterStatus) {
 	out := make([]clusterStatus, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, clusterStatus{name: e.Name, err: e.Err})
+		out = append(out, clusterStatus{name: e.Name, err: e.Err, appliedResources: e.AppliedResources})
 	}
 	p.provisionStatuses = out
 }
@@ -50,7 +51,7 @@ func (p *Phase) SetProvisionStatuses(entries []ExportClusterStatus) {
 func (p *Phase) SetOrphanStatuses(entries []ExportClusterStatus) {
 	out := make([]clusterStatus, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, clusterStatus{name: e.Name, err: e.Err})
+		out = append(out, clusterStatus{name: e.Name, err: e.Err, appliedResources: e.AppliedResources})
 	}
 	p.orphanStatuses = out
 }
@@ -64,8 +65,9 @@ func (p *Phase) SetOrphanErrs(errs []error) {
 }
 
 type ExportClusterStatus struct {
-	Name string
-	Err  error
+	Name             string
+	Err              error
+	AppliedResources []pmmeta.AppliedResourceRef
 }
 
 func (p *Phase) Compiled() []ExportCompiledTarget {
