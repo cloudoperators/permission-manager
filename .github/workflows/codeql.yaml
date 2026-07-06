@@ -4,6 +4,11 @@ on:
     branches: [ "main" ]
   pull_request:
     types: [ opened, synchronize, reopened ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
   schedule:
     - cron: '20 08 * * 1'
 
