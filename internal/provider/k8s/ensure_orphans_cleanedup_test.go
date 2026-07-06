@@ -107,6 +107,93 @@ func Test_EnsureOrphansCleanedUp(t *testing.T) {
 			wantProviderEntry: true,
 			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterName: pmmeta.TargetStatusError},
 		},
+		{
+			name: "should delete orphaned namespace role and rolebinding when namespace is de-referenced",
+			compiled: []pmk8s.ExportCompiledTarget{
+				{
+					ClusterName: testClusterName,
+					Roles: []rbacv1.Role{
+						{ObjectMeta: metav1.ObjectMeta{Name: testResource, Namespace: "monitoring"}},
+					},
+					RoleBindings: []rbacv1.RoleBinding{
+						{ObjectMeta: metav1.ObjectMeta{Name: testResource, Namespace: "monitoring"}},
+					},
+				},
+			},
+			priorTargets: []pmmeta.TargetStatus{
+				{
+					TargetID: testClusterName,
+					Status:   pmmeta.TargetStatusReady,
+					AppliedResources: []pmmeta.AppliedResourceRef{
+						{Kind: "Role", Namespace: "monitoring", Name: testResource},
+						{Kind: "RoleBinding", Namespace: "monitoring", Name: testResource},
+						{Kind: "Role", Namespace: "observability", Name: testResource},
+						{Kind: "RoleBinding", Namespace: "observability", Name: testResource},
+					},
+				},
+			},
+			remote: func() *mocks.MockClient {
+				m := mocks.NewMockClient(t)
+				m.On("Delete", mock.Anything, mock.MatchedBy(func(obj client.Object) bool {
+					return obj.GetNamespace() == "observability" && obj.GetName() == testResource
+				}), mock.Anything).Return(nil).Times(2)
+				return m
+			},
+			wantProviderEntry: true,
+			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterName: pmmeta.TargetStatusReady},
+		},
+		{
+			name: "should delete orphaned clusterrole and clusterrolebinding when narrowing from cluster-wide to namespace-only",
+			compiled: []pmk8s.ExportCompiledTarget{
+				{
+					ClusterName: testClusterName,
+					Roles: []rbacv1.Role{
+						{ObjectMeta: metav1.ObjectMeta{Name: testResource, Namespace: "monitoring"}},
+					},
+					RoleBindings: []rbacv1.RoleBinding{
+						{ObjectMeta: metav1.ObjectMeta{Name: testResource, Namespace: "monitoring"}},
+					},
+				},
+			},
+			priorTargets: []pmmeta.TargetStatus{
+				{
+					TargetID: testClusterName,
+					Status:   pmmeta.TargetStatusReady,
+					AppliedResources: []pmmeta.AppliedResourceRef{
+						{Kind: "ClusterRole", Name: testResource},
+						{Kind: "ClusterRoleBinding", Name: testResource},
+					},
+				},
+			},
+			remote: func() *mocks.MockClient {
+				m := mocks.NewMockClient(t)
+				m.On("Delete", mock.Anything, mock.MatchedBy(func(obj client.Object) bool {
+					return obj.GetName() == testResource && obj.GetNamespace() == ""
+				}), mock.Anything).Return(nil).Times(2)
+				return m
+			},
+			wantProviderEntry: true,
+			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterName: pmmeta.TargetStatusReady},
+		},
+		{
+			name: "should skip sub-resource diff when no prior applied resources recorded",
+			compiled: []pmk8s.ExportCompiledTarget{
+				{
+					ClusterName: testClusterName,
+					Roles: []rbacv1.Role{
+						{ObjectMeta: metav1.ObjectMeta{Name: testResource, Namespace: "monitoring"}},
+					},
+				},
+			},
+			priorTargets: []pmmeta.TargetStatus{
+				{TargetID: testClusterName, Status: pmmeta.TargetStatusReady},
+			},
+			remote: func() *mocks.MockClient {
+				return mocks.NewMockClient(t) // no calls expected
+			},
+			wantProviderEntry: true,
+			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterName: pmmeta.TargetStatusReady},
+		},
 	}
 
 	for _, tc := range cases {

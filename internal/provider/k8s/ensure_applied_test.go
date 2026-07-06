@@ -233,3 +233,79 @@ func Test_EnsureRbacApplied(t *testing.T) {
 		})
 	}
 }
+
+func Test_EnsureRbacApplied_AppliedResources(t *testing.T) {
+	t.Run("should record applied resources in provider status on successful apply", func(t *testing.T) {
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+		}
+		remote := mocks.NewMockClient(t)
+		remote.On("Get", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errNotFoundCR)
+		remote.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		p := &pmk8s.Phase{
+			RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) {
+				return remote, nil
+			},
+			AuditLog: audit.Disabled(),
+			Log:      ctrl.Log.WithName("test"),
+		}
+		p.SetCompiled([]pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterName)})
+
+		_, _ = p.EnsureRbacApplied(asr)(context.Background())
+		_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+		ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+		require.NotNil(t, ps)
+		require.Len(t, ps.Targets, 1)
+		target := ps.Targets[0]
+		require.Equal(t, testClusterName, target.TargetID)
+		require.Len(t, target.AppliedResources, 2)
+		require.Equal(t, "ClusterRole", target.AppliedResources[0].Kind)
+		require.Equal(t, testResource, target.AppliedResources[0].Name)
+		require.Equal(t, "ClusterRoleBinding", target.AppliedResources[1].Kind)
+		require.Equal(t, testResource, target.AppliedResources[1].Name)
+	})
+
+	t.Run("should preserve prior applied resources in status when apply fails", func(t *testing.T) {
+		priorRefs := []pmmeta.AppliedResourceRef{
+			{Kind: "ClusterRole", Name: testResource},
+			{Kind: "ClusterRoleBinding", Name: testResource},
+		}
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+			Status: v1alpha1.ApplicationSpecificRoleStatus{
+				Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+					pmmeta.ProviderKubernetes: {
+						Targets: []pmmeta.TargetStatus{
+							{TargetID: testClusterName, Status: pmmeta.TargetStatusReady, AppliedResources: priorRefs},
+						},
+					},
+				},
+			},
+		}
+		remote := mocks.NewMockClient(t)
+		remote.On("Get", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("api error"))
+
+		p := &pmk8s.Phase{
+			RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) {
+				return remote, nil
+			},
+			AuditLog: audit.Disabled(),
+			Log:      ctrl.Log.WithName("test"),
+		}
+		p.SetCompiled([]pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterName)})
+
+		_, _ = p.EnsureRbacApplied(asr)(context.Background())
+		_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+		ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+		require.NotNil(t, ps)
+		require.Len(t, ps.Targets, 1)
+		target := ps.Targets[0]
+		require.Equal(t, pmmeta.TargetStatusError, target.Status)
+		require.Equal(t, priorRefs, target.AppliedResources, "prior applied resources must be preserved on error")
+	})
+}

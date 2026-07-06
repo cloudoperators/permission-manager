@@ -228,6 +228,29 @@ spec:
                         description: TargetStatus tracks the provisioning state for
                           a single target within a provider.
                         properties:
+                          appliedResources:
+                            description: AppliedResources is the list of RBAC resources
+                              applied to this target on the last successful reconcile.
+                            items:
+                              description: AppliedResourceRef identifies a single
+                                RBAC resource that was applied to a target.
+                              properties:
+                                kind:
+                                  description: Kind is the Kubernetes resource kind
+                                    (e.g., Role, ClusterRole).
+                                  type: string
+                                name:
+                                  description: Name is the name of the resource.
+                                  type: string
+                                namespace:
+                                  description: Namespace is the namespace of the resource.
+                                    Empty for cluster-scoped resources.
+                                  type: string
+                              required:
+                              - kind
+                              - name
+                              type: object
+                            type: array
                           lastUpdated:
                             description: LastUpdated is the timestamp of the last
                               provisioning attempt for this target.

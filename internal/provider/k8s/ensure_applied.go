@@ -67,7 +67,10 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 				p.provisionErrs = append(p.provisionErrs, aggregated)
 				continue
 			}
-			p.provisionStatuses = append(p.provisionStatuses, clusterStatus{name: target.clusterName})
+			p.provisionStatuses = append(p.provisionStatuses, clusterStatus{
+				name:             target.clusterName,
+				appliedResources: compiledTargetToRefs(target),
+			})
 		}
 
 		total := len(p.compiled)
@@ -210,4 +213,22 @@ func opToAction(op controllerutil.OperationResult) audit.Action {
 		return audit.ActionCreate
 	}
 	return audit.ActionUpdate
+}
+
+// compiledTargetToRefs extracts the set of applied resource refs from a compiled target.
+func compiledTargetToRefs(t compiledTarget) []pmmeta.AppliedResourceRef {
+	var refs []pmmeta.AppliedResourceRef
+	for _, cr := range t.clusterRoles {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindClusterRole, Name: cr.Name})
+	}
+	for _, crb := range t.clusterRoleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindClusterRoleBinding, Name: crb.Name})
+	}
+	for _, r := range t.roles {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRole, Namespace: r.Namespace, Name: r.Name})
+	}
+	for _, rb := range t.roleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRoleBinding, Namespace: rb.Namespace, Name: rb.Name})
+	}
+	return refs
 }

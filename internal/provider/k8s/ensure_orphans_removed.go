@@ -10,6 +10,7 @@ import (
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -61,6 +62,36 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 				continue
 			}
 			p.Log.Info("orphan RBAC cleaned up", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
+		}
+		for _, target := range p.compiled {
+			prior := pmmeta.GetTargetStatus(ps.Targets, target.clusterName)
+			if prior == nil || len(prior.AppliedResources) == 0 {
+				continue
+			}
+			desired := compiledTargetToRefSet(target)
+			var orphaned []pmmeta.AppliedResourceRef
+			for _, ref := range prior.AppliedResources {
+				if _, ok := desired[appliedRefKey(ref)]; !ok {
+					orphaned = append(orphaned, ref)
+				}
+			}
+			if len(orphaned) == 0 {
+				continue
+			}
+			remoteClient, err := p.RemoteClient(ctx, p.Client, target.clusterName, asr.Namespace)
+			if err != nil {
+				p.Log.Error(err, "cluster unreachable for sub-resource orphan cleanup, will retry", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName)
+				p.orphanStatuses = append(p.orphanStatuses, clusterStatus{name: target.clusterName, err: err})
+				p.orphanErrs = append(p.orphanErrs, err)
+				continue
+			}
+			for _, ref := range orphaned {
+				if err := p.deleteSpecificRBAC(ctx, remoteClient, ref, asr.Name, target.clusterName); err != nil {
+					p.Log.Error(err, "failed to clean up orphan sub-resource", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+					p.orphanStatuses = append(p.orphanStatuses, clusterStatus{name: target.clusterName, err: err})
+					p.orphanErrs = append(p.orphanErrs, err)
+				}
+			}
 		}
 		return lifecycle.Continue(), nil
 	}
@@ -167,4 +198,44 @@ func previouslyTargetedClusters(asr *v1alpha1.ApplicationSpecificRole) []string 
 		names = append(names, t.TargetID)
 	}
 	return names
+}
+
+// compiledTargetToRefSet returns a set of appliedRefKey strings for all
+// resources in a compiled target.
+func compiledTargetToRefSet(t compiledTarget) map[string]struct{} {
+	refs := compiledTargetToRefs(t)
+	set := make(map[string]struct{}, len(refs))
+	for _, r := range refs {
+		set[appliedRefKey(r)] = struct{}{}
+	}
+	return set
+}
+
+// appliedRefKey returns a unique string key for an AppliedResourceRef.
+func appliedRefKey(r pmmeta.AppliedResourceRef) string {
+	return r.Kind + "/" + r.Namespace + "/" + r.Name
+}
+
+// deleteSpecificRBAC deletes a single RBAC resource identified by ref.
+func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Client, ref pmmeta.AppliedResourceRef, asrName, clusterName string) error {
+	if ref.Name != resourceNamePrefix+asrName {
+		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedName", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+		return nil
+	}
+	switch ref.Kind {
+	case kindClusterRole:
+		obj := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: ref.Name}}
+		return p.deleteIfExists(ctx, remoteClient, obj, asrName, clusterName, kindClusterRole)
+	case kindClusterRoleBinding:
+		obj := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: ref.Name}}
+		return p.deleteIfExists(ctx, remoteClient, obj, asrName, clusterName, kindClusterRoleBinding)
+	case kindRole:
+		obj := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: ref.Namespace}}
+		return p.deleteIfExists(ctx, remoteClient, obj, asrName, clusterName, kindRole)
+	case kindRoleBinding:
+		obj := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: ref.Namespace}}
+		return p.deleteIfExists(ctx, remoteClient, obj, asrName, clusterName, kindRoleBinding)
+	default:
+		return fmt.Errorf("unknown RBAC kind %q", ref.Kind)
+	}
 }

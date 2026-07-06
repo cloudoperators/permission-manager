@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
 )
@@ -59,8 +60,9 @@ type compiledTarget struct {
 
 // clusterStatus tracks the provisioning outcome for a single cluster.
 type clusterStatus struct {
-	name string
-	err  error
+	name             string
+	err              error
+	appliedResources []pmmeta.AppliedResourceRef
 }
 
 // RBAC resource naming + kind constants.

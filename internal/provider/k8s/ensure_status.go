@@ -59,11 +59,29 @@ func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
 	if existing != nil {
 		targets = existing.Targets
 	}
+
+	// Snapshot before provision writes so orphan error handling can read the
+	// original refs (which may include resources still pending deletion).
+	priorTargets := make([]pmmeta.TargetStatus, len(targets))
+	copy(priorTargets, targets)
+
 	for _, s := range p.provisionStatuses {
-		targets = pmmeta.SetTargetStatus(targets, toTargetStatus(s))
+		ts := toTargetStatus(s)
+		if s.err != nil {
+			if prior := pmmeta.GetTargetStatus(targets, s.name); prior != nil {
+				ts.AppliedResources = prior.AppliedResources
+			}
+		}
+		targets = pmmeta.SetTargetStatus(targets, ts)
 	}
 	for _, s := range p.orphanStatuses {
-		targets = pmmeta.SetTargetStatus(targets, toTargetStatus(s))
+		ts := toTargetStatus(s)
+		if s.err != nil {
+			if prior := pmmeta.GetTargetStatus(priorTargets, s.name); prior != nil {
+				ts.AppliedResources = prior.AppliedResources
+			}
+		}
+		targets = pmmeta.SetTargetStatus(targets, ts)
 	}
 	asr.Status.Providers = pmmeta.SetProviderStatus(
 		asr.Status.Providers,
@@ -73,7 +91,7 @@ func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
 }
 
 func toTargetStatus(s clusterStatus) pmmeta.TargetStatus {
-	ts := pmmeta.TargetStatus{TargetID: s.name}
+	ts := pmmeta.TargetStatus{TargetID: s.name, AppliedResources: s.appliedResources}
 	if s.err != nil {
 		ts.Status = pmmeta.TargetStatusError
 		ts.Message = s.err.Error()
