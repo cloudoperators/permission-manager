@@ -56,19 +56,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
       - name: Build changelog
-        id: changelog
         uses: mikepenz/release-changelog-builder-action@bcae7115752d4ed746ff92feb666574428a79415 # v6.2.1
         with:
-          ignorePreReleases: true
           configuration: .github/changelog-config.json
+          ignorePreReleases: true
+          outputFile: CHANGELOG.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           draft: false
           generate_release_notes: false
-          body: ${{ steps.changelog.outputs.changelog }}
+          body_path: CHANGELOG.md
           token: ${{ secrets.GITHUB_TOKEN }}
