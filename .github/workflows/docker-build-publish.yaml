@@ -1,0 +1,39 @@
+name: Docker Build and Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  docker:
+    name: Build and push image
+    uses: cloudoperators/common/.github/workflows/shared-docker-build-push.yaml@main
+    with:
+      image-name: ghcr.io/${{ github.repository }}
+    secrets:
+      registry-token: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create GitHub release
+    needs: [docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Build changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@bcae7115752d4ed746ff92feb666574428a79415 # v6.2.1
+        with:
+          ignorePreReleases: true
+          configuration: .github/changelog-config.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          draft: false
+          generate_release_notes: false
+          body: ${{ steps.changelog.outputs.changelog }}
+          token: ${{ secrets.GITHUB_TOKEN }}
