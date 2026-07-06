@@ -129,13 +129,6 @@ rbac:
   ##
   namespaced: false
 
-  ## Helper roles for CRD management (admin/editor/viewer)
-  ##
-  helpers:
-    ## Install convenience admin/editor/viewer roles for CRDs
-    ##
-    enabled: false
-
 ## ServiceAccount configuration
 ##
 serviceAccount:
@@ -155,14 +148,6 @@ serviceAccount:
   ##
   # labels: {}
 
-## Custom Resource Definitions
-##
-crd:
-  # Install CRDs with the chart
-  enabled: true
-  # Keep CRDs when uninstalling
-  keep: true
-
 ## Controller metrics endpoint.
 ## Enable to expose /metrics endpoint
 ##
@@ -173,12 +158,6 @@ metrics:
   # Enable secure metrics: HTTPS with certs/auth (true) or HTTP (false).
   # Note: Metrics authn/authz needs ClusterRole access.
   secure: true
-
-## Cert-manager integration for TLS certificates.
-## Required for webhook certificates and metrics endpoint certificates.
-##
-certManager:
-  enabled: false
 
 ## Prometheus ServiceMonitor for metrics scraping.
 ## Requires prometheus-operator to be installed in the cluster.
