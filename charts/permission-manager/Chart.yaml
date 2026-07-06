@@ -7,7 +7,7 @@ description: A Helm chart for Permission Manager, a Kubernetes operator for mana
 type: application
 kubeVersion: ">=1.30.0-0"
 
-version: 0.1.0
+version: 0.1.1
 appVersion: "v0.0.1"
 
 home: https://github.com/cloudoperators/permission-manager
@@ -25,3 +25,4 @@ maintainers:
   - name: mikolajkucinski
   - name: abhijith-darshan
   - name: onuryilmaz
+  - name: mik-tsi
