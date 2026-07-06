@@ -9,6 +9,9 @@ jobs:
   docker:
     name: Build and push image
     uses: cloudoperators/common/.github/workflows/shared-docker-build-push.yaml@main
+    permissions:
+      contents: read
+      packages: write
     with:
       image-name: ghcr.io/${{ github.repository }}
     secrets:
