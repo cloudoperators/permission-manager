@@ -14,6 +14,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 )
 
 // RemoteClientFactory builds a client.Client for a remote cluster. Production
@@ -28,6 +29,7 @@ type Phase struct {
 	AuditLog     *audit.Logger
 	Log          logr.Logger
 	ClusterStore cache.Store
+	CCRNParser   *ccrn.Parser
 
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding

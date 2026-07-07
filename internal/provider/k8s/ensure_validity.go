@@ -22,8 +22,12 @@ import (
 // entries are present; clears the InvalidCCRN reason otherwise.
 func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(_ context.Context) (lifecycle.Result, error) {
+		parser := p.CCRNParser
+		if parser == nil {
+			parser = ccrn.NewParser(nil)
+		}
 		for _, perm := range asr.Spec.Permissions {
-			parsed, err := ccrn.Parse(perm.Resource)
+			parsed, err := parser.Parse(perm.Resource)
 			if err != nil {
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
 				continue

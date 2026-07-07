@@ -81,15 +81,81 @@ const (
 	ccrnVersion = "v1"
 )
 
-// CCRN type names derived from the configurable domain.
-func clusterCCRNName() string   { return "cluster.k8s." + DefaultDomain }
-func namespaceCCRNName() string { return "namespace.k8s." + DefaultDomain }
+// Parser parses CCRN URNs against a set of registered k8s domain groups.
+// Multiple groups allow deployments that use a custom CCRN registry domain
+// alongside the default one. The default domain is always included.
+// Use NewParser to construct; the zero value is not usable.
+type Parser struct {
+	// k8sTypes maps fully-qualified k8s CCRN type name → ResourceType.
+	// Built once at construction time; each Parse call does a single map lookup.
+	k8sTypes map[string]ResourceType
+}
 
-func githubOrganizationCCRNName() string   { return "organization.github." + DefaultDomain }
-func githubRepositoryCCRNName() string     { return "repository.github." + DefaultDomain }
-func githubRepositoryTypeCCRNName() string { return "repository_type.github." + DefaultDomain }
+// NewParser returns a Parser that recognises k8s CCRNs whose type names end in
+// any of the supplied domain groups. The default domain is always included so
+// callers only need to pass additional groups.
+func NewParser(k8sGroups []string) *Parser {
+	seen := make(map[string]struct{}, len(k8sGroups)+1)
+	groups := make([]string, 0, len(k8sGroups)+1)
+	groups = append(groups, DefaultDomain)
+	seen[DefaultDomain] = struct{}{}
+	for _, g := range k8sGroups {
+		g = strings.TrimSpace(g)
+		if g == "" {
+			continue
+		}
+		if _, ok := seen[g]; !ok {
+			seen[g] = struct{}{}
+			groups = append(groups, g)
+		}
+	}
+	k8sTypes := make(map[string]ResourceType, len(groups)*2)
+	for _, g := range groups {
+		k8sTypes["cluster.k8s."+g] = ResourceTypeCluster
+		k8sTypes["namespace.k8s."+g] = ResourceTypeNamespace
+	}
+	return &Parser{k8sTypes: k8sTypes}
+}
 
-// Parse parses a CCRN URN string and returns its components.
+// Parse parses urn against all registered k8s domain groups. Non-k8s types
+// (e.g. GitHub) are parsed using the default domain.
+func (p *Parser) Parse(urn string) (*ParsedCCRN, error) {
+	ccrnName, parts, err := splitURN(urn)
+	if err != nil {
+		return nil, err
+	}
+
+	switch p.k8sTypes[ccrnName] {
+	case ResourceTypeCluster:
+		return parseK8sCluster(urn, parts)
+	case ResourceTypeNamespace:
+		return parseK8sNamespace(urn, parts)
+	}
+
+	return parseGithub(ccrnName, urn, parts)
+}
+
+// splitURN validates the URN prefix, splits it into segments, and checks the
+// version field. Returns ccrnName (segment 0) and all segments, or an error.
+func splitURN(urn string) (ccrnName string, parts []string, err error) {
+	if urn == "" {
+		return "", nil, errors.New("CCRN URN must not be empty")
+	}
+	if !strings.HasPrefix(urn, urnPrefix) {
+		return "", nil, fmt.Errorf("invalid CCRN URN: must start with %q", urnPrefix)
+	}
+	body := strings.TrimPrefix(urn, urnPrefix)
+	parts = strings.Split(body, "/")
+	if len(parts) < 3 {
+		return "", nil, fmt.Errorf("invalid CCRN URN: expected at least 3 segments after prefix, got %d", len(parts))
+	}
+	if parts[1] != ccrnVersion {
+		return "", nil, fmt.Errorf("unsupported CCRN version: %q (expected %q)", parts[1], ccrnVersion)
+	}
+	return parts[0], parts, nil
+}
+
+// Parse parses a CCRN URN string using only the default domain.
 // Supported formats:
 //   - Cluster:          urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/<cluster-name>
 //   - Namespace:        urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/<cluster-name>/<namespace>
@@ -97,75 +163,72 @@ func githubRepositoryTypeCCRNName() string { return "repository_type.github." + 
 //   - Organization:     urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/<instance>/<org>
 //   - Repository type:  urn:ccrn:repository_type.github.ccrn.cloudoperators.dev/v1/<instance>/<org>/<visibility>
 func Parse(urn string) (*ParsedCCRN, error) {
-	if urn == "" {
-		return nil, errors.New("CCRN URN must not be empty")
-	}
-	if !strings.HasPrefix(urn, urnPrefix) {
-		return nil, fmt.Errorf("invalid CCRN URN: must start with %q", urnPrefix)
-	}
-
-	body := strings.TrimPrefix(urn, urnPrefix)
-	parts := strings.Split(body, "/")
-
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("invalid CCRN URN: expected at least 3 segments after prefix, got %d", len(parts))
-	}
-
-	ccrnName := parts[0]
-	version := parts[1]
-
-	if version != ccrnVersion {
-		return nil, fmt.Errorf("unsupported CCRN version: %q (expected %q)", version, ccrnVersion)
+	ccrnName, parts, err := splitURN(urn)
+	if err != nil {
+		return nil, err
 	}
 
 	switch ccrnName {
-	case clusterCCRNName():
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("cluster CCRN URN must have exactly 3 segments, got %d", len(parts))
-		}
-		clusterName := parts[2]
-		if clusterName == "" {
-			return nil, errors.New("cluster name must not be empty")
-		}
-		return &ParsedCCRN{
-			Type:        ResourceTypeCluster,
-			Domain:      DomainK8s,
-			ClusterName: clusterName,
-			Raw:         urn,
-		}, nil
+	case "cluster.k8s." + DefaultDomain:
+		return parseK8sCluster(urn, parts)
+	case "namespace.k8s." + DefaultDomain:
+		return parseK8sNamespace(urn, parts)
+	default:
+		return parseGithub(ccrnName, urn, parts)
+	}
+}
 
-	case namespaceCCRNName():
-		if len(parts) != 4 {
-			return nil, fmt.Errorf("namespace CCRN URN must have exactly 4 segments, got %d", len(parts))
-		}
-		clusterName := parts[2]
-		namespace := parts[3]
-		if clusterName == "" {
-			return nil, errors.New("cluster name must not be empty")
-		}
-		if namespace == "" {
-			return nil, errors.New("namespace must not be empty")
-		}
-		return &ParsedCCRN{
-			Type:        ResourceTypeNamespace,
-			Domain:      DomainK8s,
-			ClusterName: clusterName,
-			Namespace:   namespace,
-			Raw:         urn,
-		}, nil
-
-	case githubOrganizationCCRNName():
+// parseGithub dispatches github CCRN types using DefaultDomain.
+func parseGithub(ccrnName, urn string, parts []string) (*ParsedCCRN, error) {
+	switch ccrnName {
+	case "organization.github." + DefaultDomain:
 		return parseGithubOrganization(urn, parts)
-
-	case githubRepositoryCCRNName():
+	case "repository.github." + DefaultDomain:
 		return parseGithubRepository(urn, parts)
-
-	case githubRepositoryTypeCCRNName():
+	case "repository_type.github." + DefaultDomain:
 		return parseGithubRepositoryType(urn, parts)
-
 	default:
 		return nil, fmt.Errorf("unsupported CCRN type: %q", ccrnName)
 	}
+}
+
+// parseK8sCluster parses a cluster CCRN from already-validated parts.
+func parseK8sCluster(urn string, parts []string) (*ParsedCCRN, error) {
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("cluster CCRN URN must have exactly 3 segments, got %d", len(parts))
+	}
+	clusterName := parts[2]
+	if clusterName == "" {
+		return nil, errors.New("cluster name must not be empty")
+	}
+	return &ParsedCCRN{
+		Type:        ResourceTypeCluster,
+		Domain:      DomainK8s,
+		ClusterName: clusterName,
+		Raw:         urn,
+	}, nil
+}
+
+// parseK8sNamespace parses a namespace CCRN from already-validated parts.
+func parseK8sNamespace(urn string, parts []string) (*ParsedCCRN, error) {
+	if len(parts) != 4 {
+		return nil, fmt.Errorf("namespace CCRN URN must have exactly 4 segments, got %d", len(parts))
+	}
+	clusterName := parts[2]
+	namespace := parts[3]
+	if clusterName == "" {
+		return nil, errors.New("cluster name must not be empty")
+	}
+	if namespace == "" {
+		return nil, errors.New("namespace must not be empty")
+	}
+	return &ParsedCCRN{
+		Type:        ResourceTypeNamespace,
+		Domain:      DomainK8s,
+		ClusterName: clusterName,
+		Namespace:   namespace,
+		Raw:         urn,
+	}, nil
 }
 
 // parseGithubOrganization parses: urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/<instance>/<org>
