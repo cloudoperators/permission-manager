@@ -521,3 +521,91 @@ func TestDomainConstants(t *testing.T) {
 		t.Errorf("DomainGithub = %q, want %q", DomainGithub, "github")
 	}
 }
+
+func TestNewParser_DefaultDomainAlwaysIncluded(t *testing.T) {
+	p := NewParser(nil)
+	got, err := p.Parse("urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/my-cluster")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ClusterName != "my-cluster" {
+		t.Errorf("ClusterName = %q, want %q", got.ClusterName, "my-cluster")
+	}
+}
+
+func TestParser_AdditionalK8sGroup(t *testing.T) {
+	p := NewParser([]string{"ccrn.mycompany.dev"})
+
+	tests := []struct {
+		name        string
+		input       string
+		wantType    ResourceType
+		wantCluster string
+		wantNS      string
+	}{
+		{
+			name:        "cluster CCRN with extra group",
+			input:       "urn:ccrn:cluster.k8s.ccrn.mycompany.dev/v1/prod-cluster",
+			wantType:    ResourceTypeCluster,
+			wantCluster: "prod-cluster",
+		},
+		{
+			name:        "namespace CCRN with extra group",
+			input:       "urn:ccrn:namespace.k8s.ccrn.mycompany.dev/v1/prod-cluster/kube-system",
+			wantType:    ResourceTypeNamespace,
+			wantCluster: "prod-cluster",
+			wantNS:      "kube-system",
+		},
+		{
+			name:        "default domain still recognised",
+			input:       "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/other-cluster",
+			wantType:    ResourceTypeCluster,
+			wantCluster: "other-cluster",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := p.Parse(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got.IsKubernetes() {
+				t.Error("expected kubernetes domain")
+			}
+			if got.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", got.Type, tt.wantType)
+			}
+			if got.ClusterName != tt.wantCluster {
+				t.Errorf("ClusterName = %q, want %q", got.ClusterName, tt.wantCluster)
+			}
+			if got.Namespace != tt.wantNS {
+				t.Errorf("Namespace = %q, want %q", got.Namespace, tt.wantNS)
+			}
+		})
+	}
+}
+
+func TestParser_GithubDelegatedToPackageLevel(t *testing.T) {
+	p := NewParser([]string{"ccrn.mycompany.dev"})
+	got, err := p.Parse("urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/github.com/my-org/my-repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.IsGithub() {
+		t.Error("expected github domain")
+	}
+}
+
+func TestParser_DeduplicatesGroups(t *testing.T) {
+	p := NewParser([]string{DefaultDomain, "extra.dev", DefaultDomain, "extra.dev"})
+	// Both cluster URNs should parse without error — no duplicated matching.
+	for _, urn := range []string{
+		"urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/c1",
+		"urn:ccrn:cluster.k8s.extra.dev/v1/c2",
+	} {
+		if _, err := p.Parse(urn); err != nil {
+			t.Errorf("Parse(%q) unexpected error: %v", urn, err)
+		}
+	}
+}

@@ -35,6 +35,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 		invalid := stringSet(p.invalidCCRNs)
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
+		parser := p.CCRNParser
+		if parser == nil {
+			parser = ccrn.NewParser(nil)
+		}
 
 		// per-cluster scratch: cluster name → { cluster verbs, ns → verbs }
 		type scope struct {
@@ -58,7 +62,7 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			if _, bad := invalid[perm.Resource]; bad {
 				continue
 			}
-			parsed, err := ccrn.Parse(perm.Resource)
+			parsed, err := parser.Parse(perm.Resource)
 			if err != nil || !parsed.IsKubernetes() {
 				continue
 			}
