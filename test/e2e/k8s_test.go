@@ -46,4 +46,44 @@ var _ = Describe("ASR provisioning: kubernetes", func() {
 		waitForRole(ctx, remoteTestNamespace, "pm-"+asrName, resourcePropagationTimeout)
 		assertRoleBindingExists(ctx, remoteTestNamespace, "pm-"+asrName, asrName)
 	})
+
+	It("removes the remote RBAC when the ASR is deleted", func() {
+		ctx := context.Background()
+		const asrName = "deprovision-reader"
+		expectedCR := "pm-" + asrName
+		resource := fmt.Sprintf("urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/%s", remoteClusterName)
+
+		createASR(asrName, []string{"e2e-k8s"}, []map[string]string{
+			{"resource": resource, "capability": "READ"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		waitForClusterRole(ctx, expectedCR, resourcePropagationTimeout)
+
+		assertASRDeleted(ctx, asrName)
+		assertClusterScopedRBACGone(ctx, expectedCR, defaultAssertTimeout)
+	})
+
+	It("cleans up orphaned cluster RBAC when the ASR narrows to a namespace CCRN", func() {
+		ctx := context.Background()
+		const asrName = "scope-change-reader"
+		expectedName := "pm-" + asrName
+		clusterResource := fmt.Sprintf("urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/%s", remoteClusterName)
+		namespaceResource := fmt.Sprintf("urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/%s/%s", remoteClusterName, remoteTestNamespace)
+
+		createASR(asrName, []string{"e2e-k8s"}, []map[string]string{
+			{"resource": clusterResource, "capability": "READ"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		waitForClusterRole(ctx, expectedName, resourcePropagationTimeout)
+
+		updateASRPermissions(asrName, []map[string]string{
+			{"resource": namespaceResource, "capability": "READ"},
+		})
+
+		waitForRole(ctx, remoteTestNamespace, expectedName, resourcePropagationTimeout)
+		assertRoleBindingExists(ctx, remoteTestNamespace, expectedName, asrName)
+		assertClusterScopedRBACGone(ctx, expectedName, resourcePropagationTimeout)
+	})
 })

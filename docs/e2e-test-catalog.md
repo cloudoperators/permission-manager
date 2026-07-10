@@ -3,10 +3,16 @@
 Smoke tests: apply an ApplicationSpecificRole, expect the downstream resources
 to show up. One spec file per provider under `test/e2e/`:
 
-- `k8s_test.go`: cluster CCRN creates a ClusterRole + ClusterRoleBinding on the
-  remote cluster; namespace CCRN creates a Role + RoleBinding.
-- `github_test.go`: a github connector creates the GithubTeam and
-  GithubTeamRepository CRs in the org namespace.
+- `k8s_test.go`:
+  - a cluster CCRN creates a ClusterRole and ClusterRoleBinding on the remote
+    cluster
+  - a namespace CCRN creates a Role and RoleBinding
+  - deleting the ASR removes the remote RBAC through the finalizer
+  - narrowing a cluster CCRN to a namespace CCRN cleans up the orphaned
+    cluster-scoped RBAC
+- `github_test.go`:
+  - a github connector creates the GithubTeam and GithubTeamRepository CRs in
+    the org namespace
 
 All files are behind the `e2e` build tag, so `go test ./...` skips them.
 

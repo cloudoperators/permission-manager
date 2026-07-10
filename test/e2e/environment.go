@@ -245,21 +245,56 @@ func cleanupStaleResources() {
 	sweep(&rbacv1.Role{}, client.InNamespace(remoteTestNamespace))
 }
 
-func createASR(name string, connectorRefs []string, permissions []map[string]string) {
-	GinkgoHelper()
+func toPermissions(permissions []map[string]string) []pmv1.Permission {
 	perms := make([]pmv1.Permission, len(permissions))
 	for i, p := range permissions {
 		perms[i] = pmv1.Permission{Resource: p["resource"], Capability: p["capability"]}
 	}
+	return perms
+}
+
+func createASR(name string, connectorRefs []string, permissions []map[string]string) {
+	GinkgoHelper()
 	asr := &pmv1.ApplicationSpecificRole{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: orgNamespace},
 		Spec: pmv1.ApplicationSpecificRoleSpec{
 			Name:          name,
 			ConnectorRefs: connectorRefs,
-			Permissions:   perms,
+			Permissions:   toPermissions(permissions),
 		},
 	}
 	Expect(adminClient.Create(context.Background(), asr)).To(Succeed(), "create ASR %s", name)
+}
+
+// The controller writes status on the same object, so retry the update on
+// conflicts.
+func updateASRPermissions(name string, permissions []map[string]string) {
+	GinkgoHelper()
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: orgNamespace, Name: name}
+	perms := toPermissions(permissions)
+	Eventually(func() error {
+		var asr pmv1.ApplicationSpecificRole
+		if err := adminClient.Get(ctx, key, &asr); err != nil {
+			return err
+		}
+		asr.Spec.Permissions = perms
+		return adminClient.Update(ctx, &asr)
+	}).WithTimeout(defaultAssertTimeout).WithPolling(assertPollInterval).
+		Should(Succeed(), "update permissions of ASR %s", name)
+}
+
+// Deletes the ASR and waits for the finalizer to let it go. No finalizer
+// stripping here: specs asserting the delete path must fail when the
+// controller does not clean up.
+func assertASRDeleted(ctx context.Context, name string) {
+	GinkgoHelper()
+	asr := &pmv1.ApplicationSpecificRole{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: orgNamespace}}
+	Expect(client.IgnoreNotFound(adminClient.Delete(ctx, asr))).To(Succeed(), "delete ASR %s", name)
+	Eventually(func() bool {
+		return apierrors.IsNotFound(adminClient.Get(ctx, types.NamespacedName{Namespace: orgNamespace, Name: name}, &pmv1.ApplicationSpecificRole{}))
+	}).WithTimeout(resourcePropagationTimeout).WithPolling(pollInterval).
+		Should(BeTrue(), "ASR %q was not removed by the finalizer", name)
 }
 
 // The clusters outlive the test run, so let the finalizer clean up remote

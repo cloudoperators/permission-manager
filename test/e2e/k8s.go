@@ -13,6 +13,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -45,6 +46,16 @@ func assertRoleBindingExists(ctx context.Context, namespace, name, subjectGroup 
 				HaveField("Kind", "Group"), HaveField("Name", subjectGroup))))
 		}
 	}).WithTimeout(defaultAssertTimeout).WithPolling(assertPollInterval).Should(Succeed())
+}
+
+func assertClusterScopedRBACGone(ctx context.Context, name string, timeout time.Duration) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		err := remoteClient.Get(ctx, types.NamespacedName{Name: name}, &rbacv1.ClusterRole{})
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "ClusterRole %q still on %s (err: %v)", name, remoteContext, err)
+		err = remoteClient.Get(ctx, types.NamespacedName{Name: name}, &rbacv1.ClusterRoleBinding{})
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "ClusterRoleBinding %q still on %s (err: %v)", name, remoteContext, err)
+	}).WithTimeout(timeout).WithPolling(pollInterval).Should(Succeed())
 }
 
 func assertClusterRoleBindingExists(ctx context.Context, name, roleName, subjectGroup string) {
