@@ -19,7 +19,7 @@
 # Local development setup
 #
 # Provisions the two Kind clusters used for local end-to-end testing:
-#   - greenhouse-admin  (management cluster — runs greenhouse + permission-manager)
+#   - greenhouse-admin  (management cluster, runs greenhouse + permission-manager)
 #   - greenhouse-remote (target cluster onboarded into greenhouse)
 #
 # Usage:
@@ -45,7 +45,7 @@ $(shell $(KIND) get clusters 2>/dev/null | grep -qx '$(1)' && echo yes)
 endef
 
 .PHONY: setup
-setup: admin-cluster remote-cluster flux greenhouse ## Create both Kind clusters and bootstrap the greenhouse stack.
+setup: admin-cluster admin-oidc-discovery remote-cluster flux greenhouse ## Create both Kind clusters and bootstrap the greenhouse stack.
 
 .PHONY: flux
 flux: ## Bootstrap Flux on the admin cluster.
@@ -65,7 +65,7 @@ admin-cluster: ## Create the greenhouse-admin Kind cluster if it does not alread
 	fi
 
 .PHONY: remote-cluster
-remote-cluster: ## Create the greenhouse-remote Kind cluster if it does not already exist.
+remote-cluster: structured-auth ## Create the greenhouse-remote Kind cluster if it does not already exist.
 	@if [ "$(call kind-cluster-exists,$(REMOTE_CLUSTER))" = "yes" ]; then \
 		echo "Kind cluster '$(REMOTE_CLUSTER)' already exists. Skipping creation."; \
 	else \
