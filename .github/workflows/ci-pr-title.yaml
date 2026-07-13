@@ -29,6 +29,7 @@ jobs:
             test
             docs
             ci
+            release
             e2e
           scopes: |
             api
@@ -44,6 +45,7 @@ jobs:
             provider\/github
             tests
             utils
+            permission-manager
             ISSUE-\d+
           requireScope: true
           disallowScopes: |
