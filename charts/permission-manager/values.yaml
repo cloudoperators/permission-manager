@@ -202,3 +202,22 @@ providers:
   ##
   github: "false"
 
+## CCRN (Common Cloud Resource Name) CRD installation.
+##
+ccrn:
+  ## Install k8s CCRN CRDs (K8sCluster, K8sNamespace) with the chart.
+  ## Required when using the Kubernetes provider.
+  ## Note: setting this to false after an installation will cause Helm upgrades to
+  ## remove these CRDs from the release (and may delete them from the cluster).
+  ##
+  enabled: true
+  ## CCRN domain groups used in CRD API groups and URN type names.
+  ## One CRD per group is installed. Add extra entries for deployments
+  ## using additional CCRN registry domains.
+  ## If you add extra groups here, also pass them via the controller's
+  ## --k8s-ccrn-groups flag (repeat the flag for each extra group,
+  ## e.g. through .Values.manager.args).
+  ##
+  apiGroups:
+    - ccrn.cloudoperators.dev
+

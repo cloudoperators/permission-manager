@@ -18,6 +18,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
 )
@@ -166,6 +167,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				ClusterStore: newClusterStore(t, testNamespace, tc.clusters...),
 				AuditLog:     audit.Disabled(),
 				Log:          ctrl.Log.WithName("test"),
+				CCRNParser:   ccrn.NewParser(nil),
 			}
 			p.SetCBs(tc.cbs)
 			p.SetInvalidCCRNs(tc.invalidCCRNs)
@@ -225,6 +227,7 @@ func Test_EnsureRbacCompiled_Verb_Union(t *testing.T) {
 		ClusterStore: newClusterStore(t, testNamespace, testClusterName),
 		AuditLog:     audit.Disabled(),
 		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
 	}
 	p.SetCBs([]*v1alpha1.ConnectorBinding{
 		newCB("cb-a", "get", "list"),

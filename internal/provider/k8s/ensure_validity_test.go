@@ -14,6 +14,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
 )
@@ -83,8 +84,9 @@ func Test_EnsureASRValidity(t *testing.T) {
 			}
 
 			p := &pmk8s.Phase{
-				AuditLog: audit.Disabled(),
-				Log:      ctrl.Log.WithName("test"),
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
 			}
 
 			result, err := p.EnsureASRValidity(asr)(context.Background())
@@ -125,12 +127,84 @@ func Test_EnsureASRValidity_Remove_Stale_Condition(t *testing.T) {
 	))
 
 	p := &pmk8s.Phase{
-		AuditLog: audit.Disabled(),
-		Log:      ctrl.Log.WithName("test"),
+		AuditLog:   audit.Disabled(),
+		Log:        ctrl.Log.WithName("test"),
+		CCRNParser: ccrn.NewParser(nil),
 	}
 
 	result, err := p.EnsureASRValidity(asr)(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, lifecycle.Continue(), result)
 	require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
+}
+
+func Test_EnsureASRValidity_CustomCCRNGroup(t *testing.T) {
+	customGroupCluster := "urn:ccrn:cluster.k8s.ccrn.mycompany.dev/v1/remote-cluster"
+	customGroupNamespace := "urn:ccrn:namespace.k8s.ccrn.mycompany.dev/v1/remote-cluster/demo"
+
+	cases := []struct {
+		name              string
+		permissions       []v1alpha1.Permission
+		wantInvalidConfig bool
+	}{
+		{
+			name: "custom group cluster CCRN accepted",
+			permissions: []v1alpha1.Permission{
+				{Resource: customGroupCluster, Capability: "read"},
+			},
+		},
+		{
+			name: "custom group namespace CCRN accepted",
+			permissions: []v1alpha1.Permission{
+				{Resource: customGroupNamespace, Capability: "write"},
+			},
+		},
+		{
+			name: "custom group alongside default group",
+			permissions: []v1alpha1.Permission{
+				{Resource: validClusterCCRN, Capability: "read"},
+				{Resource: customGroupCluster, Capability: "read"},
+			},
+		},
+		{
+			name: "unknown group rejected without custom parser",
+			permissions: []v1alpha1.Permission{
+				{Resource: customGroupCluster, Capability: "read"},
+			},
+			wantInvalidConfig: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: tc.permissions},
+			}
+
+			p := &pmk8s.Phase{
+				AuditLog: audit.Disabled(),
+				Log:      ctrl.Log.WithName("test"),
+			}
+			// Use a custom parser with the extra group for acceptance cases;
+			// use only the default domain for the rejection case.
+			if !tc.wantInvalidConfig {
+				p.CCRNParser = ccrn.NewParser([]string{"ccrn.mycompany.dev"})
+			} else {
+				p.CCRNParser = ccrn.NewParser(nil)
+			}
+
+			result, err := p.EnsureASRValidity(asr)(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, lifecycle.Continue(), result)
+
+			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+			if tc.wantInvalidConfig {
+				require.NotNil(t, invalid)
+				require.Equal(t, metav1.ConditionTrue, invalid.Status)
+			} else {
+				require.Nil(t, invalid)
+			}
+		})
+	}
 }

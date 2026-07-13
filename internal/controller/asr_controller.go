@@ -24,6 +24,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	pmccrn "github.com/cloudoperators/permission-manager/internal/ccrn"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	"github.com/cloudoperators/permission-manager/internal/provider/github"
@@ -39,6 +40,7 @@ type ASRReconciler struct {
 	ProviderConfigName string
 	Log                logr.Logger
 	AuditLog           *audit.Logger
+	K8sCCRNParser      *pmccrn.Parser
 	k8sClusterStore    toolscache.Store
 	ghPhase            *github.Phase
 	recorder           events.EventRecorder
@@ -186,6 +188,7 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 		AuditLog:     r.AuditLog,
 		Log:          r.Log,
 		ClusterStore: r.k8sClusterStore,
+		CCRNParser:   r.K8sCCRNParser,
 	}
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),
@@ -207,6 +210,7 @@ func (r *ASRReconciler) cleanUpKubernetes(ctx context.Context, asr *v1alpha1.App
 		AuditLog:     r.AuditLog,
 		Log:          r.Log,
 		ClusterStore: r.k8sClusterStore,
+		CCRNParser:   r.K8sCCRNParser,
 	}
 	routines := []lifecycle.SubRoutine{
 		p.EnsureRbacRemoved(asr),

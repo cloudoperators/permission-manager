@@ -59,6 +59,7 @@ import (
 
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	pmccrn "github.com/cloudoperators/permission-manager/internal/ccrn"
 	pmconfig "github.com/cloudoperators/permission-manager/internal/config"
 	pmcontroller "github.com/cloudoperators/permission-manager/internal/controller"
 	pmmetrics "github.com/cloudoperators/permission-manager/internal/metrics"
@@ -96,6 +97,7 @@ func main() {
 	var enableHTTP2 bool
 	var enableAuditLog bool
 	var providerConfigName string
+	var k8sCCRNGroups []string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -116,6 +118,10 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableAuditLog, "audit-log", true, "Enable audit logging to stdout.")
 	flag.StringVar(&providerConfigName, "provider-config-name", "permission-manager-provider-cm", "Name of the ConfigMap used as provider feature-gate config.")
+	flag.Func("k8s-ccrn-groups", "Additional CCRN domain group for the Kubernetes provider (e.g. ccrn.mycompany.dev). Repeat the flag for multiple groups. The default domain is always included.", func(s string) error {
+		k8sCCRNGroups = append(k8sCCRNGroups, s)
+		return nil
+	})
 	opts := zap.Options{
 		Development: true,
 	}
@@ -208,6 +214,7 @@ func main() {
 		ProviderConfigName: providerConfigName,
 		Log:                ctrl.Log.WithName("controllers").WithName("asr"),
 		AuditLog:           auditLogger,
+		K8sCCRNParser:      pmccrn.NewParser(k8sCCRNGroups),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "asr")
 		os.Exit(1)
