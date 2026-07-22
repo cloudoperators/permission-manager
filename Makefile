@@ -188,6 +188,31 @@ vet: ## Run go vet against code.
 test: fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
+# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
+# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
+.PHONY: setup-test-e2e
+setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
+	@command -v $(KIND) >/dev/null 2>&1 || { \
+		echo "Kind is not installed. Please install Kind manually."; \
+		exit 1; \
+	}
+	@case "$$($(KIND) get clusters)" in \
+		*"$(KIND_CLUSTER)"*) \
+			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
+		*) \
+			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
+			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
+	esac
+
+.PHONY: test-e2e
+test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	$(MAKE) cleanup-test-e2e
+
+.PHONY: cleanup-test-e2e
+cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
+	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+
 E2E_PROCS ?= 4
 E2E_CONTROLLER_NAMESPACE ?= greenhouse
 E2E_CONTROLLER_DEPLOYMENT ?= permission-manager-controller-manager
@@ -205,7 +230,7 @@ setup-e2e: ## Provision the dev environment and deploy the controller for e2e.
 e2e: ginkgo ## Run the e2e tests against the environment provisioned by setup-e2e.
 	E2E_ADMIN_CONTEXT=kind-$(ADMIN_CLUSTER) E2E_REMOTE_CONTEXT=kind-$(REMOTE_CLUSTER) E2E_REMOTE_CLUSTER=kind-$(REMOTE_CLUSTER) \
 	E2E_CONTROLLER_NAMESPACE=$(E2E_CONTROLLER_NAMESPACE) E2E_CONTROLLER_DEPLOYMENT=$(E2E_CONTROLLER_DEPLOYMENT) \
-		$(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v --json-report=$(LOCALBIN)/e2e-report.json ./test/e2e/
+		$(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v --json-report=$(LOCALBIN)/e2e-report.json ./e2e/
 
 .PHONY: clean-e2e
 clean-e2e: ## Delete the e2e Kind clusters.
