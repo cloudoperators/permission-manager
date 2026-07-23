@@ -21,7 +21,7 @@
 version: "2"
 run:
   modules-download-mode: readonly
-  timeout: 3m0s # none by default in v2
+  timeout: 10m0s # none by default in v2; CI cold-cache runs exceed 3m
 
 formatters:
   enable:

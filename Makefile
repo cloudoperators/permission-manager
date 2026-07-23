@@ -93,6 +93,7 @@ KUSTOMIZE      ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST        ?= $(LOCALBIN)/setup-envtest
 GOIMPORTS      ?= $(LOCALBIN)/goimports
+GINKGO         ?= $(LOCALBIN)/ginkgo
 GOLANGCI_LINT   = $(LOCALBIN)/golangci-lint
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
@@ -108,6 +109,7 @@ CONTAINER_TOOL ?= docker
 KUSTOMIZE_VERSION        ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
 GOLANGCI_LINT_VERSION    ?= v2.12.2
+GINKGO_VERSION           ?= $(call gomodver,github.com/onsi/ginkgo/v2)
 
 # ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -211,6 +213,30 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+E2E_PROCS ?= 4
+E2E_CONTROLLER_NAMESPACE ?= greenhouse
+E2E_CONTROLLER_DEPLOYMENT ?= permission-manager-controller-manager
+.PHONY: setup-e2e
+setup-e2e: ## Provision the dev environment and deploy the controller for e2e.
+	$(MAKE) setup
+	$(MAKE) demo
+	$(MAKE) docker-build
+	$(MAKE) kind-load KIND_CLUSTER=$(ADMIN_CLUSTER)
+	$(MAKE) deploy KIND_CLUSTER=$(ADMIN_CLUSTER) HELM_EXTRA_ARGS="--set providers.github=true"
+	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout restart deployment $(E2E_CONTROLLER_DEPLOYMENT)
+	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout status deployment $(E2E_CONTROLLER_DEPLOYMENT) --timeout=120s
+
+.PHONY: e2e
+e2e: ginkgo ## Run the e2e tests against the environment provisioned by setup-e2e.
+	E2E_ADMIN_CONTEXT=kind-$(ADMIN_CLUSTER) E2E_REMOTE_CONTEXT=kind-$(REMOTE_CLUSTER) E2E_REMOTE_CLUSTER=kind-$(REMOTE_CLUSTER) \
+	E2E_CONTROLLER_NAMESPACE=$(E2E_CONTROLLER_NAMESPACE) E2E_CONTROLLER_DEPLOYMENT=$(E2E_CONTROLLER_DEPLOYMENT) \
+		$(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v --json-report=$(LOCALBIN)/e2e-report.json ./e2e/
+
+.PHONY: clean-e2e
+clean-e2e: ## Delete the e2e Kind clusters.
+	$(KIND) delete cluster --name $(ADMIN_CLUSTER)
+	$(KIND) delete cluster --name $(REMOTE_CLUSTER)
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run --timeout=5m
@@ -276,6 +302,7 @@ uninstall: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
 deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	helm template permission-manager charts/permission-manager --namespace greenhouse --include-crds \
 		--set manager.image.repository=$(word 1,$(subst :, ,$(IMG))) --set manager.image.tag=$(word 2,$(subst :, ,$(IMG))) \
+		$(HELM_EXTRA_ARGS) \
 		| "$(KUBECTL)" --context kind-$(KIND_CLUSTER) apply --server-side --force-conflicts -f -
 
 .PHONY: kind-load
@@ -314,6 +341,11 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: ginkgo
+ginkgo: $(GINKGO) ## Download ginkgo locally if necessary.
+$(GINKGO): $(LOCALBIN)
+	$(call go-install-tool,$(GINKGO),github.com/onsi/ginkgo/v2/ginkgo,$(GINKGO_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.

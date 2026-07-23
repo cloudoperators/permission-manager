@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ConnectorBinding
+metadata:
+  name: e2e-k8s
+spec:
+  name: e2e-k8s
+  provider: kubernetes
+  definition:
+    capabilityMapping:
+      READ: ["get", "list", "watch"]
