@@ -221,8 +221,8 @@ setup-e2e: ## Provision the dev environment and deploy the controller for e2e.
 	$(MAKE) setup
 	$(MAKE) demo
 	$(MAKE) docker-build
-	$(MAKE) kind-load
-	$(MAKE) deploy HELM_EXTRA_ARGS="--set providers.github=true"
+	$(MAKE) kind-load KIND_CLUSTER=$(ADMIN_CLUSTER)
+	$(MAKE) deploy KIND_CLUSTER=$(ADMIN_CLUSTER) HELM_EXTRA_ARGS="--set providers.github=true"
 	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout restart deployment $(E2E_CONTROLLER_DEPLOYMENT)
 	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout status deployment $(E2E_CONTROLLER_DEPLOYMENT) --timeout=120s
 

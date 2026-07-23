@@ -18,9 +18,8 @@ import (
 
 // The GithubOrganization is pre-seeded by applyFixtures.
 const (
-	testGithubInstance          = "github.example.com"
-	testGithubInstanceSanitized = "github-example-com"
-	testGithubOrg               = "e2e-org"
+	testGithubInstance = "github.example.com"
+	testGithubOrg      = "e2e-org"
 )
 
 func repoGuardObj(kind string) *unstructured.Unstructured {

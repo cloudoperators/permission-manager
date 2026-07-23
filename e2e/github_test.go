@@ -10,6 +10,8 @@ import (
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
+
+	pmgithub "github.com/cloudoperators/permission-manager/internal/provider/github"
 )
 
 var _ = Describe("ASR provisioning: github", func() {
@@ -17,14 +19,15 @@ var _ = Describe("ASR provisioning: github", func() {
 		ctx := context.Background()
 		const asrName = "provision-gh-reader"
 
-		resource := fmt.Sprintf("repository.github.ccrn.cloudoperators.dev/v1/%s/%s/my-repo", testGithubInstance, testGithubOrg)
+		resource := fmt.Sprintf("urn:ccrn:repository.github.ccrn.cloudoperators.dev/v1/%s/%s/my-repo", testGithubInstance, testGithubOrg)
 		createASR(asrName, []string{"test-github"}, []map[string]string{
 			{"resource": resource, "capability": "read"},
 		})
 		DeferCleanup(func() { deleteASR(asrName) })
 
-		teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
-		teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-pull", asrName, testGithubInstanceSanitized, testGithubOrg)
+		// read maps to the pull permission in the fixture.
+		teamCRName := pmgithub.TeamCRName(asrName, testGithubInstance, testGithubOrg)
+		teamRepoCRName := pmgithub.TeamRepoCRName(asrName, testGithubInstance, testGithubOrg, "pull")
 
 		assertGithubTeamExists(ctx, orgNamespace, teamCRName)
 		assertGithubTeamRepoExists(ctx, orgNamespace, teamRepoCRName)
