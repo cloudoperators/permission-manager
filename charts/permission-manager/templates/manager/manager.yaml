@@ -88,6 +88,9 @@ spec:
         {{- range .Values.manager.args }}
         - {{ . }}
         {{- end }}
+        {{- range .Values.ccrn.apiGroups | uniq }}
+        - --k8s-ccrn-groups={{ . }}
+        {{- end }}
         command:
         - /manager
         env:
