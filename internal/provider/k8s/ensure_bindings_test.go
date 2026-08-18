@@ -56,9 +56,11 @@ func cbWithProvider(name, provider string, def []byte) *v1alpha1.ConnectorBindin
 
 func Test_EnsureConnectorBindings(t *testing.T) {
 	usableDef := mustMarshal(map[string]any{
-		"capabilityMapping": map[string][]string{"READ": {"get"}},
+		"capabilityMapping": map[string]any{
+			"READ": []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+		},
 	})
-	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string][]string{}})
+	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})
 	malformedDef := []byte("{not json")
 
 	cases := []struct {

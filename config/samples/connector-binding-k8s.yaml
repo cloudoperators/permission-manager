@@ -5,9 +5,11 @@
 # Links ASRs to the Kubernetes RBAC provider with capability mapping.
 #
 # The capabilityMapping is operator-curated vocabulary read at reconcile time:
-# each capability name (READ/WRITE/ADMIN) maps to the list of RBAC verbs the
-# resulting Role/ClusterRole should grant. WRITE explicitly repeats READ verbs
-# because the controller does not inject them — "trust the CB".
+# each capability name (READ/WRITE/ADMIN/OPERATE) maps to a list of rules
+# mirroring the native Kubernetes PolicyRule structure
+# (apiGroups + resources + verbs). All three fields are required. WRITE
+# explicitly repeats READ verbs because the controller does not inject them —
+# "trust the CB".
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ConnectorBinding
 metadata:
@@ -17,6 +19,24 @@ spec:
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ:  [get, list, watch]
-      WRITE: [get, list, watch, create, update, patch, delete]
-      ADMIN: ["*"]
+      READ:
+        - apiGroups: ["", "apps", "batch"]
+          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs"]
+          verbs: [get, list, watch]
+      WRITE:
+        - apiGroups: ["", "apps", "batch"]
+          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs"]
+          verbs: [get, list, watch, create, update, patch, delete]
+      ADMIN:
+        - apiGroups: ["", "apps", "batch", "rbac.authorization.k8s.io", "networking.k8s.io"]
+          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs", "roles", "rolebindings", "networkpolicies"]
+          verbs: [get, list, watch, create, update, patch, delete]
+      # Sub-resource access: pod exec/attach/portforward/proxy are `create`,
+      # while pod logs are read with `get`.
+      OPERATE:
+        - apiGroups: [""]
+          resources: ["pods/exec", "pods/attach", "pods/portforward", "pods/proxy"]
+          verbs: ["create"]
+        - apiGroups: [""]
+          resources: ["pods/log"]
+          verbs: ["get"]
