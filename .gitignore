@@ -6,7 +6,8 @@
 *.dylib
 bin/*
 Dockerfile.cross
-.claude
+.claude/*
+!.claude/skills/
 .mcp.json
 # Test binary, built with `go test -c`
 *.test
