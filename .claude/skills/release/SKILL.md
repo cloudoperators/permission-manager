@@ -51,7 +51,7 @@ in GHCR (run `/publish` first and wait for the workflow to complete).
    - Set `version` to `<new-chart-version>`.
 3. Stage and commit with signing:
    `git add charts/permission-manager/Chart.yaml`
-   `git commit -S -m "release(permission-manager): bump chart version from <old> to <new>"`
+   `git commit -S -s -m "release(permission-manager): bump chart version from <old> to <new>"`
 4. Push: `git push origin release/permission-manager-<new-chart-version>`
 5. Open PR against `main`:
    - Try: `gh pr create --title "release(permission-manager): bump chart version from <old> to <new>" --body ""`
