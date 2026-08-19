@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
@@ -35,15 +36,17 @@ import (
 // ASRReconciler is the single controller for ApplicationSpecificRole.
 type ASRReconciler struct {
 	client.Client
-	Cfg                *pmconfig.ProviderConfig
-	PodNamespace       string
-	ProviderConfigName string
-	Log                logr.Logger
-	AuditLog           *audit.Logger
-	K8sCCRNParser      *pmccrn.Parser
-	k8sClusterStore    toolscache.Store
-	ghPhase            *github.Phase
-	recorder           events.EventRecorder
+	Cfg                     *pmconfig.ProviderConfig
+	PodNamespace            string
+	ProviderConfigName      string
+	Log                     logr.Logger
+	AuditLog                *audit.Logger
+	K8sCCRNParser           *pmccrn.Parser
+	MaxConcurrentReconciles int
+
+	k8sClusterStore toolscache.Store
+	ghPhase         *github.Phase
+	recorder        events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=applicationspecificroles,verbs=get;list;watch;update;patch
@@ -89,6 +92,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ApplicationSpecificRole{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.reconcileAllASRs),

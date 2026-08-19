@@ -30,6 +30,11 @@ manager:
   args:
     - --leader-elect
 
+  ## Max concurrent reconciles. Kept low as a DoS mitigation
+  ## (docs/threat-model.md); bump per-install if reconciles are slow. Values < 1 default to 5.
+  ##
+  maxConcurrentReconciles: 5
+
   ## Environment variables
   ##
   env:

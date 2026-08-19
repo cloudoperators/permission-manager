@@ -97,6 +97,7 @@ func main() {
 	var enableHTTP2 bool
 	var enableAuditLog bool
 	var providerConfigName string
+	var maxConcurrentReconciles int
 	var k8sCCRNGroups []string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -118,6 +119,7 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableAuditLog, "audit-log", true, "Enable audit logging to stdout.")
 	flag.StringVar(&providerConfigName, "provider-config-name", "permission-manager-provider-cm", "Name of the ConfigMap used as provider feature-gate config.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "The maximum number of concurrent reconciles for the controller. Values < 1 default to 5.")
 	flag.Func("k8s-ccrn-groups", "Additional CCRN domain group for the Kubernetes provider (e.g. ccrn.mycompany.dev). Repeat the flag for multiple groups. The default domain is always included.", func(s string) error {
 		k8sCCRNGroups = append(k8sCCRNGroups, s)
 		return nil
@@ -129,6 +131,11 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if maxConcurrentReconciles < 1 {
+		setupLog.Info("Invalid --max-concurrent-reconciles, defaulting to 5", "got", maxConcurrentReconciles)
+		maxConcurrentReconciles = 5
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -208,13 +215,14 @@ func main() {
 	}
 
 	if err := (&pmcontroller.ASRReconciler{
-		Client:             mgr.GetClient(),
-		Cfg:                providerCfg,
-		PodNamespace:       podNamespace,
-		ProviderConfigName: providerConfigName,
-		Log:                ctrl.Log.WithName("controllers").WithName("asr"),
-		AuditLog:           auditLogger,
-		K8sCCRNParser:      pmccrn.NewParser(k8sCCRNGroups),
+		Client:                  mgr.GetClient(),
+		Cfg:                     providerCfg,
+		PodNamespace:            podNamespace,
+		ProviderConfigName:      providerConfigName,
+		Log:                     ctrl.Log.WithName("controllers").WithName("asr"),
+		AuditLog:                auditLogger,
+		K8sCCRNParser:           pmccrn.NewParser(k8sCCRNGroups),
+		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "asr")
 		os.Exit(1)
