@@ -85,6 +85,7 @@ spec:
         {{- end }}
         - --health-probe-bind-address=:8081
         - --provider-config-name={{ include "permission-manager.resourceName" (dict "suffix" "provider-cm" "context" $) }}
+        - --max-concurrent-reconciles={{ .Values.manager.maxConcurrentReconciles }}
         {{- range .Values.manager.args }}
         - {{ . }}
         {{- end }}
