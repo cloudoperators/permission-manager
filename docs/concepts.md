@@ -88,14 +88,67 @@ spec:
   provider: kubernetes                      # ← Controller filters by this
   definition:
     capabilityMapping:
-      READ: "get,list,watch"
-      WRITE: "create,update,patch,delete"
-      "*": "*"
+      READ:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: [get, list, watch]
+      WRITE:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: [create, update, patch, delete]
 ```
+
+Each capability maps to a list of rules mirroring the native Kubernetes
+`PolicyRule` shape (`apiGroups` + `resources` + `verbs`). All three fields are
+required per rule — there are no implicit wildcards, so operators must be
+explicit about what they grant.
 
 Key fields:
 - **`provider`** — connector operators filter by this (self-select)
 - **`definition`** — provider-specific configuration (opaque payload)
+
+#### Deny-driven rules (`excludeResources`)
+
+Kubernetes RBAC is additive: there is no native "allow everything **except**
+secrets". To avoid forcing operators to hand-enumerate every apiGroup/resource
+across a fleet, a rule may declare `excludeResources` and let the controller
+compose the grant from the target cluster's discovered API groups, subtracting
+only the denied resources:
+
+```yaml
+capabilityMapping:
+  READ:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      excludeResources:
+        - apiGroups: [""]
+          resources: [secrets]
+        - apiGroups: ["core.gardener.cloud"]
+          resources: [internalsecrets]
+      verbs: [get, list, watch]
+```
+
+At compile time, for each target cluster the controller reads the cluster's
+discovered API groups (`Cluster.status.discoveryCache.groups`) and splits them
+into *denied* groups (named in `excludeResources`) and *the rest*. It emits one
+wildcard rule (`resources: ["*"]`) for the rest, and for each denied group it
+**live-enumerates** that group's resources (via the cluster's discovery API) and
+grants them minus the denied ones. Verbs are copied onto every emitted rule.
+
+Rules and constraints:
+- `excludeResources` is only valid alongside `resources: ["*"]` — subtracting
+  from an explicit resource list is rejected as a configuration error.
+- Each selector must name non-empty `apiGroups` and `resources`; selectors carry
+  no verbs (they inherit the parent rule's).
+- Subresources are handled: excluding `secrets` also drops `secrets/status`.
+- The per-group resource lookup is **live** (not read from the discovery cache,
+  which holds group names only) so a newly-added secret-like resource cannot be
+  silently granted.
+- **Fail-closed**: if a target cluster's discovery is unavailable (no
+  `discoveryCache`, or the discovery API is unreachable), the ASR is marked
+  `InvalidConfig=True` / `Ready=False` with reason `DiscoveryUnavailable` and
+  **nothing is applied** — the controller never emits a grant that could leak a
+  denied resource. The ASR reconciles automatically once discovery recovers.
 
 ## CCRN (Common Cloud Resource Name)
 

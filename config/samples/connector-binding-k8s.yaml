@@ -40,3 +40,19 @@ spec:
         - apiGroups: [""]
           resources: ["pods/log"]
           verbs: ["get"]
+      # Deny-driven grant: "read everything except secrets". Instead of
+      # hand-enumerating every apiGroup/resource, declare excludeResources and
+      # the controller composes the grant per target cluster from its discovered
+      # API groups, subtracting only the named resources. Requires
+      # resources: ["*"]; verbs are copied onto every emitted rule. Fails closed
+      # (InvalidConfig=True, nothing applied) if the cluster's discovery is
+      # unavailable, so a denied resource can never leak.
+      READ_EXCEPT_SECRETS:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          excludeResources:
+            - apiGroups: [""]
+              resources: [secrets]
+            - apiGroups: ["core.gardener.cloud"]
+              resources: [internalsecrets]
+          verbs: [get, list, watch]

@@ -84,7 +84,7 @@ The controller is split into **four independent binaries**:
 | `greenhouse-teams` | Creates Team/TeamRoleBinding CRDs |
 | `aggregator` | Computes top-level Ready/Degraded conditions from per-provider status |
 
-Capability mapping is per-connector — each downstream system defines its own matrix from abstract capabilities to provider-specific actions via `ConnectorBinding.spec.definition.capabilityMapping`.
+Capability mapping is per-connector — each downstream system defines its own matrix from abstract capabilities to provider-specific actions via `ConnectorBinding.spec.definition.capabilityMapping`. The Kubernetes connector also supports deny-driven rules (`excludeResources`) to grant "everything except" a set of resources without hand-enumerating API groups — see [Concepts](docs/concepts.md#deny-driven-rules-excluderesources).
 
 ### Roadmap
 

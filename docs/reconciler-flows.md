@@ -149,6 +149,17 @@ flowchart TD
     style STAGE3 fill:#e8f5e9,stroke:#2e7d32
 ```
 
+> **Deny-driven capabilities (`excludeResources`).** A capability rule may declare
+> `excludeResources` instead of literal resources (see
+> [Concepts → Deny-driven rules](concepts.md#deny-driven-rules-excluderesources)).
+> When present, capability resolution is no longer a pure in-memory map: for each
+> target cluster the controller reads that cluster's discovered API groups from
+> `Cluster.status.discoveryCache.groups` and performs **live discovery I/O**
+> (`ServerResourcesForGroupVersion`) against the remote cluster to enumerate each
+> denied group's resources, subtracting the excluded ones. If discovery is
+> unavailable the ASR fails closed (`InvalidConfig=True` / reason
+> `DiscoveryUnavailable`) and applies nothing until discovery recovers.
+
 ### Stage 3: Execute Plan
 
 ```mermaid
