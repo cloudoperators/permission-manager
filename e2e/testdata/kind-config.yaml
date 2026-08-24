@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal kind cluster configuration for the e2e suite.
+# A single control-plane node hosts both the simulated Greenhouse control plane
+# and the Permission Manager controller, and is self-onboarded as its own
+# downstream target.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane

@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal stubs of the repo-guard CRDs the GitHub provider writes to. The
+# GitHub provider is simulated in the e2e suite: instead of talking to the
+# GitHub API it reconciles these CRs on-cluster, and the suite asserts on them.
+#
+# Schemas use x-kubernetes-preserve-unknown-fields so the full spec/status the
+# provider sets (github/organization/team, teamStatus, owner/default teams, ...)
+# is preserved without duplicating repo-guard's generated schema here.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: githubteams.repo-guard.cloudoperators.dev
+spec:
+  group: repo-guard.cloudoperators.dev
+  names:
+    kind: GithubTeam
+    listKind: GithubTeamList
+    plural: githubteams
+    singular: githubteam
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: githubteamrepositories.repo-guard.cloudoperators.dev
+spec:
+  group: repo-guard.cloudoperators.dev
+  names:
+    kind: GithubTeamRepository
+    listKind: GithubTeamRepositoryList
+    plural: githubteamrepositories
+    singular: githubteamrepository
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: githuborganizations.repo-guard.cloudoperators.dev
+spec:
+  group: repo-guard.cloudoperators.dev
+  names:
+    kind: GithubOrganization
+    listKind: GithubOrganizationList
+    plural: githuborganizations
+    singular: githuborganization
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

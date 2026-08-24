@@ -1,9 +1,0 @@
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
-# SPDX-License-Identifier: Apache-2.0
-
-# Minimal kind cluster configuration for e2e tests.
-# Single control-plane node is sufficient for testing purposes.
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
