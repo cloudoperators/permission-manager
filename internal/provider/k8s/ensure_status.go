@@ -83,6 +83,10 @@ func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
 		}
 		targets = pmmeta.SetTargetStatus(targets, ts)
 	}
+	// Drop stale entries for clusters whose orphan RBAC was fully removed.
+	for _, name := range p.orphanCleaned {
+		targets = pmmeta.RemoveTargetStatus(targets, name)
+	}
 	asr.Status.Providers = pmmeta.SetProviderStatus(
 		asr.Status.Providers,
 		pmmeta.ProviderKubernetes,

@@ -54,6 +54,10 @@ type Phase struct {
 	provisionStatuses []clusterStatus
 	orphanStatuses    []clusterStatus
 
+	// clusters whose orphan RBAC was fully removed this reconcile; their stale
+	// target entries are pruned from status by EnsureProviderStatus.
+	orphanCleaned []string
+
 	// errors collected from each phase; aggregated by EnsureProviderStatus.
 	provisionErrs []error
 	orphanErrs    []error

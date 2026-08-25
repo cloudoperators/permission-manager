@@ -65,7 +65,22 @@ func Test_EnsureOrphansCleanedUp(t *testing.T) {
 				return m
 			},
 			wantProviderEntry: true,
-			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterNameB: pmmeta.TargetStatusReady},
+			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{},
+		},
+		{
+			name:     "should prune the orphan but keep the still-compiled target",
+			compiled: []pmk8s.ExportCompiledTarget{{ClusterName: testClusterNameA}},
+			priorTargets: []pmmeta.TargetStatus{
+				{TargetID: testClusterNameA, Status: pmmeta.TargetStatusReady},
+				{TargetID: testClusterNameB, Status: pmmeta.TargetStatusError},
+			},
+			remote: func() *mocks.MockClient {
+				m := mocks.NewMockClient(t)
+				m.On("List", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				return m
+			},
+			wantProviderEntry: true,
+			wantTargetStatus:  map[string]pmmeta.TargetStatusValue{testClusterNameA: pmmeta.TargetStatusReady},
 		},
 		{
 			name:         "should preserve a target that is still compiled",
