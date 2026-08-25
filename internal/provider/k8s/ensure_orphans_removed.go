@@ -28,7 +28,8 @@ import (
 // Skipped when InvalidConfig=True: without a reliable view of intentional
 // targets we could prematurely revoke valid access.
 //
-// Continue-only: errors are stashed on p.orphanErrs / p.orphanStatuses.
+// Continue-only: errors are stashed on p.orphanErrs / p.orphanStatuses;
+// fully-cleaned clusters are recorded on p.orphanCleaned for status pruning.
 func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		if asr.HasInvalidConfig() {
@@ -62,6 +63,7 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 				continue
 			}
 			p.Log.Info("orphan RBAC cleaned up", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
+			p.orphanCleaned = append(p.orphanCleaned, t.TargetID)
 		}
 		for _, target := range p.compiled {
 			prior := pmmeta.GetTargetStatus(ps.Targets, target.clusterName)
