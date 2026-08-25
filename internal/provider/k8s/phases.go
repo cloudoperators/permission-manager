@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -21,15 +22,21 @@ import (
 // wires pmutils.NewRemoteClient; tests inject a fake or mock.
 type RemoteClientFactory func(ctx context.Context, local client.Client, clusterName, namespace string) (client.Client, error)
 
+// RemoteDiscoveryFactory builds a discovery client for a remote cluster, used to
+// enumerate a denied API group's resources during deny-driven RBAC expansion.
+// Production wires pmutils.NewRemoteDiscoveryClient; tests inject a fake.
+type RemoteDiscoveryFactory func(ctx context.Context, local client.Client, clusterName, namespace string) (discovery.DiscoveryInterface, error)
+
 // Phase holds dependencies and per-reconcile accumulators for the kubernetes
 // provider subroutine pipeline. A fresh Phase is constructed per reconcile.
 type Phase struct {
-	Client       client.Client
-	RemoteClient RemoteClientFactory
-	AuditLog     *audit.Logger
-	Log          logr.Logger
-	ClusterStore cache.Store
-	CCRNParser   *ccrn.Parser
+	Client          client.Client
+	RemoteClient    RemoteClientFactory
+	RemoteDiscovery RemoteDiscoveryFactory
+	AuditLog        *audit.Logger
+	Log             logr.Logger
+	ClusterStore    cache.Store
+	CCRNParser      *ccrn.Parser
 
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding
@@ -41,6 +48,7 @@ type Phase struct {
 	unmappedCaps             []string
 	invalidCCRNs             []string
 	unmatchedClusterPatterns []string
+	discoveryDegraded        []string
 
 	// per-cluster outcomes from EnsureRbacApplied / EnsureOrphansCleanedUp.
 	provisionStatuses []clusterStatus

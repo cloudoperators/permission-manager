@@ -32,6 +32,7 @@ const (
 	UnknownCapabilityReason       ConditionReason = "UnknownCapability"
 	NoTargetsResolvedReason       ConditionReason = "NoTargetsResolved"
 	MissingConnectorBindingReason ConditionReason = "MissingConnectorBinding"
+	DiscoveryUnavailableReason    ConditionReason = "DiscoveryUnavailable"
 
 	ProvisioningSucceededReason ConditionReason = "ProvisioningSucceeded"
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"

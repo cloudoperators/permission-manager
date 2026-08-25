@@ -31,10 +31,29 @@ type Capability []CapabilityRule
 
 // CapabilityRule is one apiGroups/resources/verbs triple. All three fields are
 // required; omitting any is a configuration error (see validate).
+//
+// ExcludeResources turns the rule into a deny-driven grant: rather than granting
+// the literal apiGroups/resources, the controller expands the rule against the
+// target cluster's discovered API groups and subtracts the named resources (see
+// expandRuleForCluster). It is only valid alongside resources: ["*"].
 type CapabilityRule struct {
+	APIGroups        []string           `json:"apiGroups"`
+	Resources        []string           `json:"resources"`
+	Verbs            []string           `json:"verbs"`
+	ExcludeResources []ResourceSelector `json:"excludeResources,omitempty"`
+}
+
+// ResourceSelector names resources to remove from a deny-driven CapabilityRule's
+// expansion. It mirrors the apiGroups/resources shape of a PolicyRule but carries
+// no verbs — verbs are copied from the parent rule onto every emitted grant.
+type ResourceSelector struct {
 	APIGroups []string `json:"apiGroups"`
 	Resources []string `json:"resources"`
-	Verbs     []string `json:"verbs"`
+}
+
+// wildcard reports whether a slice is exactly the RBAC wildcard ["*"].
+func wildcard(ss []string) bool {
+	return len(ss) == 1 && ss[0] == "*"
 }
 
 // validate returns an error if any required field is empty. Implicit wildcards
@@ -49,6 +68,41 @@ func (r CapabilityRule) validate() error {
 	}
 	if len(r.Verbs) == 0 {
 		return errors.New("capabilityRule: verbs must be specified")
+	}
+	if len(r.ExcludeResources) > 0 {
+		// Deny-driven expansion enumerates every resource in a group and removes
+		// the excluded ones, so it only makes sense when the rule would otherwise
+		// grant all resources. Subtracting from an explicit list is a no-op or an
+		// operator mistake; reject it to keep expansion unambiguous.
+		if !wildcard(r.Resources) {
+			return errors.New(`capabilityRule: excludeResources requires resources: ["*"]`)
+		}
+		for i, sel := range r.ExcludeResources {
+			if err := sel.validate(); err != nil {
+				return fmt.Errorf("excludeResources[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validate returns an error if a selector is missing apiGroups or resources, or
+// if either is the wildcard ["*"]. Wildcards are rejected because expansion
+// matches selector entries against discovered group/resource names literally: a
+// wildcard would match nothing, so the intended exclusion would silently not
+// apply and grant access the operator meant to deny. Rejecting fails closed.
+func (s ResourceSelector) validate() error {
+	if len(s.APIGroups) == 0 {
+		return errors.New("apiGroups must be specified")
+	}
+	if wildcard(s.APIGroups) {
+		return errors.New(`apiGroups: ["*"] is not supported in excludeResources selectors`)
+	}
+	if len(s.Resources) == 0 {
+		return errors.New("resources must be specified")
+	}
+	if wildcard(s.Resources) {
+		return errors.New(`resources: ["*"] is not supported in excludeResources selectors`)
 	}
 	return nil
 }
