@@ -40,6 +40,10 @@ func (p *Phase) SetUnmatchedClusterPatterns(patterns []string) {
 	p.unmatchedClusterPatterns = patterns
 }
 
+func (p *Phase) SetNotReadyClusters(clusters []string) {
+	p.notReadyClusters = clusters
+}
+
 func (p *Phase) SetProvisionStatuses(entries []ExportClusterStatus) {
 	out := make([]clusterStatus, 0, len(entries))
 	for _, e := range entries {

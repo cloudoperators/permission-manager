@@ -65,6 +65,8 @@ func Test_EnsureRbacApplied(t *testing.T) {
 		name                  string
 		invalidConfig         bool
 		compiled              []pmk8s.ExportCompiledTarget
+		unmatchedClusters     []string
+		notReadyClusters      []string
 		factoryByCluster      map[string]error
 		remote                func() *mocks.MockClient
 		wantProvisionedStatus metav1.ConditionStatus
@@ -182,6 +184,32 @@ func Test_EnsureRbacApplied(t *testing.T) {
 			wantProvisionedStatus: metav1.ConditionFalse,
 			wantReason:            pmmeta.ProvisioningFailedReason,
 		},
+		{
+			name:              "should report partial provisioning when a target applies but another is missing",
+			compiled:          []pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterName)},
+			unmatchedClusters: []string{testClusterNameB},
+			remote: func() *mocks.MockClient {
+				m := mocks.NewMockClient(t)
+				m.On("Get", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errNotFoundCR)
+				m.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(2)
+				return m
+			},
+			wantProvisionedStatus: metav1.ConditionFalse,
+			wantReason:            pmmeta.PartialProvisioningReason,
+		},
+		{
+			name:             "should report partial provisioning when a target applies but another is not ready",
+			compiled:         []pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterName)},
+			notReadyClusters: []string{testClusterNameB},
+			remote: func() *mocks.MockClient {
+				m := mocks.NewMockClient(t)
+				m.On("Get", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errNotFoundCR)
+				m.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(2)
+				return m
+			},
+			wantProvisionedStatus: metav1.ConditionFalse,
+			wantReason:            pmmeta.PartialProvisioningReason,
+		},
 	}
 
 	for _, tc := range cases {
@@ -217,6 +245,8 @@ func Test_EnsureRbacApplied(t *testing.T) {
 				Log:          ctrl.Log.WithName("test"),
 			}
 			p.SetCompiled(tc.compiled)
+			p.SetUnmatchedClusterPatterns(tc.unmatchedClusters)
+			p.SetNotReadyClusters(tc.notReadyClusters)
 
 			result, err := p.EnsureRbacApplied(asr)(context.Background())
 			require.NoError(t, err)

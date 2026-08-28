@@ -48,6 +48,7 @@ type Phase struct {
 	unmappedCaps             []string
 	invalidCCRNs             []string
 	unmatchedClusterPatterns []string
+	notReadyClusters         []string
 	discoveryDegraded        []string
 
 	// per-cluster outcomes from EnsureRbacApplied / EnsureOrphansCleanedUp.

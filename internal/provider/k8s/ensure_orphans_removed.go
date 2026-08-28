@@ -35,9 +35,18 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 		if asr.HasInvalidConfig() {
 			return lifecycle.Continue(), nil
 		}
-		current := make(map[string]struct{}, len(p.compiled))
+		current := make(map[string]struct{}, len(p.compiled)+len(p.notReadyClusters)+len(p.unmatchedClusterPatterns))
 		for _, t := range p.compiled {
 			current[t.clusterName] = struct{}{}
+		}
+		// Not-ready clusters keep their existing RBAC: a transient blip must not
+		// tear down access, and they are unreachable for cleanup anyway.
+		for _, name := range p.notReadyClusters {
+			current[name] = struct{}{}
+		}
+		// Missing clusters/patterns are intentional targets, not orphans.
+		for _, name := range p.unmatchedClusterPatterns {
+			current[name] = struct{}{}
 		}
 
 		ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
@@ -47,6 +56,12 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 
 		for _, t := range ps.Targets {
 			if _, stillTargeted := current[t.TargetID]; stillTargeted {
+				continue
+			}
+			// Cluster gone from inventory: no remote to reach, prune instead of retrying forever.
+			if !p.clusterKnown(t.TargetID, asr.Namespace) {
+				p.Log.Info("orphan cluster no longer exists, pruning stale target", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
+				p.orphanCleaned = append(p.orphanCleaned, t.TargetID)
 				continue
 			}
 			remoteClient, err := p.RemoteClient(ctx, p.Client, t.TargetID, asr.Namespace)
@@ -107,6 +122,11 @@ func (p *Phase) EnsureRbacRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		var errs []error
 		for _, clusterName := range previouslyTargetedClusters(asr) {
+			// Cluster gone from inventory: nothing to delete, skip so deletion can finish.
+			if !p.clusterKnown(clusterName, asr.Namespace) {
+				p.Log.Info("target cluster no longer exists, skipping cleanup", "namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
+				continue
+			}
 			remoteClient, err := p.RemoteClient(ctx, p.Client, clusterName, asr.Namespace)
 			if err != nil {
 				p.Log.Error(err, "cluster unreachable during cleanup, will retry", "namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
@@ -200,6 +220,16 @@ func previouslyTargetedClusters(asr *v1alpha1.ApplicationSpecificRole) []string 
 		names = append(names, t.TargetID)
 	}
 	return names
+}
+
+// clusterKnown reports whether a cluster still exists in the informer store.
+// A nil store (unit tests) is treated as known so cleanup proceeds.
+func (p *Phase) clusterKnown(name, namespace string) bool {
+	if p.ClusterStore == nil {
+		return true
+	}
+	_, ok := getClusterFromStore(p.ClusterStore, namespace, name)
+	return ok
 }
 
 // compiledTargetToRefSet returns a set of appliedRefKey strings for all

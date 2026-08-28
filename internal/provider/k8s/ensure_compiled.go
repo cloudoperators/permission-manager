@@ -28,16 +28,19 @@ import (
 //
 // Records degraded reasons on the Phase:
 //   - p.unmappedCaps             — capabilities no CB defines
-//   - p.unmatchedClusterPatterns — patterns that matched zero clusters
+//   - p.unmatchedClusterPatterns — patterns that matched no existing cluster
+//   - p.notReadyClusters         — clusters that exist but are not Ready=True
 //
 // Writes InvalidConfig=True (mirrored on Ready=False) with reason
-// UnknownCapability or NoTargetsResolved when those accumulators are non-empty;
-// clears each reason when its accumulator is empty.
+// UnknownCapability when unmapped capabilities exist, or NoTargetsResolved when
+// no usable target resolved at all; clears each reason when it no longer holds.
+// Missing/not-ready clusters alongside usable ones are skipped, not fatal.
 func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		invalid := stringSet(p.invalidCCRNs)
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
+		notReadySeen := make(map[string]struct{})
 		degradedSeen := make(map[string]struct{})
 		parser := p.CCRNParser
 		if parser == nil {
@@ -88,15 +91,25 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			}
 
 			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
-			if len(matches) == 0 {
-				if _, seen := unmatchedSeen[parsed.ClusterName]; !seen {
-					unmatchedSeen[parsed.ClusterName] = struct{}{}
-					p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, parsed.ClusterName)
+			for _, name := range matches.notReady {
+				if _, seen := notReadySeen[name]; !seen {
+					notReadySeen[name] = struct{}{}
+					p.notReadyClusters = append(p.notReadyClusters, name)
+				}
+			}
+			if len(matches.ready) == 0 {
+				// A pattern that matched no existing cluster at all is unmatched;
+				// one that matched only not-ready clusters is already recorded above.
+				if len(matches.notReady) == 0 {
+					if _, seen := unmatchedSeen[parsed.ClusterName]; !seen {
+						unmatchedSeen[parsed.ClusterName] = struct{}{}
+						p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, parsed.ClusterName)
+					}
 				}
 				continue
 			}
 
-			for _, clusterName := range matches {
+			for _, clusterName := range matches.ready {
 				effectiveRules := rules
 				if rulesNeedExpansion(rules) {
 					expanded, err := p.expandRulesForCluster(ctx, rules, clusterName, asr.Namespace, discoByCluster, discoFailed)
@@ -163,8 +176,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			asr.ClearInvalidConfigIfReason(pmmeta.UnknownCapabilityReason)
 		}
 
-		if len(p.unmatchedClusterPatterns) > 0 {
-			msg := fmt.Sprintf("cluster pattern(s) matched no clusters: %v", p.unmatchedClusterPatterns)
+		// Invalid config only when nothing usable resolved; otherwise skips are
+		// a partial result, not a hard error.
+		if len(p.compiled) == 0 && (len(p.unmatchedClusterPatterns) > 0 || len(p.notReadyClusters) > 0) {
+			msg := "no Ready target clusters resolved: " + skippedSummary(p.unmatchedClusterPatterns, p.notReadyClusters)
 			asr.SetCondition(pmmeta.TrueCondition(
 				pmmeta.InvalidConfigCondition,
 				pmmeta.NoTargetsResolvedReason,
@@ -414,18 +429,31 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// matchClusterPattern resolves a cluster pattern against the ClusterStore.
-// Exact names are looked up by "namespace/name" key; wildcards iterate and
-// glob-match.
-func matchClusterPattern(store cache.Store, pattern, namespace string) []string {
+// clusterMatches partitions resolved clusters by Ready condition: ready are
+// usable targets, notReady exist but must be skipped (not torn down).
+type clusterMatches struct {
+	ready    []string
+	notReady []string
+}
+
+// matchClusterPattern resolves a pattern against the ClusterStore, partitioning
+// by Ready condition. Exact names use the "namespace/name" key; wildcards
+// glob-match. Both slices empty means the pattern matched no existing cluster.
+func matchClusterPattern(store cache.Store, pattern, namespace string) clusterMatches {
+	var res clusterMatches
 	if !ccrn.IsWildcard(pattern) {
-		if _, exists, err := store.GetByKey(namespace + "/" + pattern); err == nil && exists {
-			return []string{pattern}
+		cluster, ok := getClusterFromStore(store, namespace, pattern)
+		if !ok {
+			return res
 		}
-		return nil
+		if isClusterReady(cluster) {
+			res.ready = append(res.ready, pattern)
+		} else {
+			res.notReady = append(res.notReady, pattern)
+		}
+		return res
 	}
 
-	var matches []string
 	for _, obj := range store.List() {
 		cluster, ok := obj.(*greenhousev1alpha1.Cluster)
 		if !ok {
@@ -434,12 +462,36 @@ func matchClusterPattern(store cache.Store, pattern, namespace string) []string 
 		if cluster.Namespace != namespace {
 			continue
 		}
-		if ccrn.MatchGlob(pattern, cluster.Name) {
-			matches = append(matches, cluster.Name)
+		if !ccrn.MatchGlob(pattern, cluster.Name) {
+			continue
+		}
+		if isClusterReady(cluster) {
+			res.ready = append(res.ready, cluster.Name)
+		} else {
+			res.notReady = append(res.notReady, cluster.Name)
 		}
 	}
-	sort.Strings(matches)
-	return matches
+	sort.Strings(res.ready)
+	sort.Strings(res.notReady)
+	return res
+}
+
+// isClusterReady reports whether the Cluster's Ready condition is True.
+func isClusterReady(cluster *greenhousev1alpha1.Cluster) bool {
+	return cluster.Status.IsReadyTrue()
+}
+
+// skippedSummary renders skipped clusters for status messages; empty categories
+// are omitted.
+func skippedSummary(unmatched, notReady []string) string {
+	parts := make([]string, 0, 2)
+	if len(unmatched) > 0 {
+		parts = append(parts, fmt.Sprintf("missing cluster(s): %v", unmatched))
+	}
+	if len(notReady) > 0 {
+		parts = append(parts, fmt.Sprintf("not-ready cluster(s): %v", notReady))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // stringSet builds a set from a slice.

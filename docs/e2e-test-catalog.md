@@ -286,6 +286,15 @@ This document lists all end-to-end test scenarios for the pm-controller, grouped
 | 127 | `TestEdge_Wildcard_GlobMatchesZero` | Glob matching zero namespaces → no RBAC created, ASR still reports Success | Zero-match is not an error |
 | 128 | `TestEdge_Wildcard_OverlappingNamespacePatterns` | Overlapping namespace patterns (glob READ + exact WRITE on same ns) → both RoleBindings created referencing same ClusterRole with merged verbs | Namespace-level verb merging |
 
+## Kubernetes Provider — Partial Success (4 tests)
+
+| # | Test | What it verifies | AC |
+|---|------|-----------------|-----|
+| 129 | `TestPartial_MissingClusterSkipped_ReadyClusterApplied` | ASR targeting one existing + one non-existent cluster → RBAC applied on the existing one; missing target reports Error; top-level Ready=False/PartialProvisioning | Missing cluster degrades, doesn't block |
+| 130 | `TestPartial_NotReadyClusterPending_PreservesRBAC` | Target cluster flips to Ready=False → its RBAC is left intact and target reports Pending; other clusters unaffected | Not-Ready cluster preserved as Pending |
+| 131 | `TestPartial_VanishedClusterPruned_NoRetryLoop` | A previously-provisioned target cluster removed from the inventory → its stale status entry is pruned without a perpetual orphan-cleanup retry | Vanished cluster pruned, not retried |
+| 132 | `TestPartial_DeleteWithVanishedCluster_FinalizerClears` | Deleting an ASR whose targets include a vanished cluster → cleanup skips the vanished cluster and the finalizer clears | Vanished cluster never blocks deletion |
+
 ---
 
 ## Summary by User Story
@@ -325,3 +334,6 @@ This document lists all end-to-end test scenarios for the pm-controller, grouped
 
 ### US-12: As an operator, I want the controller to be resilient to failures and edge cases
 **Tests:** 107–110 (Edge Lifecycle), 116–118 (Edge Operational), 119–124 (Edge Resilience)
+
+### US-13: As an operator, I want a mixed-validity ASR to provision where it can rather than fail wholesale
+**Tests:** 129–132 (Partial Success)
