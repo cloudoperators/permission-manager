@@ -7,11 +7,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
+	"github.com/cloudoperators/permission-manager/internal/audit"
 )
 
 func TestReconcileDelete_DeletesOwnedResourcesKeepingOtherASRs(t *testing.T) {
@@ -45,48 +50,57 @@ func TestReconcileDelete_DeletesOwnedResourcesKeepingOtherASRs(t *testing.T) {
 	}
 }
 
-func TestReconcileDelete_RemovesOrgContributionsKeepingOtherASRs(t *testing.T) {
+// TestReconcileDelete_RemovesOrgContributionsFromManagedOrgs asserts cleanup only touches
+// orgs the ASR manages (via its field manager), releasing them with an empty contribution.
+func TestReconcileDelete_RemovesOrgContributionsFromManagedOrgs(t *testing.T) {
 	asr := newASR("asr-del", "team-del", nil)
 
-	// org-a is contributed to by the deleting ASR and another ASR.
-	orgA := newOrgWithContrib("ns-a", "org-a", "team-del", &orgContribution{
-		OwnerTeams:  []string{"team-del"},
-		PublicTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-del", Permission: "push"}},
+	// Seed org-a (managed by asr-del) and org-c (managed by a different ASR) via SSA,
+	// so each carries the seeding ASR's field manager in managedFields.
+	base := newClient()
+	pSeed := New(base, audit.Disabled(), logr.Discard())
+	seedOrgViaSSA(t, pSeed, base, "ns-a", "org-a", map[string]*orgContribution{
+		"asr-del": {OwnerTeams: []string{"team-del"}},
 	})
-	orgA.Spec.DefaultPublicRepositoryTeams = append(orgA.Spec.DefaultPublicRepositoryTeams,
-		repoguardv1.GithubTeamWithPermission{Team: "team-keep", Permission: "pull"})
-	orgA.Annotations[AnnotationASRManagedConfig] = "team-del,team-keep"
-	orgA.Annotations[annotationASRDefaultTeamsPrefix+"team-keep"] = `{"publicTeams":[{"name":"team-keep","permission":"pull"}]}`
+	seedOrgViaSSA(t, pSeed, base, "ns-c", "org-c", map[string]*orgContribution{
+		"asr-other": {OwnerTeams: []string{"team-other"}},
+	})
 
-	// org-b lives in another namespace; cleanup is cluster-wide.
-	orgB := newOrgWithContrib("ns-b", "org-b", "team-del", &orgContribution{OwnerTeams: []string{"team-del"}})
+	// Record the applies made during cleanup only.
+	type applied struct {
+		fieldManager, namespace, name string
+		spec                          map[string]interface{}
+	}
+	var applies []applied
+	ic := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			po := client.PatchOptions{}
+			po.ApplyOptions(opts)
+			u := obj.(*unstructured.Unstructured)
+			spec, _, _ := unstructured.NestedMap(u.Object, "spec")
+			applies = append(applies, applied{po.FieldManager, u.GetNamespace(), u.GetName(), spec})
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	pDel := New(ic, audit.Disabled(), logr.Discard())
 
-	p, c := newPhase(orgA, orgB)
-
-	if err := p.ReconcileDelete(context.Background(), asr); err != nil {
+	if err := pDel.ReconcileDelete(context.Background(), asr); err != nil {
 		t.Fatalf("ReconcileDelete: %v", err)
 	}
 
-	var gotA repoguardv1.GithubOrganization
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-a", Name: "org-a"}, &gotA); err != nil {
-		t.Fatalf("get org-a: %v", err)
+	// Only org-a (managed by asr-del) is touched; org-c is skipped.
+	if len(applies) != 1 {
+		t.Fatalf("expected exactly one cleanup apply (org-a), got %d: %+v", len(applies), applies)
 	}
-	if len(gotA.Spec.OrganizationOwnerTeams) != 0 {
-		t.Errorf("team-del owner contribution not removed: %v", gotA.Spec.OrganizationOwnerTeams)
+	got := applies[0]
+	if got.fieldManager != orgFieldManager("default", "asr-del") {
+		t.Errorf("cleanup field manager = %q, want %q", got.fieldManager, orgFieldManager("default", "asr-del"))
 	}
-	if len(gotA.Spec.DefaultPublicRepositoryTeams) != 1 || gotA.Spec.DefaultPublicRepositoryTeams[0].Team != "team-keep" {
-		t.Errorf("expected only team-keep public to remain, got %v", gotA.Spec.DefaultPublicRepositoryTeams)
+	if got.namespace != "ns-a" || got.name != "org-a" {
+		t.Errorf("cleanup targeted %s/%s, want ns-a/org-a", got.namespace, got.name)
 	}
-	if got := gotA.Annotations[AnnotationASRManagedConfig]; got != "team-keep" {
-		t.Errorf("managed config = %q, want team-keep", got)
-	}
-
-	var gotB repoguardv1.GithubOrganization
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-b", Name: "org-b"}, &gotB); err != nil {
-		t.Fatalf("get org-b: %v", err)
-	}
-	if len(gotB.Spec.OrganizationOwnerTeams) != 0 {
-		t.Errorf("org-b owner contribution not removed: %v", gotB.Spec.OrganizationOwnerTeams)
+	if owners, _, _ := unstructured.NestedSlice(got.spec, "organizationOwnerTeams"); len(owners) != 0 {
+		t.Errorf("cleanup apply must release owner teams (empty list), got %v", owners)
 	}
 }
 

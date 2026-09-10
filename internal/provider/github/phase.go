@@ -165,8 +165,8 @@ func (p *Phase) cleanupOrgEntries(ctx context.Context, asr *v1alpha1.Application
 
 	for i := range orgList.Items {
 		org := &orgList.Items[i]
-		if hasASRContribution(org, asr.Spec.Name) {
-			if err := p.removeASRFromOrg(ctx, org, asr.Spec.Name); err != nil {
+		if orgManagedByASR(org, asr.Namespace, asr.Name) {
+			if err := p.removeASRFromOrg(ctx, org, asr.Namespace, asr.Name); err != nil {
 				return fmt.Errorf("failed to clean up org %s/%s: %w", org.Namespace, org.Name, err)
 			}
 		}
