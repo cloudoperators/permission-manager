@@ -35,19 +35,20 @@ func New(c client.Client, al *audit.Logger, log logr.Logger) *Phase {
 }
 
 // Reconcile runs the github provider create/update logic for one ConnectorBinding.
-func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) error {
+// Returns this binding's missing org CRs so the caller aggregates them across bindings.
+func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) ([]string, error) {
 	log := p.Log.WithValues("asr", asr.Name, "connectorBinding", cb.Name)
 
 	advConfig, err := ParseAdvancedConfig(asr.Spec.AdvancedConfig)
 	if err != nil {
 		log.Error(err, "failed to parse advancedConfig")
-		return fmt.Errorf("failed to parse advancedConfig: %w", err)
+		return nil, fmt.Errorf("failed to parse advancedConfig: %w", err)
 	}
 
 	cbDef, err := ParseConnectorDefinition(cb.Spec.Definition)
 	if err != nil {
 		log.Error(err, "failed to parse ConnectorBinding definition")
-		return fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
+		return nil, fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
 	}
 
 	targetNamespace := ResolveTargetNamespace(advConfig, cbDef, asr)
@@ -76,14 +77,15 @@ func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecific
 		errs = append(errs, fmt.Errorf("failed to reconcile GithubTeamRepositories: %w", err))
 	}
 
-	if err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace); err != nil {
+	missingOrgs, err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace)
+	if err != nil {
 		errs = append(errs, err)
 	}
 
 	ps := computeProviderStatus(ctx, p.Client, asr, desired, unmappedCaps)
 	asr.Status.Providers = pmmeta.SetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub, ps)
 
-	return errors.Join(errs...)
+	return missingOrgs, errors.Join(errs...)
 }
 
 // ReconcileDelete runs the github provider cleanup logic for the ASR.

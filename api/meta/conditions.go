@@ -28,11 +28,12 @@ const (
 
 // Condition reasons are reused across types and providers.
 const (
-	InvalidCCRNReason             ConditionReason = "InvalidCCRN"
-	UnknownCapabilityReason       ConditionReason = "UnknownCapability"
-	NoTargetsResolvedReason       ConditionReason = "NoTargetsResolved"
-	MissingConnectorBindingReason ConditionReason = "MissingConnectorBinding"
-	DiscoveryUnavailableReason    ConditionReason = "DiscoveryUnavailable"
+	InvalidCCRNReason               ConditionReason = "InvalidCCRN"
+	UnknownCapabilityReason         ConditionReason = "UnknownCapability"
+	NoTargetsResolvedReason         ConditionReason = "NoTargetsResolved"
+	MissingConnectorBindingReason   ConditionReason = "MissingConnectorBinding"
+	MissingGithubOrganizationReason ConditionReason = "MissingGithubOrganization"
+	DiscoveryUnavailableReason      ConditionReason = "DiscoveryUnavailable"
 
 	ProvisioningSucceededReason ConditionReason = "ProvisioningSucceeded"
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"

@@ -7,13 +7,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
 	"github.com/cloudoperators/permission-manager/internal/ccrn"
@@ -45,12 +48,14 @@ type orgContribution struct {
 }
 
 // reconcileOrganizations patches GithubOrganization CRs for org-level permissions in the ASR.
+// Returns missing org CRs so the caller can aggregate across ConnectorBindings before setting
+// the InvalidConfig condition once.
 func (p *Phase) reconcileOrganizations(
 	ctx context.Context,
 	asr *v1alpha1.ApplicationSpecificRole,
 	cbDef *GithubConnectorDefinition,
 	targetNamespace string,
-) error {
+) ([]string, error) {
 
 	log := p.Log.WithValues("asr", asr.Name)
 
@@ -82,15 +87,15 @@ func (p *Phase) reconcileOrganizations(
 			contrib := getOrCreateContrib(orgContribs, gh.Org)
 			switch gh.Visibility {
 			case "public":
-				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
+				contrib.PublicTeams = upsertTeamPermission(contrib.PublicTeams, teamEntry)
 			case "private":
-				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
+				contrib.PrivateTeams = upsertTeamPermission(contrib.PrivateTeams, teamEntry)
 			case "internal":
-				contrib.InternalTeams = appendUnique(contrib.InternalTeams, teamEntry)
+				contrib.InternalTeams = upsertTeamPermission(contrib.InternalTeams, teamEntry)
 			case "*":
-				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
-				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
-				contrib.InternalTeams = appendUnique(contrib.InternalTeams, teamEntry)
+				contrib.PublicTeams = upsertTeamPermission(contrib.PublicTeams, teamEntry)
+				contrib.PrivateTeams = upsertTeamPermission(contrib.PrivateTeams, teamEntry)
+				contrib.InternalTeams = upsertTeamPermission(contrib.InternalTeams, teamEntry)
 			default:
 				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", gh.Visibility, "org", gh.Org)
 			}
@@ -98,15 +103,31 @@ func (p *Phase) reconcileOrganizations(
 		// Non-wildcard repository CCRNs are handled by a different reconciler (team-repository)
 	}
 
-	// Patch each GithubOrganization with the contributions
+	// Patch each org. A missing org CR is a permanent misconfig (repo-guard owns
+	// creation), surfaced as InvalidConfig rather than a requeue error; the
+	// GithubOrganization create watch re-enqueues the ASR once the CR appears.
+	var (
+		errs        []error
+		missingOrgs []string
+	)
 	for orgName, contrib := range orgContribs {
-		if err := p.patchOrganization(ctx, asr.Namespace, asr.Name, orgName, targetNamespace, contrib); err != nil {
-			return err
+		err := p.patchOrganization(ctx, asr.Namespace, asr.Name, orgName, targetNamespace, contrib)
+		if err == nil {
+			continue
 		}
+		if notFound, ok := errors.AsType[*githubOrgNotFoundError](err); ok {
+			missingOrgs = append(missingOrgs, fmt.Sprintf("%s/%s", notFound.namespace, notFound.name))
+			continue
+		}
+		errs = append(errs, err)
 	}
 
 	// Release orgs this ASR manages but no longer contributes to.
-	return p.pruneStaleOrgs(ctx, asr, targetNamespace, orgContribs)
+	if err := p.pruneStaleOrgs(ctx, asr, targetNamespace, orgContribs); err != nil {
+		errs = append(errs, err)
+	}
+
+	return missingOrgs, errors.Join(errs...)
 }
 
 // pruneStaleOrgs releases this ASR's entries on managed orgs missing from the desired set;
@@ -137,8 +158,36 @@ func (p *Phase) pruneStaleOrgs(
 	return nil
 }
 
-// patchOrganization applies one ASR's contribution via SSA under its field manager. The
-// Get only detects a missing CR (Helm owns creation); the apiserver merges/prunes per ASR.
+// SetOrgConfigValidity sets InvalidConfig (mirrored on Ready) for missing orgs, or clears it
+// when none. Pass orgs missing across all bindings.
+func SetOrgConfigValidity(asr *v1alpha1.ApplicationSpecificRole, missingOrgs []string) {
+	if len(missingOrgs) == 0 {
+		asr.ClearInvalidConfigIfReason(pmmeta.MissingGithubOrganizationReason)
+		// Drop the Ready we set so it is re-derived downstream.
+		if r := asr.GetReadyCondition(); r != nil && r.Reason == string(pmmeta.MissingGithubOrganizationReason) {
+			asr.RemoveCondition(pmmeta.ReadyCondition)
+		}
+		return
+	}
+	slices.Sort(missingOrgs)
+	msg := fmt.Sprintf("GithubOrganization %s not found; ensure repo-guard has created it", strings.Join(missingOrgs, ", "))
+	asr.SetCondition(pmmeta.TrueCondition(pmmeta.InvalidConfigCondition, pmmeta.MissingGithubOrganizationReason, msg))
+	asr.SetCondition(pmmeta.FalseCondition(pmmeta.ReadyCondition, pmmeta.MissingGithubOrganizationReason, msg))
+}
+
+// githubOrgNotFoundError marks a missing GithubOrganization CR; the caller surfaces
+// it as InvalidConfig instead of requeuing (repo-guard owns creation).
+type githubOrgNotFoundError struct {
+	namespace, name string
+}
+
+func (e *githubOrgNotFoundError) Error() string {
+	return fmt.Sprintf("GithubOrganization %s/%s not found", e.namespace, e.name)
+}
+
+// patchOrganization applies one ASR's contribution via SSA under its per-ASR field manager.
+// The Get only detects a missing CR (Helm owns creation); a missing CR returns
+// githubOrgNotFoundError, which the caller surfaces as InvalidConfig (no requeue).
 func (p *Phase) patchOrganization(
 	ctx context.Context,
 	asrNamespace string,
@@ -154,9 +203,9 @@ func (p *Phase) patchOrganization(
 	orgKey := client.ObjectKey{Namespace: namespace, Name: orgName}
 	if err := p.Client.Get(ctx, orgKey, &org); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			// Not found: requeue rather than let SSA create it (Helm owns creation).
-			log.Info("GithubOrganization not found, will retry", "org", orgName)
-			return fmt.Errorf("GithubOrganization %s/%s not found", namespace, orgName)
+			// Not found: surface as InvalidConfig; do not let SSA create it (Helm owns creation).
+			log.Info("GithubOrganization not found, surfacing InvalidConfig", "org", orgName)
+			return &githubOrgNotFoundError{namespace: namespace, name: orgName}
 		}
 		p.auditOrgFailure(ctx, asrName, orgName, namespace, err)
 		return fmt.Errorf("failed to get GithubOrganization %s/%s: %w", namespace, orgName, err)
@@ -277,4 +326,23 @@ func appendUnique[E comparable](s []E, v E) []E {
 		return s
 	}
 	return append(s, v)
+}
+
+// githubPermissionRank orders GitHub repo permissions weak→strong.
+var githubPermissionRank = map[repoguardv1.GithubTeamPermission]int{
+	"pull": 1, "triage": 2, "push": 3, "maintain": 4, "admin": 5,
+}
+
+// upsertTeamPermission adds t, or keeps the stronger permission if the team is already present.
+// The team-list fields are listType=map keyed by team, so at most one entry per team.
+func upsertTeamPermission(s []repoguardv1.GithubTeamWithPermission, t repoguardv1.GithubTeamWithPermission) []repoguardv1.GithubTeamWithPermission {
+	for i := range s {
+		if s[i].Team == t.Team {
+			if githubPermissionRank[t.Permission] > githubPermissionRank[s[i].Permission] {
+				s[i].Permission = t.Permission
+			}
+			return s
+		}
+	}
+	return append(s, t)
 }
