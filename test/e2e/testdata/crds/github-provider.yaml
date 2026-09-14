@@ -101,20 +101,39 @@ spec:
                   items:
                     type: object
                     properties:
-                      name:
+                      team:
                         type: string
                       permission:
                         type: string
+                  x-kubernetes-list-map-keys:
+                    - team
+                  x-kubernetes-list-type: map
                 defaultPrivateRepositoryTeams:
                   type: array
                   items:
                     type: object
                     properties:
-                      name:
+                      team:
                         type: string
                       permission:
                         type: string
+                  x-kubernetes-list-map-keys:
+                    - team
+                  x-kubernetes-list-type: map
+                defaultInternalRepositoryTeams:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      team:
+                        type: string
+                      permission:
+                        type: string
+                  x-kubernetes-list-map-keys:
+                    - team
+                  x-kubernetes-list-type: map
                 organizationOwnerTeams:
                   type: array
                   items:
                     type: string
+                  x-kubernetes-list-type: set

@@ -105,6 +105,36 @@ func TestReconcileDelete_RemovesOrgContributionsFromManagedOrgs(t *testing.T) {
 	}
 }
 
+// TestRemoveASRFromOrg_RemovesInternalContribution verifies an ASR's internal
+// repository entry is released on deletion (its field manager re-applies an empty
+// contribution, so the apiserver prunes the entry).
+func TestRemoveASRFromOrg_RemovesInternalContribution(t *testing.T) {
+	p, c := newPhase()
+	seedOrgViaSSA(t, p, c, "ns", "org", map[string]*orgContribution{
+		"team-a": {InternalTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-a", Permission: "pull"}}},
+	})
+
+	var seeded repoguardv1.GithubOrganization
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "org"}, &seeded); err != nil {
+		t.Fatalf("get seeded org: %v", err)
+	}
+	if len(seeded.Spec.DefaultInternalRepositoryTeams) != 1 {
+		t.Fatalf("expected one internal team after seed, got %v", seeded.Spec.DefaultInternalRepositoryTeams)
+	}
+
+	if err := p.removeASRFromOrg(context.Background(), &seeded, "default", "team-a"); err != nil {
+		t.Fatalf("removeASRFromOrg: %v", err)
+	}
+
+	var got repoguardv1.GithubOrganization
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "org"}, &got); err != nil {
+		t.Fatalf("get org: %v", err)
+	}
+	if len(got.Spec.DefaultInternalRepositoryTeams) != 0 {
+		t.Errorf("internal contribution not removed: %v", got.Spec.DefaultInternalRepositoryTeams)
+	}
+}
+
 func TestReconcileDelete_RemovesProviderStatus(t *testing.T) {
 	asr := newASR("asr", "team", nil)
 	asr.Status.Providers = map[pmmeta.ProviderType]pmmeta.ProviderStatus{

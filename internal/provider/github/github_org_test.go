@@ -34,11 +34,12 @@ func TestReconcileOrganizations(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push", "READ": "pull"}
 
 	tests := []struct {
-		name        string
-		perms       []v1alpha1.Permission
-		wantOwners  []string
-		wantPublic  []teamPerm
-		wantPrivate []teamPerm
+		name         string
+		perms        []v1alpha1.Permission
+		wantOwners   []string
+		wantPublic   []teamPerm
+		wantPrivate  []teamPerm
+		wantInternal []teamPerm
 	}{
 		{
 			name:       "organization admin adds an owner team",
@@ -60,10 +61,16 @@ func TestReconcileOrganizations(t *testing.T) {
 			wantPrivate: []teamPerm{{"team-x", "pull"}},
 		},
 		{
-			name:        "repository_type wildcard adds both public and private",
-			perms:       []v1alpha1.Permission{perm(repoTypeCCRN("*"), "WRITE")},
-			wantPublic:  []teamPerm{{"team-x", "push"}},
-			wantPrivate: []teamPerm{{"team-x", "push"}},
+			name:         "repository_type internal adds a default internal team",
+			perms:        []v1alpha1.Permission{perm(repoTypeCCRN("internal"), "READ")},
+			wantInternal: []teamPerm{{"team-x", "pull"}},
+		},
+		{
+			name:         "repository_type wildcard adds public, private and internal",
+			perms:        []v1alpha1.Permission{perm(repoTypeCCRN("*"), "WRITE")},
+			wantPublic:   []teamPerm{{"team-x", "push"}},
+			wantPrivate:  []teamPerm{{"team-x", "push"}},
+			wantInternal: []teamPerm{{"team-x", "push"}},
 		},
 		{
 			name:  "non-github CCRN is ignored",
@@ -92,6 +99,9 @@ func TestReconcileOrganizations(t *testing.T) {
 			}
 			if got := teamPerms(org.Spec.DefaultPrivateRepositoryTeams); !slices.Equal(got, tt.wantPrivate) {
 				t.Errorf("private teams = %v, want %v", got, tt.wantPrivate)
+			}
+			if got := teamPerms(org.Spec.DefaultInternalRepositoryTeams); !slices.Equal(got, tt.wantInternal) {
+				t.Errorf("internal teams = %v, want %v", got, tt.wantInternal)
 			}
 		})
 	}

@@ -38,9 +38,10 @@ func orgFieldManager(asrNamespace, asrName string) string {
 
 // orgContribution represents what an ASR contributes to a GithubOrganization.
 type orgContribution struct {
-	PublicTeams  []repoguardv1.GithubTeamWithPermission
-	PrivateTeams []repoguardv1.GithubTeamWithPermission
-	OwnerTeams   []string
+	PublicTeams   []repoguardv1.GithubTeamWithPermission
+	PrivateTeams  []repoguardv1.GithubTeamWithPermission
+	InternalTeams []repoguardv1.GithubTeamWithPermission
+	OwnerTeams    []string
 }
 
 // reconcileOrganizations patches GithubOrganization CRs for org-level permissions in the ASR.
@@ -84,9 +85,12 @@ func (p *Phase) reconcileOrganizations(
 				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
 			case "private":
 				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
+			case "internal":
+				contrib.InternalTeams = appendUnique(contrib.InternalTeams, teamEntry)
 			case "*":
 				contrib.PublicTeams = appendUnique(contrib.PublicTeams, teamEntry)
 				contrib.PrivateTeams = appendUnique(contrib.PrivateTeams, teamEntry)
+				contrib.InternalTeams = appendUnique(contrib.InternalTeams, teamEntry)
 			default:
 				log.V(1).Info("unknown visibility in repository_type CCRN", "visibility", gh.Visibility, "org", gh.Org)
 			}
@@ -201,9 +205,10 @@ func newOrgApplyObject(namespace, orgName string, contrib *orgContribution) *uns
 	u.SetName(orgName)
 	u.SetNamespace(namespace)
 	u.Object["spec"] = map[string]any{
-		"organizationOwnerTeams":        stringsToUnstructured(contrib.OwnerTeams),
-		"defaultPublicRepositoryTeams":  teamsToUnstructured(contrib.PublicTeams),
-		"defaultPrivateRepositoryTeams": teamsToUnstructured(contrib.PrivateTeams),
+		"organizationOwnerTeams":         stringsToUnstructured(contrib.OwnerTeams),
+		"defaultPublicRepositoryTeams":   teamsToUnstructured(contrib.PublicTeams),
+		"defaultPrivateRepositoryTeams":  teamsToUnstructured(contrib.PrivateTeams),
+		"defaultInternalRepositoryTeams": teamsToUnstructured(contrib.InternalTeams),
 	}
 	return u
 }
