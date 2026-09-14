@@ -20,7 +20,7 @@ func TestReconcileOrganizations_MissingOrgReturnedNoRequeue(t *testing.T) {
 	p, _ := newPhase() // org "missing" not seeded
 	asr := newASR("asr", "team-x", []v1alpha1.Permission{perm(orgCCRN("missing"), "ADMIN")})
 
-	missing, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns")
+	_, missing, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns")
 	if err != nil {
 		t.Fatalf("expected no requeue error for a missing org, got: %v", err)
 	}

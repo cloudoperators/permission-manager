@@ -33,10 +33,10 @@ func unstructuredFromApply(obj runtime.ApplyConfiguration) *unstructured.Unstruc
 }
 
 // orgWithIdentity returns an org with the Helm-owned identity fields set.
-func orgWithIdentity() *repoguardv1.GithubOrganization {
-	org := newGithubOrg("test-ns", "my-org")
+func orgWithIdentity(name string) *repoguardv1.GithubOrganization {
+	org := newGithubOrg("test-ns", name)
 	org.Spec.Github = "github.example.com"
-	org.Spec.Organization = "my-org"
+	org.Spec.Organization = name
 	org.Spec.InstallationID = 42
 	org.Spec.ProtectedMembers = []string{"bot-account"}
 	return org
@@ -51,7 +51,7 @@ func TestPatchOrganization_UsesServerSideApplyWithoutIdentityFields(t *testing.T
 	)
 
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity()).Build()
+		WithObjects(orgWithIdentity("my-org")).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
 		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 			gotOpts = client.ApplyOptions{}
@@ -127,7 +127,7 @@ type capturedApply struct {
 func TestPatchOrganization_AppliesOnlyOwnEntriesPerASRManager(t *testing.T) {
 	var applies []capturedApply
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity()).Build()
+		WithObjects(orgWithIdentity("my-org")).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
 		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 			po := client.ApplyOptions{}
@@ -188,7 +188,7 @@ func TestReconcileOrganizations_FieldManagerKeyedByASRObject(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin"}
 	var managers []string
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity()).Build()
+		WithObjects(orgWithIdentity("my-org")).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
 		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 			po := client.ApplyOptions{}
@@ -205,7 +205,7 @@ func TestReconcileOrganizations_FieldManagerKeyedByASRObject(t *testing.T) {
 		newASR("asr-a", "shared", orgAdmin),
 		newASR("asr-b", "shared", orgAdmin),
 	} {
-		if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+		if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 			t.Fatalf("reconcileOrganizations %s: %v", asr.Name, err)
 		}
 	}
@@ -245,7 +245,7 @@ func TestOrgFieldManager_BoundedStableCollisionResistant(t *testing.T) {
 // longer contributes to a managed org releases its entries via an empty SSA apply.
 func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T) {
 	base := newClient()
-	if err := base.Create(context.Background(), orgWithIdentity()); err != nil {
+	if err := base.Create(context.Background(), orgWithIdentity("my-org")); err != nil {
 		t.Fatalf("create org: %v", err)
 	}
 	seed := New(base, audit.Disabled(), logr.Discard())
@@ -267,10 +267,14 @@ func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T
 	})
 	p := New(c, audit.Disabled(), logr.Discard())
 
-	// asr-x now has no org-level permissions.
+	// asr-x now has no org-level permissions; prune must release its managed org.
 	asr := newASR("asr-x", "shared", nil)
-	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns"); err != nil {
+	desired, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns")
+	if err != nil {
 		t.Fatalf("reconcileOrganizations: %v", err)
+	}
+	if err := p.PruneStaleOrgs(context.Background(), asr, desired); err != nil {
+		t.Fatalf("PruneStaleOrgs: %v", err)
 	}
 
 	if len(applies) != 1 {
@@ -288,5 +292,64 @@ func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T
 	}
 	if len(stored.Spec.OrganizationOwnerTeams) != 0 {
 		t.Errorf("owner teams not released: %v", stored.Spec.OrganizationOwnerTeams)
+	}
+}
+
+// TestPatchOrganization_SetsResourceVersionPrecondition asserts the apply carries a
+// resourceVersion so a deleted org is rejected, not recreated.
+func TestPatchOrganization_SetsResourceVersionPrecondition(t *testing.T) {
+	var gotRV string
+	base := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(orgWithIdentity("my-org")).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			gotRV = unstructuredFromApply(obj).GetResourceVersion()
+			return cl.Apply(ctx, obj, opts...)
+		},
+	})
+	p := New(c, audit.Disabled(), logr.Discard())
+
+	if err := p.patchOrganization(context.Background(), "default", "team-x", "my-org", "test-ns", &orgContribution{}); err != nil {
+		t.Fatalf("patchOrganization: %v", err)
+	}
+	if gotRV == "" {
+		t.Error("apply must carry a resourceVersion precondition so a deleted org is not recreated")
+	}
+}
+
+// TestPruneStaleOrgs_KeepsDesiredReleasesAbsent: prune releases only orgs absent from desired.
+func TestPruneStaleOrgs_KeepsDesiredReleasesAbsent(t *testing.T) {
+	base := newClient()
+	for _, name := range []string{"org-a", "org-b"} {
+		if err := base.Create(context.Background(), orgWithIdentity(name)); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	p := New(base, audit.Disabled(), logr.Discard())
+	asr := newASR("asr-x", "team-x", nil)
+	for _, name := range []string{"org-a", "org-b"} {
+		if err := p.patchOrganization(context.Background(), asr.Namespace, asr.Name, name, "test-ns",
+			&orgContribution{OwnerTeams: []string{"team-x"}}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	// Desired keeps org-a only; org-b must be released.
+	if err := p.PruneStaleOrgs(context.Background(), asr,
+		[]client.ObjectKey{{Namespace: "test-ns", Name: "org-a"}}); err != nil {
+		t.Fatalf("PruneStaleOrgs: %v", err)
+	}
+
+	var a, b repoguardv1.GithubOrganization
+	if err := base.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "org-a"}, &a); err != nil {
+		t.Fatalf("get org-a: %v", err)
+	}
+	if err := base.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "org-b"}, &b); err != nil {
+		t.Fatalf("get org-b: %v", err)
+	}
+	if len(a.Spec.OrganizationOwnerTeams) != 1 {
+		t.Errorf("desired org-a must keep its owner entry, got %v", a.Spec.OrganizationOwnerTeams)
+	}
+	if len(b.Spec.OrganizationOwnerTeams) != 0 {
+		t.Errorf("absent org-b must be released, got %v", b.Spec.OrganizationOwnerTeams)
 	}
 }

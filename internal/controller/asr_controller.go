@@ -140,17 +140,28 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
 		var errs []error
 		var missingOrgs []string
+		var desiredOrgs []client.ObjectKey
+		prunable := true
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
+				prunable = false // unloaded binding may still contribute orgs
 				continue
 			}
 			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
-				missing, err := r.ghPhase.Reconcile(ctx, asr, cb)
+				desired, missing, err := r.ghPhase.Reconcile(ctx, asr, cb)
 				if err != nil {
 					errs = append(errs, err)
 				}
 				missingOrgs = append(missingOrgs, missing...)
+				desiredOrgs = append(desiredOrgs, desired...)
+			}
+		}
+		// Prune once from the aggregate: field manager is per-ASR, so per-binding prune
+		// would release another binding's entries.
+		if prunable {
+			if err := r.ghPhase.PruneStaleOrgs(ctx, asr, desiredOrgs); err != nil {
+				errs = append(errs, err)
 			}
 		}
 		// Set once from the aggregate so a healthy binding can't clear another's signal.
