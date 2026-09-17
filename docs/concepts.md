@@ -98,10 +98,12 @@ spec:
           verbs: [create, update, patch, delete]
 ```
 
-Each capability maps to a list of rules mirroring the native Kubernetes
-`PolicyRule` shape (`apiGroups` + `resources` + `verbs`). All three fields are
-required per rule — there are no implicit wildcards, so operators must be
-explicit about what they grant.
+For the **kubernetes** provider, each capability maps to a list of rules
+mirroring the native Kubernetes `PolicyRule` shape (`apiGroups` + `resources` +
+`verbs`), all three fields required per rule so there are no implicit wildcards.
+Other providers define their own `definition` shape: the **github** provider, for
+example, maps each capability to a string permission (`pull` / `push` / `admin`)
+rather than to `PolicyRule`s.
 
 Key fields:
 - **`provider`** — connector operators filter by this (self-select)
@@ -196,10 +198,11 @@ urn:ccrn:<resource-type>.<domain>.<api-group>/v1/<resource-path>
 
 ### Wildcards
 
-Wildcards (`*`) are supported for broad resource selection:
-- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*` — all clusters
-- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-*` — prefix matching
-- `urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/prod-eu-1/*` — all namespaces on a cluster
+Cluster-name wildcards are supported for broad selection and matched against the Greenhouse `Cluster` inventory:
+- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*` (all clusters)
+- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-*` (prefix matching)
+
+A **wildcard in the namespace segment is not supported**: the Kubernetes provider rejects it as an invalid CCRN (`EnsureASRValidity`, reason `InvalidCCRN`) rather than expanding it to every namespace on the cluster. Target namespaces must be named explicitly.
 
 ### Exclusions
 

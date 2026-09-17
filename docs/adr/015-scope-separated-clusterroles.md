@@ -89,7 +89,7 @@ Existing clusters may have a legacy `pm-<asr>-ns` ClusterRole from the intermedi
 
 ### Cleaner Compatibility
 
-RBAC for an ASR is discovered by the `permission-manager.cloudoperators.dev/asr` label, so cleanup finds all of it. `EnsureOrphansCleanedUp` (`internal/provider/k8s/ensure_orphans_removed.go`) removes label-matched RBAC that is no longer in the compiled set (including scope transitions), and `EnsureRbacRemoved` removes all of it on deletion. It cleans up ClusterRoles, ClusterRoleBindings, Roles, and RoleBindings, all of which carry the ASR label. **No orphan resources are left behind.**
+RBAC for an ASR is discovered by the `permission-manager.cloudoperators.dev/asr` label. Two cleanup paths use it. On deletion, `EnsureRbacRemoved` (`internal/provider/k8s/ensure_orphans_removed.go`) deletes **every** label-matched ClusterRole, ClusterRoleBinding, Role, and RoleBinding, so nothing is left behind. During a normal reconcile, `EnsureOrphansCleanedUp` removes whole-cluster orphans (clusters no longer targeted) by label, but its within-cluster sub-resource cleanup uses `deleteSpecificRBAC`, which only deletes resources named exactly `pm-<asr>`. A legacy `pm-<asr>-ns` object from the intermediate design is therefore not removed by the reconcile path even though it carries the ASR label; it is cleaned up on deletion, or must be removed by the migration step below.
 
 ## Consequences
 

@@ -39,11 +39,13 @@ flowchart TD
     CREATED --> GH_C{"github enabled<br/>& referenced?"}
     GH_C -->|"Yes"| GHRUN["github: Reconcile"]
     GH_C -->|"No"| K8S_C
-    GHRUN --> K8S_C{"kubernetes enabled?"}
+    GHRUN -->|"error"| FAILED["return Failed<br/>(kubernetes step skipped)"]
+    GHRUN -->|"ok"| K8S_C{"kubernetes enabled?"}
     K8S_C -->|"Yes"| K8SRUN["kubernetes: reconcileKubernetes<br/>(subroutine chain)"]
 
     DELETED --> GH_D["github: ReconcileDelete"]
-    GH_D --> K8S_D["kubernetes: cleanUpKubernetes<br/>(EnsureRbacRemoved)"]
+    GH_D -->|"error"| FAILED
+    GH_D -->|"ok"| K8S_D["kubernetes: cleanUpKubernetes<br/>(EnsureRbacRemoved)"]
 
     K8SRUN --> PATCH["patchStatus"]
     K8S_D --> PATCH
@@ -151,7 +153,11 @@ maps to a reconcile outcome.
 `EnsureCreated` runs the **github** provider first (per referenced
 ConnectorBinding whose `spec.provider == github`), then the **kubernetes**
 provider (`reconcileKubernetes`). `EnsureDeleted` mirrors this: github
-`ReconcileDelete`, then kubernetes `cleanUpKubernetes`.
+`ReconcileDelete`, then kubernetes `cleanUpKubernetes`. The github step
+short-circuits the reconcile: if any referenced github binding errors,
+`EnsureCreated`/`EnsureDeleted` return `Failed` immediately and the kubernetes
+provider does not run this reconcile (it runs on the next attempt once github
+succeeds).
 
 ### Subroutine engine
 
@@ -219,10 +225,14 @@ Greenhouse `Cluster` store (`matchClusterPattern`, exact key or trailing-`*`
 glob), and splits by scope: a cluster CCRN (empty namespace) accumulates
 cluster-scoped rules into `ClusterRole pm-‹asr›`; a namespace CCRN accumulates
 per-namespace rules into `Role pm-‹asr›` in that namespace. This is the design
-chosen in [ADR-015](adr/015-scope-separated-clusterroles.md). Capabilities not
-found in any binding, cluster patterns that match nothing, and discovery that is
-unavailable are recorded as degraded reasons (`unmappedCaps`,
-`unmatchedClusterPatterns`, `discoveryDegraded`).
+chosen in [ADR-015](adr/015-scope-separated-clusterroles.md). Three failure
+accumulators are set here and each stamps `InvalidConfig=True` + `Ready=False`
+directly in this subroutine: capabilities not found in any binding
+(`unmappedCaps` -> reason `UnknownCapability`), cluster patterns that match
+nothing (`unmatchedClusterPatterns` -> `NoTargetsResolved`), and clusters whose
+deny-driven rules could not be expanded because discovery was unavailable
+(`discoveryDegraded` -> `DiscoveryUnavailable`). The subroutine still
+`Continue`s.
 
 > **Deny-driven capabilities (`excludeResources`).** A capability rule may carry
 > `excludeResources` instead of literal resources (see
@@ -236,9 +246,12 @@ unavailable are recorded as degraded reasons (`unmappedCaps`,
 > partial expansion. The cluster is recorded in `discoveryDegraded`.
 
 **`EnsureOrphansCleanedUp`** ([`ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go))
-runs before apply. It deletes RBAC that was previously applied for this ASR but
-is no longer in the freshly compiled set, matched by the
-`permission-manager.cloudoperators.dev/asr` label.
+runs before apply. For a cluster no longer targeted at all, it deletes every
+RBAC object carrying this ASR's `permission-manager.cloudoperators.dev/asr`
+label. Within a still-targeted cluster, it removes sub-resources that dropped
+out of the compiled set via `deleteSpecificRBAC`, which only deletes objects
+named exactly `pm-‹asr›`; a differently-named legacy object is left for the
+delete path.
 
 **`EnsureRbacApplied`** ([`ensure_applied.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go))
 applies the compiled RBAC with `CreateOrPatch`. A `RoleBinding`'s `roleRef` is
@@ -248,9 +261,12 @@ immutable, so a roleRef change forces delete-and-recreate. It writes the
 is skipped and any stale `Provisioned` condition is removed.
 
 **`EnsureProviderStatus`** ([`ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go))
-is terminal. It folds the accumulators into
-`status.providers.kubernetes` (degraded reasons override the per-target view),
-calls `asr.CalculateReady()`, and aggregates provision/orphan errors; a non-nil
+is terminal. If any of `unmappedCaps`, `invalidCCRNs`, or
+`unmatchedClusterPatterns` is non-empty it writes a degraded
+`status.providers.kubernetes` in place of the per-target view (note this fold
+does not include `discoveryDegraded`, which already set `InvalidConfig` in the
+compile step); otherwise it writes the per-cluster target statuses. It then
+calls `asr.CalculateReady()` and aggregates provision/orphan errors; a non-nil
 aggregate `Break`s the chain.
 
 ---
@@ -271,7 +287,7 @@ flowchart TD
 
     DELETE --> RESULT{"All clusters cleaned?"}
     RESULT -->|"Yes"| CLEAR["Clear kubernetes provider status<br/>→ Success"]
-    RESULT -->|"Partial failure"| RETRY["Leave target entries<br/>→ Break, retried next reconcile"]
+    RESULT -->|"Partial failure"| RETRY["Leave whole status entry<br/>→ Break, full list retried next reconcile"]
 
     CLEAR --> FIN["Delete condition True/Deleted<br/>→ lifecycle removes finalizer"]
 
@@ -282,11 +298,13 @@ flowchart TD
 ```
 
 `EnsureRbacRemoved` iterates the clusters recorded in
-`status.providers.kubernetes.targets` and deletes label-matched RBAC on each. On
-full success it clears the kubernetes provider status entry, which lets the
-lifecycle engine mark the `Delete` condition `True`/`Deleted` and remove the
-finalizer. A partial failure leaves the remaining target entries in place and
-`Break`s, so the delete is retried on the next reconcile.
+`status.providers.kubernetes.targets` and deletes label-matched RBAC on each. It
+clears the kubernetes provider status entry only when **every** cluster
+succeeds, which lets the lifecycle engine mark the `Delete` condition
+`True`/`Deleted` and remove the finalizer. If any cluster fails, the whole
+provider status entry (including the clusters that were cleaned) is left in place
+and the subroutine `Break`s, so the entire target list is retried on the next
+reconcile.
 
 ---
 
