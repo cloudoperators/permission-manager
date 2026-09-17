@@ -1,504 +1,359 @@
 # Reconciler Flows
 
-Visual diagrams of the pm-controller's reconciliation logic. Each provider is an independent binary with its own reconciler loop.
+Visual diagrams of the permission-manager controller's reconciliation logic. A
+single controller (`ASRReconciler`) watches `ApplicationSpecificRole` (ASR) and
+its referenced `ConnectorBinding` resources and reconciles both providers from
+one reconcile loop.
 
-> **📍 Code links**: Diagram nodes link directly to the source code that implements that step. Click any highlighted node to jump to the relevant file and line.
+> **Code links**: Diagram nodes and the source index link directly to the file
+> that implements each step. Click any linked node to jump to the source.
 
 ---
 
-## 1. CRD Relationships & Data Flow
+## 1. Controller & Provider Overview
+
+There is one controller, not one per provider. `ASRReconciler.Reconcile`
+delegates to the shared lifecycle engine, which routes to `EnsureCreated` or
+`EnsureDeleted` depending on the deletion timestamp. Both entry points fan out
+to the enabled providers.
+
+- **Providers:** `kubernetes` and `github`. Each lives under
+  [`internal/provider/`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider);
+  there is no separate greenhouse-teams provider and no standalone
+  status-aggregator controller.
+- **Provider routing** is decided two ways: globally by
+  `r.Cfg.Enabled("kubernetes" | "github")` (the `pm-provider-cm` ConfigMap), and
+  per ASR by each referenced ConnectorBinding's `spec.provider`.
+- **One shared finalizer** governs deletion for the whole ASR:
+  `pm.cloudoperators.dev/cleanup`. Providers do not each hold their own finalizer.
+
+```mermaid
+flowchart TD
+    RECONCILE(["ASRReconciler.Reconcile"])
+    RECONCILE --> LIFECYCLE["lifecycle.Reconcile<br/>load ASR, manage finalizer"]
+
+    LIFECYCLE --> DEL{"DeletionTimestamp set?"}
+    DEL -->|"No"| CREATED["EnsureCreated"]
+    DEL -->|"Yes"| DELETED["EnsureDeleted"]
+
+    CREATED --> GH_C{"github enabled<br/>& referenced?"}
+    GH_C -->|"Yes"| GHRUN["github: Reconcile"]
+    GH_C -->|"No"| K8S_C
+    GHRUN --> K8S_C{"kubernetes enabled?"}
+    K8S_C -->|"Yes"| K8SRUN["kubernetes: reconcileKubernetes<br/>(subroutine chain)"]
+
+    DELETED --> GH_D["github: ReconcileDelete"]
+    GH_D --> K8S_D["kubernetes: cleanUpKubernetes<br/>(EnsureRbacRemoved)"]
+
+    K8SRUN --> PATCH["patchStatus"]
+    K8S_D --> PATCH
+
+    click RECONCILE "https://github.com/cloudoperators/permission-manager/blob/main/internal/controller/asr_controller.go" "ASRReconciler.Reconcile"
+    click LIFECYCLE "https://github.com/cloudoperators/permission-manager/blob/main/internal/lifecycle/reconcile.go" "lifecycle.Reconcile"
+    click CREATED "https://github.com/cloudoperators/permission-manager/blob/main/internal/controller/asr_controller.go" "EnsureCreated"
+    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/internal/controller/asr_controller.go" "EnsureDeleted"
+
+    style PATCH fill:#e8f5e9,stroke:#2e7d32
+```
+
+---
+
+## 2. CRD Relationships & Data Flow
 
 How the Custom Resources relate to each other and what each provider produces.
 
-### Input: What the user defines
+### Input: what the user defines
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ApplicationSpecificRole (ASR)                                  │
-│                                                                 │
-│  spec:                                                          │
-│    connectorRefs: [cb-kubernetes, cb-greenhouse-teams]           │
-│    permissions:                                                  │
-│      - resource: urn:ccrn:cluster.k8s.../v1/nw-a-*              │
-│        capability: READ                                         │
-│      - resource: urn:ccrn:namespace.k8s.../v1/*/monitoring      │
-│        capability: WRITE                                        │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ references
+│  ApplicationSpecificRole (ASR)                                    │
+│                                                                   │
+│  spec:                                                            │
+│    connectorRefs: [sci-k8s, some-github-cb]                       │
+│    permissions:                                                   │
+│      - resource: urn:ccrn:cluster.k8s.../v1/nw-a-*                │
+│        capability: READ                                           │
+│      - resource: urn:ccrn:namespace.k8s.../v1/nw-a-prod/monitoring│
+│        capability: WRITE                                          │
+└──────────────────────────┬────────────────────────────────────────┘
+                           │ connectorRefs
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  ConnectorBinding                                               │
-│                                                                 │
-│  spec:                                                          │
-│    provider: kubernetes | github | greenhouse-teams              │
-│    definition:                                                   │
-│      capabilityMapping: {READ: cluster-viewer, WRITE: admin}    │
-│      defaultTargetNamespace: greenhouse-org-foo                  │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ credentials from
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Secret (per cluster)                                           │
-│                                                                 │
-│  data:                                                          │
-│    greenhousekubeconfig: <base64 kubeconfig>                    │
-└─────────────────────────────────────────────────────────────────┘
+│  ConnectorBinding                                                 │
+│                                                                   │
+│  spec:                                                            │
+│    provider: kubernetes | github                                  │
+│    definition:                                                    │
+│      capabilityMapping: {READ: [...rules...], WRITE: [...]}       │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
-### Processing: Provider routing
+The `capabilityMapping` is the only source of a capability's meaning. There is
+no built-in capability taxonomy in the controller: `READ`, `WRITE`, and any
+other capability name are defined entirely by the ConnectorBinding referenced by
+the ASR. Whatever verbs and resources the binding maps a capability to are what
+that capability grants.
+
+### Processing: provider routing
 
 ```mermaid
 flowchart LR
-    ASR([ASR]) --> CB{{"ConnectorBinding<br/>routes to provider"}}
+    ASR([ASR]) --> CB{{"ConnectorBinding<br/>spec.provider"}}
 
-    CB -->|"provider: kubernetes"| K8S["☸ Kubernetes Provider"]
-    CB -->|"provider: greenhouse-teams"| GH["🌿 GreenhouseTeams Provider"]
-    CB -->|"provider: github"| GIT["🐙 GitHub Provider"]
+    CB -->|"kubernetes"| K8S["Kubernetes Provider"]
+    CB -->|"github"| GIT["GitHub Provider"]
 
-    click K8S "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go" "Kubernetes reconciler entry point"
-    click GH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go" "GreenhouseTeams reconciler entry point"
-    click GIT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go" "GitHub reconciler entry point"
+    click K8S "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/phases.go" "Kubernetes provider Phase"
+    click GIT "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/phase.go" "GitHub provider Phase"
 ```
 
-### Output: What each provider creates
+### Output: what each provider creates
 
-| Provider | Where | Resources Created |
+| Provider | Where | Resources created |
 |----------|-------|-------------------|
-| **kubernetes** | Remote target clusters | `ClusterRole pm-‹asr›` (cluster verbs) <br/> `ClusterRole pm-‹asr›-ns` (namespace verbs) <br/> `ClusterRoleBinding pm-‹asr›` <br/> `RoleBinding pm-‹asr›` (per namespace) |
-| **greenhouse-teams** | Greenhouse org namespace (management cluster) | `Team pm-‹teamName›` <br/> `TeamRoleBinding pm-‹asr›-‹role›-‹cluster›` |
+| **kubernetes** | Remote target clusters | `ClusterRole pm-‹asr›` + `ClusterRoleBinding pm-‹asr›` (cluster-scoped permissions) <br/> `Role pm-‹asr›` + `RoleBinding pm-‹asr›` per namespace (namespace-scoped permissions) |
 | **github** | Provider namespace (management cluster) | `GithubTeam` <br/> `GithubTeamRepository` |
-| **status-aggregator** | ASR status (management cluster) | `status.conditions[Ready, Degraded]` |
 
-All output resources carry ownership labels for discovery and cleanup:
+Kubernetes RBAC objects carry ownership labels for discovery and cleanup:
+
 ```yaml
 labels:
-  managed-by: pm-controller          # or pm-greenhouse-teams
+  app.kubernetes.io/managed-by: pm-controller
   permission-manager.cloudoperators.dev/asr: <asr-name>
 ```
 
+The RBAC subject is always `Kind: Group, Name: <asr.spec.name>`. GitHub-owned
+resources are labelled `app.kubernetes.io/managed-by: github` plus
+`permission-manager.cloudoperators.dev/source-asr` and
+`.../source-namespace`.
+
 ---
 
-## 2. Kubernetes Provider — Create/Update Reconcile
+## 3. Lifecycle & Subroutine Engine
 
-The reconcile loop is split into three stages for clarity.
+Both providers run inside the shared lifecycle engine. Understanding it once
+explains the finalizer, status patching, and how a provider's subroutine chain
+maps to a reconcile outcome.
 
-### Stage 1: Filtering & Setup
+### Lifecycle wrapper
+
+[`lifecycle.Reconcile`](https://github.com/cloudoperators/permission-manager/blob/main/internal/lifecycle/reconcile.go):
+
+1. Load the ASR (ignore not-found).
+2. If not being deleted and the finalizer is absent, add
+   `pm.cloudoperators.dev/cleanup` and return.
+3. If being deleted: once the `Delete` condition is `True`/`Deleted`, remove the
+   finalizer and let the API server complete deletion; otherwise run
+   `EnsureDeleted`.
+4. Otherwise run `EnsureCreated`.
+5. `patchStatus` writes the ASR status subresource.
+
+`EnsureCreated` runs the **github** provider first (per referenced
+ConnectorBinding whose `spec.provider == github`), then the **kubernetes**
+provider (`reconcileKubernetes`). `EnsureDeleted` mirrors this: github
+`ReconcileDelete`, then kubernetes `cleanUpKubernetes`.
+
+### Subroutine engine
+
+The kubernetes provider expresses its work as an ordered `[]SubRoutine` run by
+[`ExecuteSubRoutine`](https://github.com/cloudoperators/permission-manager/blob/main/internal/lifecycle/subroutine.go).
+Each subroutine returns a `Result`, mapped to a `ReconcileResult`:
+
+| Subroutine returns | Chain behaviour | ReconcileResult |
+|--------------------|-----------------|-----------------|
+| `Continue()` | run the next subroutine | (keep going) |
+| `Break()` or non-nil error | stop | `Failed` |
+| `PendingResult()` or `RequeueAfter > 0` | stop, requeue | `Pending` |
+| all subroutines `Continue` | chain complete | `Success` |
+
+---
+
+## 4. Kubernetes Provider - Create/Update
+
+`reconcileKubernetes` builds a fresh `Phase` and runs six subroutines in order.
+The `Phase` fetches its own ConnectorBindings; the controller passes only the
+ASR.
 
 ```mermaid
 flowchart TD
-    START(["⚡ Reconcile triggered<br/>(ASR create/update/requeue)"])
+    START(["reconcileKubernetes<br/>build Phase, run chain"])
 
-    START --> FETCH["Fetch ASR by NamespacedName"]
-    FETCH -->|"Not found"| GONE["Return — ASR already deleted"]
+    START --> VALID["EnsureASRValidity<br/>parse each k8s CCRN"]
+    VALID --> BIND["EnsureConnectorBindings<br/>load kubernetes CBs"]
+    BIND --> COMPILE["EnsureRbacCompiled<br/>capability rules → RBAC per cluster"]
+    COMPILE --> ORPHAN["EnsureOrphansCleanedUp<br/>delete RBAC no longer compiled"]
+    ORPHAN --> APPLY["EnsureRbacApplied<br/>CreateOrPatch, write Provisioned"]
+    APPLY --> STATUS["EnsureProviderStatus<br/>fold status, CalculateReady"]
+    STATUS --> DONE["Success / Pending / Failed"]
 
-    FETCH -->|"Found"| RELEVANT{"Does ASR reference a<br/>kubernetes ConnectorBinding?<br/><i>(O(1) check via CB index)</i>"}
+    BIND -->|"no usable CB"| FAILCB["failMissingCB:<br/>revoke RBAC, InvalidConfig=MissingConnectorBinding, Break"]
 
-    RELEVANT -->|"No"| STALE{"Still has our finalizer?"}
-    STALE -->|"No"| SKIP["Return OK — not our concern"]
-    STALE -->|"Yes"| CLEANUP_STALE["Clean up leftover RBAC<br/>Remove finalizer"]
-    CLEANUP_STALE --> SKIP
+    click VALID "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_validity.go" "EnsureASRValidity"
+    click BIND "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go" "EnsureConnectorBindings"
+    click COMPILE "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go" "EnsureRbacCompiled"
+    click ORPHAN "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go" "EnsureOrphansCleanedUp"
+    click APPLY "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go" "EnsureRbacApplied"
+    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go" "EnsureProviderStatus"
 
-    RELEVANT -->|"Yes"| DELETED{"DeletionTimestamp set?"}
-    DELETED -->|"Yes"| DEL_LINK(["→ See Deletion Flow below"])
-
-    DELETED -->|"No"| FINALIZER["Ensure finalizer present<br/><i>permission-manager.cloudoperators.dev/kubernetes</i>"]
-    FINALIZER --> STAGE2(["→ Stage 2: Build Plan"])
-
-    %% Code links
-    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L82" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L91" "r.CBIndex.HasAnyKubernetesRef(asr.Spec.ConnectorRefs)"
-    click STALE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L94" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
-    click CLEANUP_STALE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L96" "Cleanup RBAC + remove finalizer"
-    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L148" "!asr.DeletionTimestamp.IsZero()"
-    click FINALIZER "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L200" "controllerutil.AddFinalizer + Patch"
-
-    style GONE fill:#f5f5f5,stroke:#999
-    style SKIP fill:#f5f5f5,stroke:#999
-    style DEL_LINK fill:#fff3e0,stroke:#e65100
-    style STAGE2 fill:#e8f5e9,stroke:#2e7d32
+    style DONE fill:#e8f5e9,stroke:#2e7d32
+    style FAILCB fill:#ffebee,stroke:#c62828
 ```
 
-### Stage 2: Plan Construction
+**`EnsureASRValidity`** ([`ensure_validity.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_validity.go))
+parses each kubernetes CCRN. Hard parse failures and **namespace wildcards**
+(unsupported) are collected into `invalidCCRNs` and stamped
+`InvalidConfig=True` with reason `InvalidCCRN`. The subroutine still
+`Continue`s so status is written for the valid remainder.
 
-```mermaid
-flowchart TD
-    STAGE2(["📐 Build Plan"])
+**`EnsureConnectorBindings`** ([`ensure_bindings.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go))
+loads the CBs named in `spec.connectorRefs`, keeping those with
+`spec.provider == kubernetes`. It requires at least one parseable binding with a
+non-empty `capabilityMapping`. If none is usable, `failMissingCB` revokes RBAC
+from previously-targeted clusters, stamps `InvalidConfig=True` with reason
+`MissingConnectorBinding`, removes `Provisioned`, and `Break`s.
 
-    STAGE2 --> PARSE["Parse CCRNs from spec.permissions[]<br/><i>urn:ccrn:cluster.k8s.../v1/nw-a-*</i><br/><i>urn:ccrn:namespace.k8s.../v1/*/monitoring</i>"]
+**`EnsureRbacCompiled`** ([`ensure_compiled.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go))
+turns each permission into RBAC. It looks the capability up in the binding
+(`UnionRulesForCapability`), matches the CCRN's cluster pattern against the
+Greenhouse `Cluster` store (`matchClusterPattern`, exact key or trailing-`*`
+glob), and splits by scope: a cluster CCRN (empty namespace) accumulates
+cluster-scoped rules into `ClusterRole pm-‹asr›`; a namespace CCRN accumulates
+per-namespace rules into `Role pm-‹asr›` in that namespace. This is the design
+chosen in [ADR-015](adr/015-scope-separated-clusterroles.md). Capabilities not
+found in any binding, cluster patterns that match nothing, and discovery that is
+unavailable are recorded as degraded reasons (`unmappedCaps`,
+`unmatchedClusterPatterns`, `discoveryDegraded`).
 
-    PARSE --> RESOLVE["Resolve cluster wildcards<br/>via ClusterInventory.MatchingNames<br/><i>nw-a-* → [nw-a-prod, nw-a-staging, ...]</i>"]
-
-    RESOLVE --> MAP_CAPS["Map capabilities → verb sets<br/><i>READ → [get, list, watch]</i><br/><i>WRITE → [get, list, watch, create, update, patch, delete]</i>"]
-
-    MAP_CAPS --> SPLIT["Split verbs by scope<br/><b>Cluster verbs</b>: from cluster-CCRN permissions<br/><b>Namespace verbs</b>: from namespace-CCRN permissions"]
-
-    SPLIT --> DIFF["Diff against previous targets<br/>in status.providers.kubernetes.targets"]
-
-    DIFF --> PLAN_OUT["Reconcile Plan:<br/>• <b>clustersToProvision</b>: [{cluster, clusterVerbs, nsVerbs, namespaces}]<br/>• <b>orphanClusters</b>: [clusters no longer targeted]"]
-
-    PLAN_OUT --> STAGE3(["→ Stage 3: Execute"])
-
-    %% Code links
-    click PARSE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L210" "buildClusterScopes(&asr, r.ClusterInventory.MatchingNames)"
-    click RESOLVE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/cluster_inventory.go" "ClusterInventory.MatchingNames"
-    click MAP_CAPS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L30" "CapabilityVerbs map"
-    click DIFF "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L34" "planReconcile(asr, scopes, prevStatuses)"
-    click PLAN_OUT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L19" "ReconcilePlan struct"
-
-    style STAGE2 fill:#e8f5e9,stroke:#2e7d32
-    style STAGE3 fill:#e8f5e9,stroke:#2e7d32
-```
-
-> **Deny-driven capabilities (`excludeResources`).** A capability rule may declare
+> **Deny-driven capabilities (`excludeResources`).** A capability rule may carry
 > `excludeResources` instead of literal resources (see
-> [Concepts → Deny-driven rules](concepts.md#deny-driven-rules-excluderesources)).
-> When present, capability resolution is no longer a pure in-memory map: for each
-> target cluster the controller reads that cluster's discovered API groups from
-> `Cluster.status.discoveryCache.groups` and performs **live discovery I/O**
-> (`ServerResourcesForGroupVersion`) against the remote cluster to enumerate each
-> denied group's resources, subtracting the excluded ones. If discovery is
-> unavailable the ASR fails closed (`InvalidConfig=True` / reason
-> `DiscoveryUnavailable`) and applies nothing until discovery recovers.
+> [Concepts → Deny-driven rules](concepts.md#deny-driven-rules-excluderesources)). For each target
+> cluster, `expandRuleForCluster` ([`expand.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/expand.go))
+> reads the cluster's discovered API groups from
+> `Cluster.status.discoveryCache.groups` and performs live discovery
+> (`ServerResourcesForGroupVersion`) to enumerate each denied group's resources
+> minus the excluded ones. It is **fail-closed**: if discovery is unavailable it
+> returns an error and no rules, so a denied resource can never leak through a
+> partial expansion. The cluster is recorded in `discoveryDegraded`.
 
-### Stage 3: Execute Plan
+**`EnsureOrphansCleanedUp`** ([`ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go))
+runs before apply. It deletes RBAC that was previously applied for this ASR but
+is no longer in the freshly compiled set, matched by the
+`permission-manager.cloudoperators.dev/asr` label.
 
-```mermaid
-flowchart TD
-    STAGE3(["🚀 Execute Plan"])
+**`EnsureRbacApplied`** ([`ensure_applied.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go))
+applies the compiled RBAC with `CreateOrPatch`. A `RoleBinding`'s `roleRef` is
+immutable, so a roleRef change forces delete-and-recreate. It writes the
+`Provisioned` condition with reason `ProvisioningSucceeded`, `NoTargets`,
+`ProvisioningFailed`, or `PartialProvisioning`. When `InvalidConfig=True`, apply
+is skipped and any stale `Provisioned` condition is removed.
 
-    STAGE3 --> LOOP["For each cluster in plan"]
-
-    LOOP --> CLIENT["Get cached client for cluster<br/><i>(from kubeconfig Secret, TLS cached)</i>"]
-    CLIENT -->|"❌ Unreachable"| UNREACH["Record status: Unreachable<br/>Emit warning event"]
-    UNREACH --> NEXT
-
-    CLIENT -->|"✅ Connected"| EXPAND["Expand namespace wildcards<br/><i>List namespaces on remote cluster</i><br/><i>(60s TTL cache)</i>"]
-
-    EXPAND --> BUILD_RBAC["Build RBAC resources<br/>(scope-separated, per ADR-015)"]
-
-    subgraph rbac ["Scope-Separated ClusterRoles"]
-        direction LR
-        CRC["<b>pm-‹asr›</b><br/>ClusterRole with cluster verbs<br/>→ bound by ClusterRoleBinding"]
-        CRN["<b>pm-‹asr›-ns</b><br/>ClusterRole with ns verbs<br/>→ bound by RoleBinding per NS"]
-    end
-
-    BUILD_RBAC --> rbac
-    rbac --> APPLY["Apply via CreateOrPatch<br/>Delete stale scope resources"]
-    APPLY -->|"Error"| ERR["Record status: Error"]
-    APPLY -->|"OK"| OK["Record status: Success"]
-
-    ERR --> NEXT
-    OK --> NEXT["Next cluster"]
-
-    NEXT --> ORPHANS{"Orphan clusters to clean?"}
-    ORPHANS -->|"Yes"| CLEAN_ORPHAN["Delete RBAC on clusters<br/>no longer targeted by this ASR"]
-    ORPHANS -->|"No"| PATCH
-
-    CLEAN_ORPHAN --> PATCH["Patch provider status via SSA<br/><i>FieldOwner: pm-controller-kubernetes</i><br/><i>Skip if unchanged</i>"]
-
-    PATCH --> RESULT{"Any errors occurred?"}
-    RESULT -->|"Yes"| REQUEUE["Requeue with backoff"]
-    RESULT -->|"No"| DONE["✅ Done"]
-
-    %% Code links
-    click LOOP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L69" "for clusterName, scope := range plan.ClustersToProvision"
-    click CLIENT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L76" "factory.ClientForCluster(ctx, clusterName)"
-    click UNREACH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L79" "ClusterUnreachableError handling"
-    click EXPAND "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L101" "expandNamespaceWildcards"
-    click BUILD_RBAC "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_generator.go" "buildRBACPlan(plan.ASRName, plan.SpecName, scope)"
-    click APPLY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L122" "applyRBACPlan(ctx, clusterClient, rbacPlan, ...)"
-    click ORPHANS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L172" "r.Cleaner.CleanupOrphans(ctx, asr.Name, plan.OrphanClusters)"
-    click CLEAN_ORPHAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/orphan_cleanup.go" "CleanupOrphans implementation"
-    click PATCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L271" "r.patchStatus(ctx, &asr, statuses)"
-
-    style rbac fill:#f1f8e9,stroke:#558b2f
-    style DONE fill:#e8f5e9,stroke:#2e7d32
-```
+**`EnsureProviderStatus`** ([`ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go))
+is terminal. It folds the accumulators into
+`status.providers.kubernetes` (degraded reasons override the per-target view),
+calls `asr.CalculateReady()`, and aggregates provision/orphan errors; a non-nil
+aggregate `Break`s the chain.
 
 ---
 
-## 3. Kubernetes Provider — Deletion Flow
+## 5. Kubernetes Provider - Deletion
 
-When an ASR is deleted, the finalizer blocks removal until all RBAC is confirmed cleaned.
+Deletion is governed by the shared lifecycle finalizer, not a provider-held one.
+There is no abandon-cleanup annotation and no escalating finalizer-hold. When the
+ASR has a deletion timestamp, `cleanUpKubernetes` runs a single subroutine.
 
 ```mermaid
 flowchart TD
-    DEL(["🗑️ ASR Deletion<br/>(deletionTimestamp set)"])
+    DEL(["ASR deletion<br/>(deletionTimestamp set)"])
+    DEL --> REMOVE["EnsureRbacRemoved"]
 
-    DEL --> HAS_FIN{"Has kubernetes finalizer?"}
-    HAS_FIN -->|"No"| PROCEED["ASR deletion proceeds<br/>(not our responsibility)"]
+    REMOVE --> LOOP["For each cluster in<br/>status.providers.kubernetes.targets"]
+    LOOP --> DELETE["Delete RBAC by label<br/>(ClusterRole/CRB/Role/RoleBinding)"]
 
-    HAS_FIN -->|"Yes"| TARGETS["Determine target clusters<br/><i>From status.providers.kubernetes.targets</i><br/><i>Fallback: full ClusterInventory</i>"]
+    DELETE --> RESULT{"All clusters cleaned?"}
+    RESULT -->|"Yes"| CLEAR["Clear kubernetes provider status<br/>→ Success"]
+    RESULT -->|"Partial failure"| RETRY["Leave target entries<br/>→ Break, retried next reconcile"]
 
-    TARGETS --> CLEANUP["CleanupAll:<br/>For each cluster → get client → delete by label<br/>(ClusterRoles, ClusterRoleBindings, RoleBindings)"]
+    CLEAR --> FIN["Delete condition True/Deleted<br/>→ lifecycle removes finalizer"]
 
-    CLEANUP --> RESULT{"Result?"}
+    click REMOVE "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go" "EnsureRbacRemoved"
 
-    %% Happy path
-    RESULT -->|"✅ All clusters cleaned"| REMOVE_FIN["Remove finalizer"]
-    REMOVE_FIN --> DELETED["✅ ASR deletion completes"]
-
-    %% Some unreachable
-    RESULT -->|"⚠️ Some clusters unreachable"| FILTER["Filter out clusters<br/>gone from inventory<br/><i>(decommissioned = no cleanup needed)</i>"]
-
-    FILTER --> REMAINING{"Orphaned clusters remain?"}
-    REMAINING -->|"No"| REMOVE_FIN
-
-    REMAINING -->|"Yes"| ABANDON{"Abandon annotation set?<br/><i>abandon-cleanup: 'true'</i>"}
-
-    %% Exit path 3: abandon
-    ABANDON -->|"Yes"| EMIT_ABANDON["Emit CleanupAbandoned event<br/>(operator accepted risk)"]
-    EMIT_ABANDON --> REMOVE_FIN
-
-    %% Hold finalizer
-    ABANDON -->|"No"| HOLD["🔒 HOLD finalizer<br/>Block ASR deletion"]
-    HOLD --> STATUS_ORPHAN["Update status with orphaned clusters"]
-    STATUS_ORPHAN --> EMIT_WARN["Emit CleanupBlocked warning"]
-    EMIT_WARN --> REQUEUE["Requeue after delay<br/><i>30s initially, escalates to 5m</i>"]
-
-    %% Code links
-    click HAS_FIN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L149" "controllerutil.ContainsFinalizer(&asr, FinalizerKubernetes)"
-    click TARGETS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go#L209" "extractTargetClusterNames(asr, inventory)"
-    click CLEANUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_cleaner.go" "r.Cleaner.CleanupAll(ctx, asr.Name, clusters)"
-    click FILTER "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L160" "filterOrphanedClusters(skipped, r.ClusterInventory)"
-    click ABANDON "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L164" "hasAbandonAnnotation(&asr)"
-    click HOLD "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L170" "Hold finalizer, patch status, emit event, requeue"
-    click REMOVE_FIN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go#L189" "controllerutil.RemoveFinalizer + Patch"
-
-    %% Styling
-    style DELETED fill:#e8f5e9,stroke:#2e7d32
-    style HOLD fill:#ffebee,stroke:#c62828
-    style PROCEED fill:#f5f5f5,stroke:#999
+    style CLEAR fill:#e8f5e9,stroke:#2e7d32
+    style RETRY fill:#ffebee,stroke:#c62828
 ```
 
-**Three exit paths (per ADR-012):**
-
-| # | Condition | Outcome |
-|---|-----------|---------|
-| 1 | All clusters cleaned successfully | Finalizer removed → deletion proceeds |
-| 2 | Cluster gone from Greenhouse inventory | Treated as cleaned (no cleanup needed) → finalizer removed |
-| 3 | Operator sets `abandon-cleanup: "true"` | Explicit risk acceptance → finalizer removed despite orphans |
-
-If none of these exit paths are met, the **finalizer is held** — the ASR cannot be deleted while RBAC may still be active on unreachable clusters. The controller retries with escalating delays.
+`EnsureRbacRemoved` iterates the clusters recorded in
+`status.providers.kubernetes.targets` and deletes label-matched RBAC on each. On
+full success it clears the kubernetes provider status entry, which lets the
+lifecycle engine mark the `Delete` condition `True`/`Deleted` and remove the
+finalizer. A partial failure leaves the remaining target entries in place and
+`Break`s, so the delete is retried on the next reconcile.
 
 ---
 
-## 4. GreenhouseTeams Provider — Reconcile Flow
+## 6. GitHub Provider - Reconcile & Delete
+
+The github provider ([`internal/provider/github/phase.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/phase.go))
+runs once per referenced `github` ConnectorBinding.
 
 ```mermaid
 flowchart TD
-    START(["⚡ Reconcile triggered"])
+    START(["github.Reconcile(asr, cb)"])
+    START --> PARSE["Parse advancedConfig + CB definition<br/>resolve target namespace"]
+    PARSE --> BUILD["BuildDesiredState<br/>CCRNs → GithubTeam + GithubTeamRepository<br/>via capabilityMapping"]
+    BUILD --> RECONCILE["Reconcile teams / repos / orgs<br/>(CreateOrPatch + delete stale)"]
+    RECONCILE --> STATUS["computeProviderStatus<br/>read back GithubTeam CR statuses"]
+    STATUS --> DONE["Done"]
 
-    START --> FETCH["Fetch ASR"]
-    FETCH -->|"Not found"| GONE["Return — deleted"]
-    FETCH -->|"Found"| RELEVANT{"References greenhouse-teams CB?<br/><i>(CB index check)</i>"}
+    DELSTART(["github.ReconcileDelete(asr)"])
+    DELSTART --> DELCLEAN["Delete owned GithubTeam / GithubTeamRepository<br/>+ org entries by label"]
 
-    RELEVANT -->|"No"| STALE_CHECK{"Has our finalizer?"}
-    STALE_CHECK -->|"No"| SKIP["Return OK"]
-    STALE_CHECK -->|"Yes"| STALE_CLEAN["Clean up Teams + TRBs, remove finalizer"]
-    STALE_CLEAN --> SKIP
-
-    RELEVANT -->|"Yes"| DELETED{"DeletionTimestamp?"}
-    DELETED -->|"Yes"| DEL_CLEAN["Delete all Teams + TRBs<br/>Remove finalizer → done"]
-
-    DELETED -->|"No"| SETUP["Ensure finalizer<br/>Parse CB definition + advancedConfig"]
-
-    SETUP --> RESOLVE_NS["Resolve target namespace(s)"]
-
-    subgraph ns_resolution ["Namespace Resolution Priority"]
-        direction LR
-        P1["1️⃣ advancedConfig.targetNamespaces"]
-        P2["2️⃣ CB default targetNamespace"]
-        P3["3️⃣ ❌ Error (no fallback)"]
-        P1 -.-> P2 -.-> P3
-    end
-
-    RESOLVE_NS --> ns_resolution
-    ns_resolution --> COMPUTE["Compute desired state<br/>Parse CCRNs → resolve capabilities<br/>via capabilityMapping → TeamRoles"]
-
-    COMPUTE --> CONFLICT{"Also references a<br/>kubernetes ConnectorBinding?"}
-
-    subgraph modes ["Operating Modes (ADR-007)"]
-        direction TB
-        FULL["<b>Full Reconcile</b><br/>Create Team + TeamRoleBindings"]
-        TEAM_ONLY["<b>Team-Only Mode</b><br/>Create Team only<br/>(K8s provider handles RBAC)"]
-    end
-
-    CONFLICT -->|"No"| FULL
-    CONFLICT -->|"Yes"| TEAM_ONLY
-
-    FULL --> RECONCILE_TRBS["CreateOrUpdate each TRB<br/>Delete stale TRBs"]
-    TEAM_ONLY --> CLEANUP_TRBS["Delete any existing TRBs<br/>(from before conflict was detected)"]
-
-    RECONCILE_TRBS --> STATUS
-    CLEANUP_TRBS --> STATUS
-
-    STATUS["Patch provider status via SSA<br/><i>FieldOwner: pm-controller-greenhouse-teams</i>"]
-    STATUS --> DONE["✅ Done"]
-
-    %% Code links
-    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L43" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L52" "r.CBIndex.HasAnyProviderRef(asr.Spec.ConnectorRefs)"
-    click STALE_CHECK "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L55" "controllerutil.ContainsFinalizer(&asr, FinalizerGreenhouseTeams)"
-    click STALE_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L57" "r.cleanup(ctx, &asr)"
-    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L70" "!asr.DeletionTimestamp.IsZero()"
-    click DEL_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L71" "cleanup + RemoveFinalizer"
-    click SETUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L89" "Finalizer + CB parse + advancedConfig"
-    click RESOLVE_NS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L129" "ResolveTargetNamespaces(advCfg, cbDef)"
-    click COMPUTE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L142" "ComputeDesiredState(&asr, teamName, capMapping)"
-    click CONFLICT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L87" "DetermineMode(ctx, r.Client, &asr, log)"
-    click FULL "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go#L192" "ReconcileAllTRBs"
-    click TEAM_ONLY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L62" "ModeTeamOnly"
-    click RECONCILE_TRBS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/teamrolebinding.go" "ReconcileAllTRBs"
-    click CLEANUP_TRBS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go#L106" "CleanupTRBs(ctx, c, asr, log, al)"
-    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/status.go" "PatchASRProviderStatus"
-
-    style modes fill:#e3f2fd,stroke:#1565c0
-    style ns_resolution fill:#fff8e1,stroke:#f9a825
-    style DONE fill:#e8f5e9,stroke:#2e7d32
-```
-
----
-
-## 5. GitHub Provider — Reconcile Flow
-
-```mermaid
-flowchart TD
-    START(["⚡ Reconcile triggered"])
-
-    START --> FETCH["Fetch ASR"]
-    FETCH -->|"Not found"| GONE["Return — deleted"]
-    FETCH -->|"Found"| RELEVANT{"References github CB?<br/><i>(CB index check)</i>"}
-
-    RELEVANT -->|"No"| STALE_CHECK{"Has github finalizer?"}
-    STALE_CHECK -->|"No"| SKIP["Return OK"]
-    STALE_CHECK -->|"Yes"| STALE_CLEAN["Delete GithubTeams + GithubTeamRepos<br/>+ Org entries, remove finalizer"]
-    STALE_CLEAN --> SKIP
-
-    RELEVANT -->|"Yes"| DELETED{"DeletionTimestamp?"}
-    DELETED -->|"Yes"| DEL_CLEAN["Clean up all owned resources<br/>+ Org entries, remove finalizer"]
-
-    DELETED -->|"No"| SETUP["Ensure finalizer<br/>Parse advancedConfig + CB definition"]
-
-    SETUP --> RESOLVE_NS["Resolve target namespace"]
-    RESOLVE_NS --> BUILD["Build desired state<br/><i>Map ASR permissions via capabilityMapping<br/>→ GithubTeam + GithubTeamRepository CRs</i>"]
-
-    BUILD --> RECONCILE_TEAMS["Reconcile GithubTeam CRs<br/><i>CreateOrPatch + delete stale</i>"]
-    RECONCILE_TEAMS --> RECONCILE_REPOS["Reconcile GithubTeamRepository CRs"]
-    RECONCILE_REPOS --> RECONCILE_ORGS["Patch GithubOrganization resources<br/><i>(wildcard + org-owner CCRNs)</i>"]
-
-    RECONCILE_ORGS --> STATUS["Compute & patch provider status"]
-    STATUS --> DONE["✅ Done"]
-
-    %% Code links
-    click FETCH "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L46" "r.Get(ctx, req.NamespacedName, &asr)"
-    click RELEVANT "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L55" "r.CBIndex.FindGithubRef(asr.Spec.ConnectorRefs)"
-    click STALE_CHECK "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L59" "controllerutil.ContainsFinalizer(&asr, FinalizerGithub)"
-    click STALE_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L60" "Label-based cleanup + cleanupOrgEntries"
-    click DELETED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L97" "!asr.DeletionTimestamp.IsZero()"
-    click DEL_CLEAN "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L99" "cleanupOwnedResources + cleanupOrgEntries"
-    click SETUP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L117" "Finalizer + ParseAdvancedConfig + ParseConnectorDefinition"
-    click RESOLVE_NS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go#L140" "ResolveTargetNamespace(advConfig, cbDef, &asr)"
-    click BUILD "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/desired_state.go" "BuildDesiredState(&asr, cbDef.CapabilityMapping)"
-    click RECONCILE_TEAMS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team.go" "ReconcileTeams(ctx, r.Client, desired.Teams, ...)"
-    click RECONCILE_REPOS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team_repo.go" "ReconcileTeamRepos(ctx, r.Client, desired.TeamRepos, ...)"
-    click RECONCILE_ORGS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_org.go" "r.reconcileOrganizations(ctx, &asr, cbDef, targetNamespace)"
-    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/status.go" "computeProviderStatus + patchProviderStatus"
+    click BUILD "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/desired_state.go" "BuildDesiredState"
+    click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/status.go" "computeProviderStatus"
 
     style DONE fill:#e8f5e9,stroke:#2e7d32
 ```
 
----
-
-## 6. Status Aggregator
-
-The aggregator is provider-agnostic — it only reads the `status.providers` map and computes top-level conditions.
-
-```mermaid
-flowchart TD
-    TRIGGER(["⚡ ASR status changed"])
-
-    TRIGGER --> READ["Read status.providers map"]
-
-    READ --> EMPTY{"Providers map empty?"}
-    EMPTY -->|"Yes"| UNKNOWN["Ready = <b>Unknown</b><br/><i>Waiting for providers to report</i>"]
-
-    EMPTY -->|"No"| COUNT["Count providers:<br/>total vs ready"]
-
-    COUNT --> EVAL{"Result?"}
-
-    EVAL -->|"All ready"| ALL_OK["Ready = <b>True</b><br/>Degraded = False"]
-    EVAL -->|"Some not ready"| PARTIAL["Ready = <b>False</b><br/>Degraded = <b>True</b>"]
-    EVAL -->|"None ready"| NONE["Ready = <b>False</b><br/>Degraded = False"]
-
-    UNKNOWN --> CHANGED
-    ALL_OK --> CHANGED
-    PARTIAL --> CHANGED
-    NONE --> CHANGED
-
-    CHANGED{"Conditions actually changed?<br/><i>(compare type + status + reason)</i>"}
-    CHANGED -->|"No"| NOOP["Skip update<br/><i>(prevents reconcile loops)</i>"]
-    CHANGED -->|"Yes"| WRITE["Update ASR conditions<br/>via meta.SetStatusCondition"]
-    WRITE --> DONE["✅ Done"]
-
-    %% Code links
-    click READ "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L51" "computeConditions(asr.Status.Providers)"
-    click EMPTY "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L102" "if len(providers) == 0"
-    click EVAL "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L127" "switch allReady / anyReady"
-    click CHANGED "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L54" "conditionsMatch(asr.Status.Conditions, desired)"
-    click NOOP "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L56" "return ctrl.Result{}, nil"
-    click WRITE "https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go#L61" "meta.SetStatusCondition + Status().Update"
-
-    style DONE fill:#e8f5e9,stroke:#2e7d32
-    style NOOP fill:#f5f5f5,stroke:#999
-```
+`GithubTeam` and `GithubTeamRepository` are repo-guard CRDs; the github provider
+writes them and reads their status back rather than talking to GitHub directly.
 
 ---
 
-## 7. Status Ownership Model (SSA)
+## 7. Status Model
 
-How multiple independent controllers write to the same ASR without conflicts.
+There is no separate aggregator controller. Each provider writes its own slice
+of `status.providers.<provider>` in-process during the same reconcile, and
+`Ready` is derived from the ASR's conditions.
 
-```mermaid
-sequenceDiagram
-    participant K as Kubernetes Provider
-    participant G as GreenhouseTeams Provider
-    participant API as API Server
-    participant A as Status Aggregator
+- The kubernetes provider writes `status.providers.kubernetes` in
+  `EnsureProviderStatus`; the github provider writes
+  `status.providers.github` in `computeProviderStatus`.
+- [`CalculateReady`](https://github.com/cloudoperators/permission-manager/blob/main/api/v1alpha1/applicationspecificrole_types.go):
+  `InvalidConfig=True` wins as `Ready=False`; otherwise `Ready` mirrors
+  `Provisioned`. `Ready` is a mirror and never carries an independent reason.
+- `lifecycle.patchStatus` persists the status subresource once per reconcile.
 
-    Note over K,A: Each provider owns its slice — zero coordination needed
-
-    K->>API: SSA Patch status.providers["kubernetes"]<br/>FieldOwner: pm-controller-kubernetes
-    G->>API: SSA Patch status.providers["greenhouse-teams"]<br/>FieldOwner: pm-controller-greenhouse-teams
-
-    Note over API: Server tracks field ownership per key
-
-    API-->>A: Watch: ASR status changed
-    A->>API: Read full status.providers
-    A->>A: Compute Ready + Degraded conditions
-    A->>API: Update status.conditions<br/>(aggregator owns conditions, providers own providers map)
-```
+Because a single controller writes the whole status object in one reconcile,
+there is no cross-writer field-ownership arrangement between providers.
 
 ---
 
 ## Source File Index
 
-Quick reference for the implementation files behind each diagram:
+Quick reference for the implementation files behind each section:
 
-| Diagram | Primary Source | Key Functions |
-|---------|---------------|---------------|
-| **K8s Provider — Stage 1** | [`kubernetes/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconciler.go) | `Reconcile` (L77), `SetupWithManager` (L360) |
-| **K8s Provider — Stage 2** | [`kubernetes/reconcile_plan.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go) | `planReconcile` (L34), `ReconcilePlan` struct (L19) |
-| **K8s Provider — Stage 3** | [`kubernetes/reconcile_plan.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/reconcile_plan.go) | `executeReconcilePlan` (L57) |
-| **K8s Provider — RBAC gen** | [`kubernetes/rbac_generator.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_generator.go) | `buildRBACPlan`, `applyRBACPlan` |
-| **K8s Provider — Deletion** | [`kubernetes/rbac_cleaner.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/rbac_cleaner.go) | `CleanupAll`, `CleanupOrphans` |
-| **K8s Provider — Orphan** | [`kubernetes/orphan_cleanup.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/kubernetes/orphan_cleanup.go) | `filterOrphanedClusters`, orphan status |
-| **GreenhouseTeams** | [`greenhouseteams/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/reconciler.go) | `Reconcile` (L38) |
-| **GreenhouseTeams — Conflict** | [`greenhouseteams/conflict.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/conflict.go) | `DetermineMode` (L87), `CleanupTRBs` (L106) |
-| **GreenhouseTeams — Teams** | [`greenhouseteams/team.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/team.go) | `ReconcileTeam` |
-| **GreenhouseTeams — TRBs** | [`greenhouseteams/teamrolebinding.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/greenhouseteams/teamrolebinding.go) | `ReconcileAllTRBs` |
-| **GitHub** | [`github/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/reconciler.go) | `Reconcile` (L41) |
-| **GitHub — Desired State** | [`github/desired_state.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/desired_state.go) | `BuildDesiredState` |
-| **GitHub — Teams** | [`github/github_team.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_team.go) | `ReconcileTeams` |
-| **GitHub — Orgs** | [`github/github_org.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/github/github_org.go) | `reconcileOrganizations` |
-| **Status Aggregator** | [`aggregator/reconciler.go`](https://github.com/cloudoperators/permission-manager/blob/main/controller/internal/controller/aggregator/reconciler.go) | `Reconcile` (L37), `computeConditions` (L99) |
+| Section | Primary source | Key symbols |
+|---------|----------------|-------------|
+| **Controller & routing** | [`internal/controller/asr_controller.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/controller/asr_controller.go) | `ASRReconciler`, `Reconcile`, `EnsureCreated`, `EnsureDeleted`, `reconcileKubernetes`, `cleanUpKubernetes` |
+| **Lifecycle engine** | [`internal/lifecycle/reconcile.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/lifecycle/reconcile.go) | `Reconcile`, `ensureFinalizer`, `patchStatus`, `commonCleanupFinalizer` |
+| **Subroutine engine** | [`internal/lifecycle/subroutine.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/lifecycle/subroutine.go) | `ExecuteSubRoutine`, `Continue`, `Break`, `PendingResult`, `RequeueAfter` |
+| **K8s - validity** | [`internal/provider/k8s/ensure_validity.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_validity.go) | `EnsureASRValidity` |
+| **K8s - bindings** | [`internal/provider/k8s/ensure_bindings.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go) | `EnsureConnectorBindings`, `failMissingCB` |
+| **K8s - compile** | [`internal/provider/k8s/ensure_compiled.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go) | `EnsureRbacCompiled`, `buildClusterScopedRBAC`, `buildNamespaceScopedRBAC`, `matchClusterPattern` |
+| **K8s - deny expansion** | [`internal/provider/k8s/expand.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/expand.go) | `expandRuleForCluster` |
+| **K8s - orphans / delete** | [`internal/provider/k8s/ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go) | `EnsureOrphansCleanedUp`, `EnsureRbacRemoved`, `deleteRBACByLabel` |
+| **K8s - apply** | [`internal/provider/k8s/ensure_applied.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go) | `EnsureRbacApplied` |
+| **K8s - status** | [`internal/provider/k8s/ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go) | `EnsureProviderStatus`, `writeProviderStatus` |
+| **GitHub** | [`internal/provider/github/phase.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/phase.go) | `Reconcile`, `ReconcileDelete` |
+| **GitHub - desired state** | [`internal/provider/github/desired_state.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/desired_state.go) | `BuildDesiredState` |
+| **GitHub - status** | [`internal/provider/github/status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/status.go) | `computeProviderStatus` |
+| **Ready computation** | [`api/v1alpha1/applicationspecificrole_types.go`](https://github.com/cloudoperators/permission-manager/blob/main/api/v1alpha1/applicationspecificrole_types.go) | `CalculateReady` |

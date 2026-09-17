@@ -44,7 +44,7 @@ Key fields:
 - **`spec.name`** — OIDC group name + display identifier (case-sensitive)
 - **`connectorRefs[]`** — connectors self-select by their provider type
 - **`permissions[]`** — CCRN-based resource + capability pairs
-- **`deny[]`** — exclusions subtracted from the permission set
+- **`deny[]`**: present in the schema but **not enforced by the Kubernetes controller**. Exclusions are expressed on the ConnectorBinding capability rule via `excludeResources` (see [Deny-driven rules](#deny-driven-rules-excluderesources)), not here.
 
 ## FunctionalRole (FR)
 
@@ -201,38 +201,32 @@ Wildcards (`*`) are supported for broad resource selection:
 - `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-*` — prefix matching
 - `urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/prod-eu-1/*` — all namespaces on a cluster
 
-### Deny Rules
+### Exclusions
 
-Deny rules subtract from the expanded permission set:
-
-```yaml
-permissions:
-  - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*"
-    capability: READ
-deny:
-  - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/security-cluster"
-    capability: READ
-```
-
-Result: READ on all clusters **except** `security-cluster`.
+The schema carries an ASR-level `deny[]` field, but the Kubernetes controller
+does not act on it: there is no code path that subtracts denied CCRNs from the
+expanded permission set. Exclusions that the controller enforces are declared on
+the ConnectorBinding capability rule via `excludeResources` (see
+[Deny-driven rules](#deny-driven-rules-excluderesources)), which subtracts
+specific resources (for example, secrets) from an otherwise-wildcard grant.
 
 ## Capability Mapping (Per-Connector)
 
 Capabilities are abstract permission levels used in ASR `permissions[].capability` fields. **Each connector defines its own mapping** from these abstract capabilities to provider-specific actions via the `ConnectorBinding.spec.definition.capabilityMapping` field.
 
-There is no universal capability taxonomy — each downstream system has its own permission model, and the mapping is connector-specific:
+There is no universal capability taxonomy and none is built into the controller: the capability names in an ASR (`READ`, `WRITE`, or anything else) mean only what the referenced ConnectorBinding's `capabilityMapping` says they mean. The tables below are **illustrative examples** of how a binding might map capabilities, not a fixed set the controller enforces.
 
-**Kubernetes connector:**
+**Kubernetes connector (example mapping):**
 
-| Capability | Verbs |
-|-----------|-------|
+| Capability | Maps to (verbs on the rule's resources) |
+|-----------|------------------------------------------|
 | READ | get, list, watch |
 | WRITE | create, update, patch, delete |
-| OPERATE | exec, port-forward, proxy |
-| MANAGE | bind, escalate, impersonate |
 | * | * (all verbs) |
 
-**GitHub connector:**
+Each capability maps to one or more rules in the `PolicyRule` shape (`apiGroups` + `resources` + `verbs`), optionally with `excludeResources` (see [Deny-driven rules](#deny-driven-rules-excluderesources)). A binding defines whatever capability names it needs; a real binding may expose more or fewer than the three shown here.
+
+**GitHub connector (example mapping):**
 
 | Capability | Permission |
 |-----------|-----------|
@@ -240,15 +234,7 @@ There is no universal capability taxonomy — each downstream system has its own
 | WRITE | push |
 | * | admin |
 
-**Greenhouse Teams connector:**
-
-| Capability | TeamRole |
-|-----------|----------|
-| READ | cluster:view |
-| WRITE | cluster:edit |
-| * | cluster:admin |
-
-When adding a new downstream connector (e.g., Vault, ArgoCD, a database), you define a new capability matrix in the ConnectorBinding that maps the abstract capabilities to that system's native permission model.
+When adding a new downstream connector (e.g., Vault, ArgoCD, a database), you define its capability mapping in the ConnectorBinding, mapping the abstract capability names to that system's native permission model.
 
 ## How Connectors Self-Select
 
