@@ -16,7 +16,9 @@ import (
 )
 
 // ReconcileTeams creates/updates GithubTeam CRs for the desired state and
-// deletes stale ones that are no longer needed.
+// deletes stale ones that are no longer needed. Stale deletion is skipped when
+// deleteStale is false (e.g. a missing org left the desired set incomplete),
+// to avoid deleting CRs the current view cannot account for.
 func ReconcileTeams(
 	ctx context.Context,
 	c client.Client,
@@ -25,6 +27,7 @@ func ReconcileTeams(
 	targetNamespace string,
 	asrName string,
 	asrNamespace string,
+	deleteStale bool,
 	al *audit.Logger,
 ) error {
 
@@ -56,8 +59,10 @@ func ReconcileTeams(
 		}
 	}
 
-	if err := deleteStaleTeams(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
-		return fmt.Errorf("failed to delete stale GithubTeams: %w", err)
+	if deleteStale {
+		if err := deleteStaleTeams(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
+			return fmt.Errorf("failed to delete stale GithubTeams: %w", err)
+		}
 	}
 
 	return nil

@@ -169,7 +169,9 @@ func TestAppendUnique(t *testing.T) {
 
 func TestPhaseReconcile_EndToEnd(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-	p, c := newPhase(newGithubOrg("test-ns", "my-org"))
+	// Seed a labeled org so the name resolver finds the instance key while
+	// patchOrganization still Gets the CR by its plain org name.
+	p, c := newPhase(newGithubOrgWithMeta("test-ns", "my-org", "github.example.com", "ghe", "", "admin", "my-org"))
 
 	asr := newASR("asr-e2e", "team-full", []v1alpha1.Permission{
 		perm(orgCCRN("my-org"), "ADMIN"),

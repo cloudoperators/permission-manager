@@ -132,11 +132,12 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 		repos[rk] = append(repos[rk], gh.Repo)
 	}
 
-	return buildResult(asr.Name, teams, repos), unmappedCaps
+	return buildResult(teams, repos), unmappedCaps
 }
 
-// buildResult transforms the collected maps into the final DesiredState.
-func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
+// buildResult transforms the collected maps into the final DesiredState. CRName is left
+// empty here; resolveDesiredNames fills it once the org CR (and its instance key) is known.
+func buildResult(teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
 	state := &DesiredState{}
 
 	// Build teams (sorted for deterministic output)
@@ -155,7 +156,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 		state.Teams = append(state.Teams, DesiredTeam{
 			Instance: tk.instance,
 			Org:      tk.org,
-			CRName:   TeamCRName(asrName, tk.instance, tk.org),
 		})
 	}
 
@@ -184,7 +184,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 			Org:          rk.org,
 			Permission:   rk.permission,
 			Repositories: repositories,
-			CRName:       TeamRepoCRName(asrName, rk.instance, rk.org, rk.permission),
 		})
 	}
 

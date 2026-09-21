@@ -88,8 +88,8 @@ func TestMultiProvider_ThreeProviderAllReportStatus(t *testing.T) {
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)
 
 	// Verify: GithubTeam and GithubTeamRepository created (github provider)
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
-	githubTeamRepoName := "asr-" + asrName + "-github-example-com-e2e-org-pull"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
+	githubTeamRepoName := githubTeamRepoCRName("e2e-org", asrName, "pull")
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, githubTeamName)
 	assertGithubTeamRepoExists(t, ctx, mgmtClient, controllerNamespace, githubTeamRepoName)
 
@@ -127,7 +127,7 @@ func TestMultiProvider_PartialFailure(t *testing.T) {
 	// Wait for CRs to be created
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)
 
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
 	teamName := "pm-" + asrName
 
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, githubTeamName)
@@ -169,7 +169,7 @@ func TestMultiProvider_ProviderRecovery(t *testing.T) {
 	// Wait for CRs to be created
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)
 
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
 	teamName := "pm-" + asrName
 
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, githubTeamName)
@@ -214,8 +214,8 @@ func TestMultiProvider_DeletionCleansAllProviders(t *testing.T) {
 	// Wait for all CRs to be created
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)
 
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
-	githubTeamRepoName := "asr-" + asrName + "-github-example-com-e2e-org-pull"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
+	githubTeamRepoName := githubTeamRepoCRName("e2e-org", asrName, "pull")
 	teamName := "pm-" + asrName
 
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, githubTeamName)
@@ -260,8 +260,8 @@ func TestMultiProvider_ConnectorRefRemoved(t *testing.T) {
 	// Wait for all CRs to be created
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)
 
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
-	githubTeamRepoName := "asr-" + asrName + "-github-example-com-e2e-org-pull"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
+	githubTeamRepoName := githubTeamRepoCRName("e2e-org", asrName, "pull")
 	teamName := "pm-" + asrName
 
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, githubTeamName)
@@ -301,7 +301,7 @@ func TestMultiProvider_AggregatedReadyOnlyWhenAllReady(t *testing.T) {
 	createASR(t, asrName, multiProviderConnectorRefs(), multiProviderPermissions())
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	githubTeamName := "asr-" + asrName + "-github-example-com-e2e-org"
+	githubTeamName := githubTeamCRName("e2e-org", asrName)
 
 	// Wait for K8s ClusterRole (kubernetes becomes ready once CR is provisioned)
 	waitForClusterRole(t, consumer1, "pm-"+asrName, resourcePropagationTimeout)

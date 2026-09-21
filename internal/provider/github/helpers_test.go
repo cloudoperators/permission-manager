@@ -98,7 +98,7 @@ func newGithubOrg(namespace, name string) *repoguardv1.GithubOrganization {
 // newGithubOrgWithMeta builds a GithubOrganization carrying the repo-guard labels
 // (github-instance, github-instance-key, default-ldap-provider, admin-permission) and
 // spec.organization that the org resolver reads. Empty label values are omitted.
-func newGithubOrgWithMeta(name, hostname, instanceKey, ldap, adminPerm, org string) *repoguardv1.GithubOrganization {
+func newGithubOrgWithMeta(namespace, name, hostname, instanceKey, ldap, adminPerm, org string) *repoguardv1.GithubOrganization {
 	labels := map[string]string{}
 	if hostname != "" {
 		labels[labelGithubInstance] = hostname
@@ -113,7 +113,7 @@ func newGithubOrgWithMeta(name, hostname, instanceKey, ldap, adminPerm, org stri
 		labels[adminPermissionLabel] = adminPerm
 	}
 	return &repoguardv1.GithubOrganization{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
 		Spec:       repoguardv1.GithubOrganizationSpec{Organization: org},
 	}
 }

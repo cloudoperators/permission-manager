@@ -58,7 +58,7 @@ type orgResolver struct {
 }
 
 // newOrgResolver returns a resolver scoped to a single namespace with an empty cache.
-func newOrgResolver(c client.Client, namespace string, log logr.Logger) *orgResolver { //nolint:unparam // namespace varies once consumers wire in (#74/#75)
+func newOrgResolver(c client.Client, namespace string, log logr.Logger) *orgResolver {
 	return &orgResolver{
 		c:         c,
 		namespace: namespace,
@@ -71,7 +71,7 @@ func newOrgResolver(c client.Client, namespace string, log logr.Logger) *orgReso
 // in the resolver's namespace by the github-instance label, then matches on spec.organization.
 // A missing CR is returned as *githubOrgNotFoundError so the caller can surface InvalidConfig
 // (consistent with the org-patching path). Results (including not-found) are cached.
-func (r *orgResolver) resolve(ctx context.Context, hostname, org string) (*orgLookup, error) { //nolint:unparam // hostname varies once consumers wire in (#74/#75)
+func (r *orgResolver) resolve(ctx context.Context, hostname, org string) (*orgLookup, error) {
 	key := orgCacheKey{hostname: hostname, org: org}
 	if cached, ok := r.cache[key]; ok {
 		return cached.lookup, cached.err
