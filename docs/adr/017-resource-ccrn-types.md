@@ -44,8 +44,8 @@ an ASR author to say "grant WRITE specifically on this resource type."
 Introduce two new CCRN types that embed the resource target directly in the CCRN address:
 
 ```
-urn:ccrn:cluster-resource.k8s.<domain>/v1/<cluster>/<apigroup>/<resource>[:<subresource>]
-urn:ccrn:namespace-resource.k8s.<domain>/v1/<cluster>/<namespace>/<apigroup>/<resource>[:<subresource>]
+urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/<cluster>/<apigroup>/<resource>[:<subresource>]
+urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/<cluster>/<namespace>/<apigroup>/<resource>[:<subresource>]
 ```
 
 ### Segment grammar
@@ -61,6 +61,10 @@ urn:ccrn:namespace-resource.k8s.<domain>/v1/<cluster>/<namespace>/<apigroup>/<re
 The `v1` token for the core group is used because `v1` is the actual preferred GroupVersion
 returned by Kubernetes discovery for that group, and is what `kubectl api-resources` shows.
 The parser translates `v1` to the empty string `""` when building RBAC `apiGroups`.
+
+The `:` subresource delimiter is a CCRN-level encoding choice. The parser translates
+`resource:subresource` to `resource/subresource` when populating `PolicyRule.resources`,
+which is the slash form Kubernetes RBAC requires.
 
 Subresource wildcards (e.g. `*:log`) are rejected as `InvalidCCRN`.
 
@@ -87,8 +91,15 @@ the capability mapping design more broadly.
 
 A kubernetes ConnectorBinding (`provider: kubernetes`) is still required in `connectorRefs`.
 It acts as the activation gate that tells the k8s provider subroutine that it owns this ASR.
-The CB's `capabilityMapping` content is irrelevant for `resource.k8s` permissions but the
-CB object must still exist and be resolvable.
+The CB's `capabilityMapping` content is not used for `resource.k8s` permissions.
+
+The current `EnsureConnectorBindings` gate rejects a CB with an empty or unparseable
+`capabilityMapping` as unusable. For an ASR whose permissions are exclusively
+`cluster-resource` or `namespace-resource` CCRNs, this check must be relaxed: the CB is
+still required to exist and have `provider: kubernetes`, but an empty `capabilityMapping`
+is acceptable because the capability mapping is not consulted for these CCRN types. Mixed
+ASRs (some `cluster.k8s`/`namespace.k8s` + some resource CCRNs) must still satisfy the
+existing non-empty mapping requirement for the CB to serve the coarse-grained permissions.
 
 ### Compiler behavior
 
@@ -104,6 +115,14 @@ CB object must still exist and be resolvable.
   `(apiGroups, resources)` key have their verbs unioned, so a `READ` and a `WRITE` on the
   same resource type collapse to a single PolicyRule.
 - One ClusterRole and one Role per namespace per ASR per cluster, same as today (ADR-015).
+
+The CCRN type (`cluster-resource` vs `namespace-resource`) determines binding scope, not
+the native Kubernetes scope of the resource kind. Using `cluster-resource` for a namespaced
+kind (e.g. `deployments`) produces a ClusterRoleBinding and grants access across the whole
+cluster. Using `namespace-resource` for a cluster-scoped kind (e.g. `nodes`) produces a
+RoleBinding, which Kubernetes will silently ignore because cluster-scoped resources are not
+accessible via namespace-bound roles. Authors are responsible for matching the CCRN type to
+the Kubernetes scope of the resource; the controller does not validate this.
 
 ### Validation errors (reason `InvalidCCRN`)
 
@@ -121,11 +140,11 @@ Operator developer needing targeted cluster-wide write access:
 
 ```yaml
 permissions:
-- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1/apiextensions.k8s.io/customresourcedefinitions
+- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/apiextensions.k8s.io/customresourcedefinitions
   capability: WRITE
-- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1/admissionregistration.k8s.io/validatingwebhookconfigurations
+- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/admissionregistration.k8s.io/validatingwebhookconfigurations
   capability: WRITE
-- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1/admissionregistration.k8s.io/mutatingwebhookconfigurations
+- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/admissionregistration.k8s.io/mutatingwebhookconfigurations
   capability: WRITE
 ```
 
@@ -133,7 +152,7 @@ Team owning a CRD group, needing write access in their namespace across a fleet:
 
 ```yaml
 permissions:
-- resource: urn:ccrn:namespace-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1-*/myoperator-system/myoperator.cloud.sap/*
+- resource: urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1-*/myoperator-system/myoperator.cloud.sap/*
   capability: WRITE
 ```
 
@@ -141,7 +160,7 @@ Reading pod logs in a specific namespace:
 
 ```yaml
 permissions:
-- resource: urn:ccrn:namespace-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1/myapp/v1/pods:log
+- resource: urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/myapp/v1/pods:log
   capability: READ
 ```
 
@@ -149,9 +168,9 @@ Mixed ASR combining existing and new CCRN types:
 
 ```yaml
 permissions:
-- resource: urn:ccrn:namespace.k8s.ccrn.cloud.sap/v1/s-eu-de-1/myapp
+- resource: urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/myapp
   capability: READ
-- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloud.sap/v1/s-eu-de-1/apiextensions.k8s.io/customresourcedefinitions
+- resource: urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1/apiextensions.k8s.io/customresourcedefinitions
   capability: WRITE
 ```
 
