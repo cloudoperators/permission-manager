@@ -24,6 +24,8 @@ ADRs document significant design decisions made during development. Each record 
 | [014](014-kubeconfig-credential-plugin-rejection.md) | Kubeconfig Credential Plugin Rejection | Pending review | 2026-06 |
 | [015](015-scope-separated-clusterroles.md) | Scope-Separated ClusterRoles for RBAC Generation | Pending review | 2026-06 |
 | [016](016-capability-taxonomy-revision.md) | Capability Taxonomy Revision (SECURE + Wildcard) | Pending review | 2026-06 |
+| [017](017-resource-ccrn-types.md) | Resource-Scoped CCRN Types for Fine-Grained Kubernetes RBAC | Draft | 2026-09 |
+| [018](018-capability-mapping-rework.md) | Scope-Aware Capability Mapping with Shared Aggregated ClusterRoles | Draft | 2026-09 |
 
 ## Format
 
