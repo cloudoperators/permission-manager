@@ -92,34 +92,42 @@ CB (see below), not a per-ASR resource.
 
 ### 3. Shared aggregated ClusterRoles per capability per CB
 
-For all capabilities except `cluster:MANAGE`, the controller creates a shared aggregated
-ClusterRole on each target cluster. These ClusterRoles are owned by the ConnectorBinding,
-not by individual ASRs.
+For all capabilities except `cluster:MANAGE`, the controller creates two ClusterRoles on
+each target cluster per capability per CB:
 
-**Naming:** `pm-<cb-name>-<scope>-<capability>`
+1. **Aggregated root ClusterRole** (`pm-<cb-name>-<scope>-<capability>`) - has only an
+   `aggregationRule`, no inline `rules`. The Kubernetes aggregation controller owns and
+   overwrites the `rules` field of any ClusterRole with `aggregationRule`, so inline rules
+   on the root are not durable and must not be used.
 
-Examples: `pm-my-k8s-cb-cluster-read`, `pm-my-k8s-cb-namespace-manage`
+2. **Baseline child ClusterRole** (`pm-<cb-name>-<scope>-<capability>-baseline`) - carries
+   the CB-defined baseline rules and is labelled with the auto-derived
+   `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"` label so it is
+   selected by the aggregated root. CRD-owning teams can add their own ClusterRoles with
+   the same label to extend the capability.
 
-**Labels:**
-- `pm.cloudoperators.dev/cb: <cb-name>` - ownership marker, distinct from per-ASR label
-- `app.kubernetes.io/managed-by: pm-controller`
+Both ClusterRoles carry `pm.cloudoperators.dev/cb: <cb-name>` and
+`app.kubernetes.io/managed-by: pm-controller`.
 
-**Structure:** each shared ClusterRole has an `aggregationRule` combining:
+The aggregated root's `aggregationRule` combines:
 - The `clusterRoleSelectors` from the CB definition (may include built-in Kubernetes
   aggregation labels such as `rbac.authorization.k8s.io/aggregate-to-admin: "true"`)
-- An auto-derived `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"` selector
-  so CRD-owning teams can extend the role by labelling their own ClusterRoles
+- The auto-derived `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"`
+  selector, which selects the baseline child ClusterRole and any team-supplied extensions
 
-An optional baseline `rules` block in the CB definition provides inline grants for
-resources not covered by aggregated built-in roles. For `namespace:MANAGE`,
-`namespace:OPERATE`, and `namespace:READ`, the Kubernetes built-in `admin`, `edit`, and
-`view` ClusterRoles are included via their aggregation selectors; `view` and `edit`
-explicitly exclude Secrets access by design, so `namespace:READ` and `namespace:OPERATE`
-inherit that exclusion safely. For `cluster:READ`, the built-in `view` ClusterRole is
-included via its aggregation selector to cover namespaced resources (pods, deployments,
-services, etc.) without duplication; the CB baseline `rules` only needs to enumerate
-cluster-scoped resources that `view` does not cover (nodes, PersistentVolumes, Namespaces,
-etc.), and must explicitly omit Secrets.
+**Secrets semantics by capability:**
+
+- `namespace:READ` - aggregates built-in `view` (excludes Secrets by design) plus baseline
+  child. Secrets access is not granted.
+- `namespace:OPERATE` - does NOT aggregate built-in `edit` because `edit` grants Secret
+  access. The baseline child ClusterRole explicitly enumerates workload resources, omitting
+  Secrets. CRD-owning teams can extend via the pm-specific label without pulling in `edit`.
+- `namespace:MANAGE` - aggregates built-in `admin`, which grants Secret access. This is
+  intentional: a namespace administrator needs to manage Secrets. Secret access is an
+  expected and documented part of `namespace:MANAGE`.
+- `cluster:READ` - aggregates built-in `view` (covers namespaced resources, excludes
+  Secrets). The baseline child enumerates cluster-scoped resources only (nodes,
+  PersistentVolumes, Namespaces, etc.) and must explicitly omit Secrets.
 
 `cluster:MANAGE` is a special case: no shared ClusterRole is created. The controller emits
 a direct ClusterRoleBinding to the built-in `cluster-admin` ClusterRole.
@@ -169,15 +177,18 @@ ClusterRole is created. `clusterRoleName` is only valid in the `cluster` scope s
 READ:
   clusterRoleSelectors:           # at least one selector required
   - matchLabels:
-      pm.cloudoperators.dev/aggregate-to-cluster-read: "true"
-  rules:                          # optional; omit when built-in aggregation covers it
+      rbac.authorization.k8s.io/aggregate-to-view: "true"
+  rules:                          # optional baseline rules for the child ClusterRole
   - apiGroups: [""]
-    resources: ["nodes", "namespaces"]
+    resources: ["nodes", "namespaces", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
 ```
 
-The controller creates a shared ClusterRole with the given selectors (plus the auto-derived
-`pm.cloudoperators.dev/aggregate-to-<scope>-<capability>` selector) and the baseline rules.
+The controller creates two ClusterRoles: an aggregated root with `aggregationRule` only,
+and a baseline child ClusterRole carrying the `rules` content labelled with the
+auto-derived `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>` label. The `rules`
+field describes what goes into the child; the root's `rules` field is owned by Kubernetes
+and must not be set directly.
 
 **Full example:**
 
@@ -198,28 +209,40 @@ spec:
           clusterRoleSelectors:
           - matchLabels:
               rbac.authorization.k8s.io/aggregate-to-view: "true"
-          - matchLabels:
-              pm.cloudoperators.dev/aggregate-to-cluster-read: "true"
           rules:
-          - apiGroups: [""]
-            resources: ["nodes", "namespaces", "persistentvolumes", "resourcequotas",
-                        "limitranges", "events"]
-            verbs: ["get", "list", "watch"]
           # cluster-scoped resources only - namespaced resources covered by view aggregation
           # secrets intentionally omitted
+          - apiGroups: [""]
+            resources: ["nodes", "namespaces", "persistentvolumes"]
+            verbs: ["get", "list", "watch"]
+          - apiGroups: ["storage.k8s.io"]
+            resources: ["storageclasses", "volumeattachments"]
+            verbs: ["get", "list", "watch"]
       namespace:
         MANAGE:
+          # admin grants Secret access - intentional for namespace administrators
           clusterRoleSelectors:
           - matchLabels:
               rbac.authorization.k8s.io/aggregate-to-admin: "true"
           - matchLabels:
               pm.cloudoperators.dev/aggregate-to-namespace-manage: "true"
         OPERATE:
+          # edit is NOT included - edit grants Secret access which OPERATE must exclude
+          # baseline child enumerates workload resources explicitly
           clusterRoleSelectors:
           - matchLabels:
-              rbac.authorization.k8s.io/aggregate-to-edit: "true"
-          - matchLabels:
               pm.cloudoperators.dev/aggregate-to-namespace-operate: "true"
+          rules:
+          - apiGroups: ["apps"]
+            resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+          - apiGroups: ["batch"]
+            resources: ["jobs", "cronjobs"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+          - apiGroups: [""]
+            resources: ["pods", "services", "configmaps", "serviceaccounts"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+          # secrets intentionally omitted
         READ:
           clusterRoleSelectors:
           - matchLabels:
@@ -232,8 +255,9 @@ spec:
 
 | Object | Label | Managed by |
 |---|---|---|
-| Per-ASR ClusterRole, ClusterRoleBinding, Role, RoleBinding | `pm.cloudoperators.dev/asr: <asr-name>` | ASR reconciler - per-ASR orphan cleanup |
-| Shared CB ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` | ASR reconciler - shared orphan cleanup |
+| Per-ASR ClusterRole, ClusterRoleBinding, RoleBinding | `pm.cloudoperators.dev/asr: <asr-name>` | ASR reconciler - per-ASR orphan cleanup |
+| Shared aggregated root ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` | ASR reconciler - shared orphan cleanup |
+| Shared baseline child ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` | ASR reconciler - shared orphan cleanup |
 
 Per-ASR orphan cleanup (`EnsureOrphansRemoved`) only touches objects carrying the `asr`
 label. It never deletes shared ClusterRoles. A separate subroutine handles shared ClusterRole
