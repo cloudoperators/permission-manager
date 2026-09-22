@@ -271,3 +271,91 @@ func Test_EnsureOrphansCleanedUp(t *testing.T) {
 		})
 	}
 }
+
+// Vanished cluster (gone from the store) is pruned, not retried as an orphan.
+func Test_EnsureOrphansCleanedUp_VanishedClusterPruned(t *testing.T) {
+	const vanishedCluster = "vanished-cluster"
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{
+						{TargetID: testClusterNameA, Status: pmmeta.TargetStatusReady},
+						{TargetID: vanishedCluster, Status: pmmeta.TargetStatusError},
+					},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		ClusterStore: newClusterStore(t, testClusterNameA),
+		RemoteClient: func(_ context.Context, _ client.Client, clusterName, _ string) (client.Client, error) {
+			t.Fatalf("RemoteClient must not be called for vanished cluster, got %q", clusterName)
+			return nil, nil
+		},
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+	}
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{ClusterName: testClusterNameA}})
+
+	result, err := p.EnsureOrphansCleanedUp(asr)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.Continue(), result)
+
+	_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+	require.NotNil(t, ps)
+	got := make(map[string]pmmeta.TargetStatusValue, len(ps.Targets))
+	for _, ts := range ps.Targets {
+		got[ts.TargetID] = ts.Status
+	}
+	require.Equal(t, map[string]pmmeta.TargetStatusValue{testClusterNameA: pmmeta.TargetStatusReady}, got)
+}
+
+// Unmatched-pattern targets are intentional, not orphans: keep, don't prune/churn.
+func Test_EnsureOrphansCleanedUp_UnmatchedPatternKept(t *testing.T) {
+	const missingCluster = "missing-cluster"
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{
+						{TargetID: missingCluster, Status: pmmeta.TargetStatusError, Message: "cluster not found"},
+					},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client: fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, clusterName, _ string) (client.Client, error) {
+			t.Fatalf("RemoteClient must not be called for unmatched pattern, got %q", clusterName)
+			return nil, nil
+		},
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+	}
+	p.SetUnmatchedClusterPatterns([]string{missingCluster})
+
+	result, err := p.EnsureOrphansCleanedUp(asr)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.Continue(), result)
+
+	_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+	require.NotNil(t, ps)
+	got := make(map[string]pmmeta.TargetStatusValue, len(ps.Targets))
+	for _, ts := range ps.Targets {
+		got[ts.TargetID] = ts.Status
+	}
+	require.Equal(t, map[string]pmmeta.TargetStatusValue{missingCluster: pmmeta.TargetStatusError}, got)
+}

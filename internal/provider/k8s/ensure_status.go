@@ -32,19 +32,17 @@ func (p *Phase) EnsureProviderStatus(asr *v1alpha1.ApplicationSpecificRole) life
 }
 
 // writeProviderStatus computes the final ProviderStatus from the accumulators.
-// Degraded reasons (invalid CCRNs, unmapped capabilities, unmatched cluster
-// patterns) override the per-target view.
+// Config errors (invalid CCRNs, unmapped capabilities) degrade the whole
+// provider; missing/not-ready clusters appear as per-target skips alongside
+// applied targets.
 func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
-	if len(p.unmappedCaps) > 0 || len(p.invalidCCRNs) > 0 || len(p.unmatchedClusterPatterns) > 0 {
-		parts := make([]string, 0, 3)
+	if len(p.unmappedCaps) > 0 || len(p.invalidCCRNs) > 0 {
+		parts := make([]string, 0, 2)
 		if len(p.unmappedCaps) > 0 {
 			parts = append(parts, fmt.Sprintf("unmapped capabilities: %v", p.unmappedCaps))
 		}
 		if len(p.invalidCCRNs) > 0 {
 			parts = append(parts, fmt.Sprintf("invalid CCRNs: %v", p.invalidCCRNs))
-		}
-		if len(p.unmatchedClusterPatterns) > 0 {
-			parts = append(parts, fmt.Sprintf("unmatched cluster patterns: %v", p.unmatchedClusterPatterns))
 		}
 		asr.Status.Providers = pmmeta.SetProviderStatus(
 			asr.Status.Providers,
@@ -86,6 +84,26 @@ func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
 	// Drop stale entries for clusters whose orphan RBAC was fully removed.
 	for _, name := range p.orphanCleaned {
 		targets = pmmeta.RemoveTargetStatus(targets, name)
+	}
+	// Surface skipped clusters: missing ones as Error, not-ready ones as Pending.
+	for _, name := range p.unmatchedClusterPatterns {
+		targets = pmmeta.SetTargetStatus(targets, pmmeta.TargetStatus{
+			TargetID: name,
+			Status:   pmmeta.TargetStatusError,
+			Message:  "cluster not found",
+		})
+	}
+	for _, name := range p.notReadyClusters {
+		ts := pmmeta.TargetStatus{
+			TargetID: name,
+			Status:   pmmeta.TargetStatusPending,
+			Message:  "cluster not Ready",
+		}
+		// Keep prior refs: a transient blip must not drop applied-resource tracking.
+		if prior := pmmeta.GetTargetStatus(priorTargets, name); prior != nil {
+			ts.AppliedResources = prior.AppliedResources
+		}
+		targets = pmmeta.SetTargetStatus(targets, ts)
 	}
 	asr.Status.Providers = pmmeta.SetProviderStatus(
 		asr.Status.Providers,

@@ -25,6 +25,7 @@ func Test_EnsureProviderStatus(t *testing.T) {
 		unmappedCaps             []string
 		invalidCCRNs             []string
 		unmatchedClusterPatterns []string
+		notReadyClusters         []string
 		provisionStatuses        []pmk8s.ExportClusterStatus
 		orphanStatuses           []pmk8s.ExportClusterStatus
 		provisionErrs            []error
@@ -70,10 +71,24 @@ func Test_EnsureProviderStatus(t *testing.T) {
 			wantDegraded: true,
 		},
 		{
-			name:                     "should write a degraded status when cluster patterns matched nothing",
-			unmatchedClusterPatterns: []string{wildcardCluster},
+			name:                     "should write an error target for a missing cluster alongside applied ones",
+			provisionStatuses:        []pmk8s.ExportClusterStatus{{Name: testClusterName}},
+			unmatchedClusterPatterns: []string{testClusterNameB},
 			wantResult:               lifecycle.Continue(),
-			wantDegraded:             true,
+			wantTargets: map[string]pmmeta.TargetStatusValue{
+				testClusterName:  pmmeta.TargetStatusReady,
+				testClusterNameB: pmmeta.TargetStatusError,
+			},
+		},
+		{
+			name:              "should write a pending target for a not-ready cluster alongside applied ones",
+			provisionStatuses: []pmk8s.ExportClusterStatus{{Name: testClusterName}},
+			notReadyClusters:  []string{testClusterNameB},
+			wantResult:        lifecycle.Continue(),
+			wantTargets: map[string]pmmeta.TargetStatusValue{
+				testClusterName:  pmmeta.TargetStatusReady,
+				testClusterNameB: pmmeta.TargetStatusPending,
+			},
 		},
 		{
 			name:                     "should combine multiple degraded reasons into the message",
@@ -109,6 +124,7 @@ func Test_EnsureProviderStatus(t *testing.T) {
 			p.SetUnmappedCaps(tc.unmappedCaps)
 			p.SetInvalidCCRNs(tc.invalidCCRNs)
 			p.SetUnmatchedClusterPatterns(tc.unmatchedClusterPatterns)
+			p.SetNotReadyClusters(tc.notReadyClusters)
 			p.SetProvisionStatuses(tc.provisionStatuses)
 			p.SetOrphanStatuses(tc.orphanStatuses)
 			p.SetProvisionErrs(tc.provisionErrs)
@@ -230,4 +246,39 @@ func Test_EnsureProviderStatus_OrphanError_PreservesAppliedResources(t *testing.
 	target := ps.Targets[0]
 	require.Equal(t, pmmeta.TargetStatusError, target.Status)
 	require.Equal(t, priorRefs, target.AppliedResources, "prior applied resources must survive a failed orphan delete")
+}
+
+// A cluster going not-Ready keeps its prior applied-resource tracking.
+func Test_EnsureProviderStatus_NotReady_PreservesAppliedResources(t *testing.T) {
+	priorRefs := []pmmeta.AppliedResourceRef{
+		{Kind: "ClusterRole", Name: testResource},
+		{Kind: "ClusterRoleBinding", Name: testResource},
+	}
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{
+						{TargetID: testClusterNameB, Status: pmmeta.TargetStatusReady, AppliedResources: priorRefs},
+					},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+	}
+	p.SetNotReadyClusters([]string{testClusterNameB})
+
+	_, _ = p.EnsureProviderStatus(asr)(context.Background())
+
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes)
+	require.NotNil(t, ps)
+	require.Len(t, ps.Targets, 1)
+	target := ps.Targets[0]
+	require.Equal(t, pmmeta.TargetStatusPending, target.Status)
+	require.Equal(t, priorRefs, target.AppliedResources, "prior applied resources must survive a not-Ready blip")
 }

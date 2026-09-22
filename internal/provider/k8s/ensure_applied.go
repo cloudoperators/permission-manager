@@ -28,10 +28,11 @@ import (
 // so the audit trail doesn't report success for an unreconcilable spec.
 //
 // Writes the Provisioned condition:
-//   - True / ProvisioningSucceeded — all targets applied cleanly
-//   - True / NoTargets             — p.compiled was empty
-//   - False / ProvisioningFailed   — no targets succeeded
-//   - False / PartialProvisioning  — some succeeded, some failed
+//   - True / ProvisioningSucceeded — all targets applied, nothing skipped
+//   - True / NoTargets             — p.compiled was empty, nothing skipped
+//   - False / ProvisioningFailed   — no targets applied
+//   - False / PartialProvisioning  — some applied; others failed or were skipped
+//     (missing/not-ready clusters)
 func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		if asr.HasInvalidConfig() {
@@ -75,37 +76,53 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 
 		total := len(p.compiled)
 		failed := len(p.provisionErrs)
+		applied := total - failed
+		skippedCount := len(p.unmatchedClusterPatterns) + len(p.notReadyClusters)
+		skipped := skippedSummary(p.unmatchedClusterPatterns, p.notReadyClusters)
 		switch {
-		case total == 0:
+		case total == 0 && skippedCount == 0:
 			asr.SetCondition(pmmeta.TrueCondition(
 				pmmeta.ProvisionedCondition,
 				pmmeta.NoTargetsReason,
 				"no matched targets to apply RBAC to",
 			))
-		case failed == 0:
+		case failed == 0 && skippedCount == 0:
 			p.Log.Info("rbac(s) provisioned", "namespace", asr.Namespace, "name", asr.Name)
 			asr.SetCondition(pmmeta.TrueCondition(
 				pmmeta.ProvisionedCondition,
 				pmmeta.ProvisioningSucceededReason,
 				fmt.Sprintf("applied RBAC on %d/%d target(s)", total, total),
 			))
-		case failed == total:
-			p.Log.Info("rbac apply failed on all targets", "namespace", asr.Namespace, "name", asr.Name, "errors", failed)
-			asr.SetCondition(pmmeta.FalseCondition(
-				pmmeta.ProvisionedCondition,
-				pmmeta.ProvisioningFailedReason,
-				fmt.Sprintf("failed to apply RBAC on all %d target(s): %v", total, utilerrors.NewAggregate(p.provisionErrs)),
-			))
-		default:
-			p.Log.Info("not all rbac(s) were provisioned", "namespace", asr.Namespace, "name", asr.Name, "errors", failed)
+		case applied > 0:
+			p.Log.Info("not all rbac(s) were provisioned", "namespace", asr.Namespace, "name", asr.Name, "failed", failed, "skipped", skipped)
 			asr.SetCondition(pmmeta.FalseCondition(
 				pmmeta.ProvisionedCondition,
 				pmmeta.PartialProvisioningReason,
-				fmt.Sprintf("applied %d/%d target(s); failures: %v", total-failed, total, utilerrors.NewAggregate(p.provisionErrs)),
+				partialMessage(applied, total, p.provisionErrs, skipped),
+			))
+		default:
+			p.Log.Info("rbac apply failed on all targets", "namespace", asr.Namespace, "name", asr.Name, "failed", failed, "skipped", skipped)
+			asr.SetCondition(pmmeta.FalseCondition(
+				pmmeta.ProvisionedCondition,
+				pmmeta.ProvisioningFailedReason,
+				partialMessage(applied, total, p.provisionErrs, skipped),
 			))
 		}
 		return lifecycle.Continue(), nil
 	}
+}
+
+// partialMessage builds the Provisioned message for a partial or failed apply,
+// noting failed targets and skipped (missing/not-ready) clusters.
+func partialMessage(applied, total int, provisionErrs []error, skipped string) string {
+	msg := fmt.Sprintf("applied %d/%d target(s)", applied, total)
+	if err := utilerrors.NewAggregate(provisionErrs); err != nil {
+		msg += fmt.Sprintf("; failures: %v", err)
+	}
+	if skipped != "" {
+		msg += "; skipped " + skipped
+	}
+	return msg
 }
 
 // applyClusterScopedRBAC create-or-patches a ClusterRole and its ClusterRoleBinding.

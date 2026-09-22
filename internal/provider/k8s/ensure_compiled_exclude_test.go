@@ -42,7 +42,7 @@ func (fakeCompileDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.A
 func clusterStoreWithGroups(t *testing.T, name string, groups []string) cache.Store {
 	t.Helper()
 	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
-	c := &greenhousev1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace}}
+	c := newCluster(name, true)
 	if groups != nil {
 		c.Status.DiscoveryCache = &greenhousev1alpha1.DiscoveryCache{Groups: groups}
 	}
