@@ -13,19 +13,13 @@ import (
 	"k8s.io/client-go/discovery"
 )
 
-// fakeDiscovery implements only the two discovery methods expandRuleForCluster
-// uses; the embedded nil interface panics if anything else is called, which
-// keeps the fake honest about what the code under test touches.
+// fakeDiscovery implements only the discovery method expandRuleForCluster uses
+// for denied-group enumeration; the embedded nil interface panics on any other
+// call, keeping the fake honest about what the code under test touches.
 type fakeDiscovery struct {
 	discovery.DiscoveryInterface
-	groups    *metav1.APIGroupList
-	groupsErr error
 	resources map[string]*metav1.APIResourceList
 	resErr    map[string]error
-}
-
-func (f *fakeDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
-	return f.groups, f.groupsErr
 }
 
 func (f *fakeDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
@@ -57,17 +51,9 @@ func clusterWithGroups(name string, groups ...string) *greenhousev1alpha1.Cluste
 	return c
 }
 
-// discoWith builds a fake discovery client with preferred versions for the named
-// groups plus their resource lists.
+// discoWith builds a fake discovery client with resource lists for denied-group expansion.
 func discoWith() *fakeDiscovery {
 	return &fakeDiscovery{
-		groups: &metav1.APIGroupList{
-			Groups: []metav1.APIGroup{
-				{Name: "", PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "v1"}},
-				{Name: "apps", PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "apps/v1"}},
-				{Name: "core.gardener.cloud", PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "core.gardener.cloud/v1"}},
-			},
-		},
 		resources: map[string]*metav1.APIResourceList{
 			"v1":                     resourceList("v1", "pods", "configmaps", "secrets", "secrets/status"),
 			"core.gardener.cloud/v1": resourceList("core.gardener.cloud/v1", "shoots", "internalsecrets"),
@@ -77,7 +63,7 @@ func discoWith() *fakeDiscovery {
 
 func Test_expandRuleForCluster_passthrough(t *testing.T) {
 	rule := CapabilityRule{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}
-	out, err := expandRuleForCluster(rule, clusterWithGroups("c", "apps"), nil)
+	out, err := expandRuleForCluster(rule, clusterWithGroups("c", "apps/v1"), nil)
 	require.NoError(t, err)
 	require.Equal(t, []CapabilityRule{rule}, out)
 }
@@ -92,7 +78,7 @@ func Test_expandRuleForCluster_wildcardWithExclusions(t *testing.T) {
 			{APIGroups: []string{"core.gardener.cloud"}, Resources: []string{"internalsecrets"}},
 		},
 	}
-	cluster := clusterWithGroups("c", "", "apps", "core.gardener.cloud")
+	cluster := clusterWithGroups("c", "v1", "apps/v1", "core.gardener.cloud/v1")
 	out, err := expandRuleForCluster(rule, cluster, discoWith())
 	require.NoError(t, err)
 
@@ -121,7 +107,7 @@ func Test_expandRuleForCluster_specificAPIGroupsIntersect(t *testing.T) {
 			{APIGroups: []string{""}, Resources: []string{"secrets"}},
 		},
 	}
-	cluster := clusterWithGroups("c", "", "apps", "core.gardener.cloud")
+	cluster := clusterWithGroups("c", "v1", "apps/v1", "core.gardener.cloud/v1")
 	out, err := expandRuleForCluster(rule, cluster, discoWith())
 	require.NoError(t, err)
 
@@ -155,10 +141,8 @@ func Test_expandRuleForCluster_failClosed(t *testing.T) {
 		require.Nil(t, out)
 	})
 
-	t.Run("ServerGroups error", func(t *testing.T) {
-		d := discoWith()
-		d.groupsErr = errors.New("boom")
-		out, err := expandRuleForCluster(rule, clusterWithGroups("c", "", "apps"), d)
+	t.Run("empty cache entry", func(t *testing.T) {
+		out, err := expandRuleForCluster(rule, clusterWithGroups("c", "", "apps/v1"), discoWith())
 		require.Error(t, err)
 		require.Nil(t, out)
 	})
@@ -166,7 +150,7 @@ func Test_expandRuleForCluster_failClosed(t *testing.T) {
 	t.Run("ServerResourcesForGroupVersion error", func(t *testing.T) {
 		d := discoWith()
 		d.resErr = map[string]error{"v1": errors.New("boom")}
-		out, err := expandRuleForCluster(rule, clusterWithGroups("c", "", "apps"), d)
+		out, err := expandRuleForCluster(rule, clusterWithGroups("c", "v1", "apps/v1"), d)
 		require.Error(t, err)
 		require.Nil(t, out)
 	})
