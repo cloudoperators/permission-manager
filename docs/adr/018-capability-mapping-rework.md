@@ -315,6 +315,27 @@ The following code is removed entirely:
 
 `CapabilityRule` in the new model only carries `apiGroups`, `resources`, and `verbs`.
 
+### 11. Implementation rollout in two phases
+
+This ADR records one design, but the design decomposes into two parts of very different
+weight and risk. The implementation lands them in sequence rather than in one change.
+
+**Phase 1 - closed vocabulary and scope nesting.** The scope-nested `capabilityMapping`
+structure and the closed per-scope capability vocabulary (decisions 1 and 6). This is a
+schema and validation change with a small blast radius: it changes how CBs are parsed and
+which capability names validate, and it is straightforward to reason about and audit.
+
+**Phase 2 - shared aggregated ClusterRole infrastructure.** The shared root/baseline-child
+ClusterRoles, the `namespace.k8s` switch to ClusterRole+RoleBinding, the two new reconciler
+subroutines, and per-CB orphan cleanup (decisions 2, 3, 4, 7, 8). This is the heavy part:
+new controller machinery with its own failure modes, delivered and reviewed on its own.
+
+Phase 2 depends on Phase 1 (the shared roles are keyed by scope and capability, which Phase
+1 defines), so the phases are sequenced, not independent. Keeping them as one ADR reflects
+that dependency; splitting the implementation keeps the higher-risk machinery under focused
+review. `excludeResources` removal (decision 10) can land with Phase 1, since it is a pure
+deletion independent of the aggregation work.
+
 ### Examples
 
 **Cluster admin:**
@@ -433,10 +454,12 @@ exactly what credential access was granted without inspecting the CB.
 
 **Related:**
 
+- Kubernetes RBAC Target Architecture - overview of the end state this ADR reaches, and how
+  ADR-017 and ADR-018 sequence toward it.
 - ADR-015: Scope-Separated RBAC - establishes the per-namespace Role invariant that this
   ADR extends to ClusterRole+RoleBinding.
-- ADR-017: Resource-Scoped CCRN Types - resource CCRNs are unchanged by this ADR; their
-  hardcoded READ/WRITE capability model is consistent with the closed vocabulary here.
+- ADR-017: Resource-Scoped CCRN Types - this ADR keeps the resource CCRN grammar unchanged
+  and extends its capability set with `MANAGE`, consistent with the closed vocabulary here.
 - ADR-009: Capability Mapping via ConnectorBinding - this ADR supersedes the open-vocabulary
   capabilityMapping design in ADR-009.
 - `internal/provider/k8s/definition.go` - ConnectorDefinition struct to be replaced with
