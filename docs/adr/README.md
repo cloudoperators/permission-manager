@@ -4,6 +4,8 @@ This directory contains Architecture Decision Records (ADRs) for the pm-controll
 
 ADRs document significant design decisions made during development. Each record captures the context, the decision, and its consequences.
 
+The Kubernetes RBAC model spans several coupled ADRs; see [Kubernetes RBAC Target Architecture](k8s-rbac-target-architecture.md) for the end state and how ADR-017 and ADR-018 sequence toward it.
+
 ## Index
 
 | # | Title | Status | Date |

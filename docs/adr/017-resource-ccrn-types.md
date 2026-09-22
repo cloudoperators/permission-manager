@@ -212,6 +212,8 @@ permissions:
 
 **Related:**
 
+- Kubernetes RBAC Target Architecture - overview of the end state and how ADR-017 and
+  ADR-018 sequence toward it.
 - ADR-015: Scope-Separated RBAC - establishes the one-Role-per-namespace-per-ASR invariant
   that resource CCRNs inherit.
 - ADR-009: Capability Mapping via ConnectorBinding - the design this ADR partially bypasses
