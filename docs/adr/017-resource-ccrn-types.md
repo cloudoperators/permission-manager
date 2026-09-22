@@ -81,6 +81,11 @@ verb sets:
 
 Any other capability value (including `*`) is rejected as `InvalidCCRN`.
 
+> Note: ADR-018 extends the resource CCRN vocabulary with a third capability, `MANAGE`
+> (the union of the READ and WRITE verb sets), as part of the closed per-scope vocabulary.
+> The READ/WRITE-only validation rule stated here is superseded by ADR-018 once that ADR
+> lands; the hardcoded, CB-independent verb model described in this section is unchanged.
+
 This is a deliberate break from the existing CCRN types where the CB owns the
 verb-to-resource mapping. For resource CCRNs the resource target is already in the CCRN
 address, so the CB has nothing to contribute beyond verbs, and hardcoding READ/WRITE is
@@ -115,6 +120,12 @@ existing non-empty mapping requirement for the CB to serve the coarse-grained pe
   `(apiGroups, resources)` key have their verbs unioned, so a `READ` and a `WRITE` on the
   same resource type collapse to a single PolicyRule.
 - One ClusterRole and one Role per namespace per ASR per cluster, same as today (ADR-015).
+
+> Note: ADR-018 moves `cluster.k8s` and `namespace.k8s` from per-ASR inline rules to
+> bindings against shared ClusterRoles. Once that lands there is no per-ASR `cluster.k8s`
+> ClusterRole to merge into, so resource CCRN rules compile into their own per-ASR
+> ClusterRole instead. The `policyRuleSet` verb-union and per-CCRN parsing described here
+> are unchanged; only the ClusterRole the rules land in differs.
 
 The CCRN type (`cluster-resource` vs `namespace-resource`) determines binding scope, not
 the native Kubernetes scope of the resource kind. Using `cluster-resource` for a namespaced
@@ -204,7 +215,10 @@ permissions:
 - ADR-015: Scope-Separated RBAC - establishes the one-Role-per-namespace-per-ASR invariant
   that resource CCRNs inherit.
 - ADR-009: Capability Mapping via ConnectorBinding - the design this ADR partially bypasses
-  for resource CCRNs; a future ADR will address the capability mapping model more broadly.
+  for resource CCRNs; ADR-018 addresses the capability mapping model more broadly.
+- ADR-018: Scope-Aware Capability Mapping - reworks the capability mapping into a closed
+  per-scope vocabulary, adds `MANAGE` to the resource CCRN capabilities, and moves
+  `cluster.k8s`/`namespace.k8s` to shared ClusterRole bindings (see the notes above).
 - `internal/ccrn/parser.go` - parser to be extended with `cluster-resource` and
   `namespace-resource` type registrations.
 - `internal/provider/k8s/ensure_compiled.go` - compiler to be extended to handle the new
