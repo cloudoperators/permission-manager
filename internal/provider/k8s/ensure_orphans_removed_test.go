@@ -376,3 +376,44 @@ func Test_EnsureRbacRemoved_Aggregate_Fail(t *testing.T) {
 		return obj.GetName() == "role-ok"
 	}), mock.Anything)
 }
+
+// Vanished cluster (gone from the store) is skipped so the finalizer can clear.
+func Test_EnsureRbacRemoved_VanishedClusterSkipped(t *testing.T) {
+	const vanishedCluster = "vanished-cluster"
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{
+						{TargetID: testClusterName, Status: pmmeta.TargetStatusReady},
+						{TargetID: vanishedCluster, Status: pmmeta.TargetStatusReady},
+					},
+				},
+			},
+		},
+	}
+
+	remote := mocks.NewMockClient(t)
+	remote.On("List", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		ClusterStore: newClusterStore(t, testClusterName),
+		RemoteClient: func(_ context.Context, _ client.Client, clusterName, _ string) (client.Client, error) {
+			if clusterName == vanishedCluster {
+				t.Fatalf("RemoteClient must not be called for vanished cluster %q", clusterName)
+			}
+			return remote, nil
+		},
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+	}
+
+	result, err := p.EnsureRbacRemoved(asr)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.Continue(), result)
+	_, has := asr.Status.Providers[pmmeta.ProviderKubernetes]
+	require.False(t, has, "provider status must clear once vanished clusters are skipped")
+}
