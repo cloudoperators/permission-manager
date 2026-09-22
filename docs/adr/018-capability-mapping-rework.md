@@ -64,7 +64,14 @@ Replace the open-vocabulary flat `capabilityMapping` with a scope-nested structu
 capability names are a closed set, enforced by the controller. Any capability name not in
 the set for its scope is rejected as `InvalidCCRN`.
 
-Capability names are drawn from the SCI capability taxonomy (READ, OPERATE, MANAGE).
+This ADR is the decision of record for the capability vocabulary; there is no prior
+written taxonomy it inherits from. The names `READ`, `OPERATE`, and `MANAGE` are chosen to
+read as an increasing-authority progression (view, then operate on workloads, then full
+administrative control) that an ASR author can reason about without consulting the CB.
+`WRITE`, added for the resource CCRN scopes, names create/update/patch/delete on a single
+targeted resource type, where the finer READ/WRITE split is useful and OPERATE has no
+meaning. The set is intentionally small: real deployments converge on a handful of roles,
+so a closed vocabulary is easier to audit than the open string space it replaces.
 
 | Scope | Capability | Semantics |
 |---|---|---|
