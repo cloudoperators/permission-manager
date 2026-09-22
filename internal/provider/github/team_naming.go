@@ -29,6 +29,8 @@ func resolveDesiredNames(ctx context.Context, r *orgResolver, team string, ds *D
 			return nil, resErr
 		}
 		t.CRName = TeamCRName(lookup.InstanceKey, lookup.Org, team)
+		t.LDAPProvider = lookup.LDAPProvider
+		t.TTLs = lookup.TTLs
 		keptTeams = append(keptTeams, t)
 	}
 	ds.Teams = keptTeams

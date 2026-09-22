@@ -40,8 +40,12 @@ func TestOrgResolver_Resolve_ReturnsLabelsAndSpec(t *testing.T) {
 		LDAPProvider:    "corp-ldap",
 		AdminPermission: "admin-ondemand",
 	}
-	if *got != want {
+	if got.InstanceKey != want.InstanceKey || got.Org != want.Org ||
+		got.LDAPProvider != want.LDAPProvider || got.AdminPermission != want.AdminPermission {
 		t.Fatalf("resolve = %+v, want %+v", *got, want)
+	}
+	if got.TTLs != nil {
+		t.Errorf("TTLs = %v, want nil (org carries no TTL labels)", got.TTLs)
 	}
 }
 
