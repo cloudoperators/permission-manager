@@ -59,6 +59,7 @@ type ASRReconciler struct {
 // +kubebuilder:rbac:groups="events.k8s.io",resources=events,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=greenhouse.sap,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 // +kubebuilder:rbac:groups=repo-guard.cloudoperators.dev,resources=githubteams;githubteamrepositories;githuborganizations,verbs=get;list;watch;create;update;patch;delete
 
 // SetupWithManager registers the controller with the manager.
