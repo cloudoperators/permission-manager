@@ -72,6 +72,10 @@ PLATFORM ?= $(HOST_PLATFORM)
 # - CERT_MANAGER_INSTALL_SKIP=true
 KIND_CLUSTER ?= greenhouse-admin
 
+# E2E_KIND_CLUSTER is the cluster the e2e suite bootstraps and self-onboards. It
+# must match the cluster name the suite uses (e2e/shared: ClusterName).
+E2E_KIND_CLUSTER ?= pm-e2e
+
 # ==============================================================================
 # Deployment
 # ==============================================================================
@@ -188,54 +192,20 @@ vet: ## Run go vet against code.
 test: fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-.PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@case "$$($(KIND) get clusters)" in \
-		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
-		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
-	esac
-
-.PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
-
-.PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
-
-E2E_PROCS ?= 4
-E2E_CONTROLLER_NAMESPACE ?= greenhouse
-E2E_CONTROLLER_DEPLOYMENT ?= permission-manager-controller-manager
-.PHONY: setup-e2e
-setup-e2e: ## Provision the dev environment and deploy the controller for e2e.
-	$(MAKE) setup
-	$(MAKE) demo
-	$(MAKE) docker-build
-	$(MAKE) kind-load KIND_CLUSTER=$(ADMIN_CLUSTER)
-	$(MAKE) deploy KIND_CLUSTER=$(ADMIN_CLUSTER) HELM_EXTRA_ARGS="--set providers.github=true"
-	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout restart deployment $(E2E_CONTROLLER_DEPLOYMENT)
-	"$(KUBECTL)" --context kind-$(ADMIN_CLUSTER) -n $(E2E_CONTROLLER_NAMESPACE) rollout status deployment $(E2E_CONTROLLER_DEPLOYMENT) --timeout=120s
+# The e2e suite (e2e/) is a Ginkgo suite gated behind the `e2e` build tag, so it
+# is invisible to `go test ./...` / `make test`. It bootstraps a single kind
+# cluster hosting a simulated Greenhouse + the Permission Manager controller and
+# self-onboards that cluster as its own downstream target. Supply a real
+# downstream via E2E_DOWNSTREAM_KUBECONFIG=/path (optionally E2E_DOWNSTREAM_NAME).
+E2E_PROCS ?= 2
 
 .PHONY: e2e
-e2e: ginkgo ## Run the e2e tests against the environment provisioned by setup-e2e.
-	E2E_ADMIN_CONTEXT=kind-$(ADMIN_CLUSTER) E2E_REMOTE_CONTEXT=kind-$(REMOTE_CLUSTER) E2E_REMOTE_CLUSTER=kind-$(REMOTE_CLUSTER) \
-	E2E_CONTROLLER_NAMESPACE=$(E2E_CONTROLLER_NAMESPACE) E2E_CONTROLLER_DEPLOYMENT=$(E2E_CONTROLLER_DEPLOYMENT) \
-		$(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v --json-report=$(LOCALBIN)/e2e-report.json ./e2e/
+e2e: ginkgo docker-build ## Build the manager image and run the Ginkgo e2e suite against a kind cluster.
+	$(GINKGO) --procs=$(E2E_PROCS) --tags=e2e --timeout=30m -v ./e2e/...
 
-.PHONY: clean-e2e
-clean-e2e: ## Delete the e2e Kind clusters.
-	$(KIND) delete cluster --name $(ADMIN_CLUSTER)
-	$(KIND) delete cluster --name $(REMOTE_CLUSTER)
+.PHONY: e2e-cleanup
+e2e-cleanup: ## Tear down the kind cluster used by the e2e suite.
+	-$(KIND) delete cluster --name $(E2E_KIND_CLUSTER)
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
