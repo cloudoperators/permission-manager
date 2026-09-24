@@ -150,6 +150,32 @@ Rules and constraints:
   **nothing is applied** — the controller never emits a grant that could leak a
   denied resource. The ASR reconciles automatically once discovery recovers.
 
+## Partial Provisioning & Cluster Readiness
+
+An ASR often targets many clusters (e.g. a `prod-*` wildcard). When only some of
+those clusters are usable, the kubernetes provider applies RBAC to the usable
+ones instead of failing the whole ASR:
+
+- **Ready clusters** — RBAC is applied; the target reports `Ready`.
+- **Missing clusters** — a named cluster (or pattern) that resolves to nothing in
+  the inventory reports `Error` ("cluster not found"). If the cluster previously
+  had RBAC and has since vanished from the inventory, its stale status entry is
+  **pruned** rather than retried forever (there is no remote left to reach).
+- **Not-Ready clusters** — a cluster that exists but is not `Ready=True` is left
+  untouched and reports `Pending` ("cluster not Ready"). Any RBAC already applied
+  is preserved across the blip, and the target is retried once the cluster
+  recovers.
+
+As long as at least one target compiles, top-level `Ready=False` with reason
+`PartialProvisioning` — access is live where it can be, and the partial state is
+visible in `status.providers.kubernetes.targets`.
+
+This is distinct from **hard-blocking** configuration errors: invalid CCRN syntax
+or an unknown capability marks the whole ASR `InvalidConfig=True` and applies
+nothing, because the intent itself cannot be resolved. A missing or not-Ready
+cluster is an environmental condition, not a bad spec, so it degrades rather than
+blocks.
+
 ## CCRN (Common Cloud Resource Name)
 
 A standardized, machine-readable URN format for identifying resources across systems:
