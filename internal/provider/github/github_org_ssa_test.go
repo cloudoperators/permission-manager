@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -21,11 +22,21 @@ import (
 	"github.com/cloudoperators/permission-manager/internal/audit"
 )
 
+// unstructuredFromApply recovers the *unstructured.Unstructured that
+// ApplyConfigurationFromUnstructured wrapped, so tests can inspect the SSA payload.
+func unstructuredFromApply(obj runtime.ApplyConfiguration) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	if c, ok := obj.(interface{ UnstructuredContent() map[string]any }); ok {
+		u.Object = c.UnstructuredContent()
+	}
+	return u
+}
+
 // orgWithIdentity returns an org with the Helm-owned identity fields set.
-func orgWithIdentity(ns, name string) *repoguardv1.GithubOrganization {
-	org := newGithubOrg(ns, name)
+func orgWithIdentity() *repoguardv1.GithubOrganization {
+	org := newGithubOrg("test-ns", "my-org")
 	org.Spec.Github = "github.example.com"
-	org.Spec.Organization = name
+	org.Spec.Organization = "my-org"
 	org.Spec.InstallationID = 42
 	org.Spec.ProtectedMembers = []string{"bot-account"}
 	return org
@@ -35,20 +46,18 @@ func orgWithIdentity(ns, name string) *repoguardv1.GithubOrganization {
 // SSA under the ASR's per-ASR field manager carrying only the team-list fields.
 func TestPatchOrganization_UsesServerSideApplyWithoutIdentityFields(t *testing.T) {
 	var (
-		gotType types.PatchType
-		gotOpts client.PatchOptions
-		gotObj  client.Object
+		gotOpts client.ApplyOptions
+		gotObj  *unstructured.Unstructured
 	)
 
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity("test-ns", "my-org")).Build()
+		WithObjects(orgWithIdentity()).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			gotType = patch.Type()
-			gotOpts = client.PatchOptions{}
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			gotOpts = client.ApplyOptions{}
 			gotOpts.ApplyOptions(opts)
-			gotObj = obj.DeepCopyObject().(client.Object)
-			return cl.Patch(ctx, obj, patch, opts...)
+			gotObj = unstructuredFromApply(obj).DeepCopy()
+			return cl.Apply(ctx, obj, opts...)
 		},
 	})
 	p := New(c, audit.Disabled(), logr.Discard())
@@ -58,10 +67,7 @@ func TestPatchOrganization_UsesServerSideApplyWithoutIdentityFields(t *testing.T
 		t.Fatalf("patchOrganization: %v", err)
 	}
 
-	// SSA is used, under this ASR's per-ASR field manager, with force ownership.
-	if gotType != types.ApplyPatchType {
-		t.Errorf("patch type = %q, want %q", gotType, types.ApplyPatchType)
-	}
+	// SSA is used (typed Apply), under this ASR's per-ASR field manager, with force ownership.
 	if gotOpts.FieldManager != orgFieldManager("default", "asr-x") {
 		t.Errorf("field manager = %q, want %q", gotOpts.FieldManager, orgFieldManager("default", "asr-x"))
 	}
@@ -70,10 +76,7 @@ func TestPatchOrganization_UsesServerSideApplyWithoutIdentityFields(t *testing.T
 	}
 
 	// The applied object carries the team-list fields but no identity fields or status.
-	u, ok := gotObj.(*unstructured.Unstructured)
-	if !ok {
-		t.Fatalf("applied object is %T, want *unstructured.Unstructured", gotObj)
-	}
+	u := gotObj
 	spec, found, err := unstructured.NestedMap(u.Object, "spec")
 	if err != nil || !found {
 		t.Fatalf("apply payload has no spec (found=%v err=%v)", found, err)
@@ -116,7 +119,7 @@ func TestPatchOrganization_UsesServerSideApplyWithoutIdentityFields(t *testing.T
 // capturedApply records the field manager and spec of one intercepted SSA apply.
 type capturedApply struct {
 	fieldManager string
-	spec         map[string]interface{}
+	spec         map[string]any
 }
 
 // TestPatchOrganization_AppliesOnlyOwnEntriesPerASRManager asserts each ASR applies under
@@ -124,15 +127,15 @@ type capturedApply struct {
 func TestPatchOrganization_AppliesOnlyOwnEntriesPerASRManager(t *testing.T) {
 	var applies []capturedApply
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity("test-ns", "my-org")).Build()
+		WithObjects(orgWithIdentity()).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			po := client.PatchOptions{}
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			po := client.ApplyOptions{}
 			po.ApplyOptions(opts)
-			u := obj.(*unstructured.Unstructured)
+			u := unstructuredFromApply(obj)
 			spec, _, _ := unstructured.NestedMap(u.Object, "spec")
 			applies = append(applies, capturedApply{fieldManager: po.FieldManager, spec: spec})
-			return cl.Patch(ctx, obj, patch, opts...)
+			return cl.Apply(ctx, obj, opts...)
 		},
 	})
 	p := New(c, audit.Disabled(), logr.Discard())
@@ -174,7 +177,7 @@ func TestPatchOrganization_AppliesOnlyOwnEntriesPerASRManager(t *testing.T) {
 	if len(pub) != 1 {
 		t.Fatalf("team-two apply public teams = %v, want one entry", pub)
 	}
-	if entry, ok := pub[0].(map[string]interface{}); !ok || entry["team"] != "team-two" || entry["permission"] != "push" {
+	if entry, ok := pub[0].(map[string]any); !ok || entry["team"] != "team-two" || entry["permission"] != "push" {
 		t.Errorf("team-two apply public entry = %v, want {team-two push}", pub[0])
 	}
 }
@@ -185,13 +188,13 @@ func TestReconcileOrganizations_FieldManagerKeyedByASRObject(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin"}
 	var managers []string
 	base := fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().
-		WithObjects(orgWithIdentity("test-ns", "my-org")).Build()
+		WithObjects(orgWithIdentity()).Build()
 	c := interceptor.NewClient(base, interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			po := client.PatchOptions{}
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			po := client.ApplyOptions{}
 			po.ApplyOptions(opts)
 			managers = append(managers, po.FieldManager)
-			return cl.Patch(ctx, obj, patch, opts...)
+			return cl.Apply(ctx, obj, opts...)
 		},
 	})
 	p := New(c, audit.Disabled(), logr.Discard())
@@ -242,7 +245,7 @@ func TestOrgFieldManager_BoundedStableCollisionResistant(t *testing.T) {
 // longer contributes to a managed org releases its entries via an empty SSA apply.
 func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T) {
 	base := newClient()
-	if err := base.Create(context.Background(), orgWithIdentity("test-ns", "my-org")); err != nil {
+	if err := base.Create(context.Background(), orgWithIdentity()); err != nil {
 		t.Fatalf("create org: %v", err)
 	}
 	seed := New(base, audit.Disabled(), logr.Discard())
@@ -253,13 +256,13 @@ func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T
 
 	var applies []capturedApply
 	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			po := client.PatchOptions{}
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			po := client.ApplyOptions{}
 			po.ApplyOptions(opts)
-			u := obj.(*unstructured.Unstructured)
+			u := unstructuredFromApply(obj)
 			spec, _, _ := unstructured.NestedMap(u.Object, "spec")
 			applies = append(applies, capturedApply{fieldManager: po.FieldManager, spec: spec})
-			return cl.Patch(ctx, obj, patch, opts...)
+			return cl.Apply(ctx, obj, opts...)
 		},
 	})
 	p := New(c, audit.Disabled(), logr.Discard())

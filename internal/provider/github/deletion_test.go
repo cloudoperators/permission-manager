@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -69,17 +70,17 @@ func TestReconcileDelete_RemovesOrgContributionsFromManagedOrgs(t *testing.T) {
 	// Record the applies made during cleanup only.
 	type applied struct {
 		fieldManager, namespace, name string
-		spec                          map[string]interface{}
+		spec                          map[string]any
 	}
 	var applies []applied
 	ic := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			po := client.PatchOptions{}
+		Apply: func(ctx context.Context, cl client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			po := client.ApplyOptions{}
 			po.ApplyOptions(opts)
-			u := obj.(*unstructured.Unstructured)
+			u := unstructuredFromApply(obj)
 			spec, _, _ := unstructured.NestedMap(u.Object, "spec")
 			applies = append(applies, applied{po.FieldManager, u.GetNamespace(), u.GetName(), spec})
-			return cl.Patch(ctx, obj, patch, opts...)
+			return cl.Apply(ctx, obj, opts...)
 		},
 	})
 	pDel := New(ic, audit.Disabled(), logr.Discard())

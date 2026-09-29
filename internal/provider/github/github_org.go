@@ -113,6 +113,7 @@ func (p *Phase) pruneStaleOrgs(
 	targetNamespace string,
 	desired map[string]*orgContribution,
 ) error {
+
 	var orgList repoguardv1.GithubOrganizationList
 	if err := p.Client.List(ctx, &orgList); err != nil {
 		return fmt.Errorf("failed to list GithubOrganizations: %w", err)
@@ -158,7 +159,7 @@ func (p *Phase) patchOrganization(
 	}
 
 	applyObj := newOrgApplyObject(namespace, orgName, contrib)
-	if err := p.Client.Patch(ctx, applyObj, client.Apply, client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
+	if err := p.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(applyObj), client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
 		p.auditOrgFailure(ctx, asrName, orgName, namespace, err)
 		return fmt.Errorf("failed to apply GithubOrganization %s/%s: %w", namespace, orgName, err)
 	}
@@ -182,7 +183,7 @@ func (p *Phase) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrg
 	}
 
 	applyObj := newOrgApplyObject(org.Namespace, org.Name, &orgContribution{})
-	if err := p.Client.Patch(ctx, applyObj, client.Apply, client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
+	if err := p.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(applyObj), client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
 		p.auditOrgFailure(ctx, asrName, org.Name, org.Namespace, err)
 		return err
 	}
@@ -199,7 +200,7 @@ func newOrgApplyObject(namespace, orgName string, contrib *orgContribution) *uns
 	u.SetKind("GithubOrganization")
 	u.SetName(orgName)
 	u.SetNamespace(namespace)
-	u.Object["spec"] = map[string]interface{}{
+	u.Object["spec"] = map[string]any{
 		"organizationOwnerTeams":        stringsToUnstructured(contrib.OwnerTeams),
 		"defaultPublicRepositoryTeams":  teamsToUnstructured(contrib.PublicTeams),
 		"defaultPrivateRepositoryTeams": teamsToUnstructured(contrib.PrivateTeams),
@@ -208,8 +209,8 @@ func newOrgApplyObject(namespace, orgName string, contrib *orgContribution) *uns
 }
 
 // stringsToUnstructured returns a non-nil slice so an empty list serializes as [], not dropped.
-func stringsToUnstructured(in []string) []interface{} {
-	out := make([]interface{}, 0, len(in))
+func stringsToUnstructured(in []string) []any {
+	out := make([]any, 0, len(in))
 	for _, v := range in {
 		out = append(out, v)
 	}
@@ -217,10 +218,10 @@ func stringsToUnstructured(in []string) []interface{} {
 }
 
 // teamsToUnstructured is the []GithubTeamWithPermission analogue of stringsToUnstructured.
-func teamsToUnstructured(in []repoguardv1.GithubTeamWithPermission) []interface{} {
-	out := make([]interface{}, 0, len(in))
+func teamsToUnstructured(in []repoguardv1.GithubTeamWithPermission) []any {
+	out := make([]any, 0, len(in))
 	for _, t := range in {
-		entry := map[string]interface{}{"team": t.Team}
+		entry := map[string]any{"team": t.Team}
 		if t.Permission != "" { // omit when empty, matching the CRD's omitempty
 			entry["permission"] = string(t.Permission)
 		}
