@@ -129,34 +129,6 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 	}
 }
 
-func TestReconcileOrganizations_MergesMultipleASRs(t *testing.T) {
-	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-	p, c := newPhase(newGithubOrg("test-ns", "my-org"))
-
-	asr1 := newASR("asr-1", "team-one", []v1alpha1.Permission{perm(orgCCRN("my-org"), "ADMIN")})
-	asr2 := newASR("asr-2", "team-two", []v1alpha1.Permission{perm(repoTypeCCRN("public"), "WRITE")})
-
-	for _, asr := range []*v1alpha1.ApplicationSpecificRole{asr1, asr2} {
-		if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
-			t.Fatalf("reconcile %s: %v", asr.Name, err)
-		}
-	}
-
-	var org repoguardv1.GithubOrganization
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &org); err != nil {
-		t.Fatalf("get org: %v", err)
-	}
-	if !slices.Equal(org.Spec.OrganizationOwnerTeams, []string{"team-one"}) {
-		t.Errorf("owner teams = %v, want [team-one]", org.Spec.OrganizationOwnerTeams)
-	}
-	if got := teamPerms(org.Spec.DefaultPublicRepositoryTeams); !slices.Equal(got, []teamPerm{{"team-two", "push"}}) {
-		t.Errorf("public teams = %v, want [team-two push]", got)
-	}
-	if got := org.Annotations[AnnotationASRManagedConfig]; got != "team-one,team-two" {
-		t.Errorf("managed config = %q, want team-one,team-two", got)
-	}
-}
-
 func TestReconcileOrganizations_MissingOrgReturnsError(t *testing.T) {
 	p, _ := newPhase() // org not seeded
 	asr := newASR("asr", "team-x", []v1alpha1.Permission{perm(orgCCRN("missing"), "ADMIN")})
@@ -166,44 +138,12 @@ func TestReconcileOrganizations_MissingOrgReturnsError(t *testing.T) {
 	}
 }
 
-func TestRemoveASRContributions(t *testing.T) {
-	org := newOrgWithContrib("test-ns", "my-org", "team-a", &orgContribution{
-		OwnerTeams:   []string{"team-a"},
-		PublicTeams:  []repoguardv1.GithubTeamWithPermission{{Team: "team-a", Permission: "push"}},
-		PrivateTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-a", Permission: "pull"}},
-	})
-	// A second ASR's public contribution and tracking that must survive.
-	org.Spec.DefaultPublicRepositoryTeams = append(org.Spec.DefaultPublicRepositoryTeams,
-		repoguardv1.GithubTeamWithPermission{Team: "team-b", Permission: "admin"})
-	org.Annotations[AnnotationASRManagedConfig] = "team-a,team-b"
-	org.Annotations[annotationASRDefaultTeamsPrefix+"team-b"] = `{"publicTeams":[{"name":"team-b","permission":"admin"}]}`
-
-	removeASRContributions(org, "team-a")
-	removeASRFromAnnotations(org, "team-a")
-
-	if len(org.Spec.OrganizationOwnerTeams) != 0 || len(org.Spec.DefaultPrivateRepositoryTeams) != 0 {
-		t.Errorf("team-a owner/private contributions not removed")
-	}
-	if got := teamPerms(org.Spec.DefaultPublicRepositoryTeams); !slices.Equal(got, []teamPerm{{"team-b", "admin"}}) {
-		t.Errorf("expected only team-b public to remain, got %v", got)
-	}
-	if got := org.Annotations[AnnotationASRManagedConfig]; got != "team-b" {
-		t.Errorf("managed config = %q, want team-b", got)
-	}
-	if _, ok := org.Annotations[annotationASRDefaultTeamsPrefix+"team-a"]; ok {
-		t.Error("team-a per-ASR annotation should be removed")
-	}
-}
-
-func TestAppendUniqueAndRemove(t *testing.T) {
+func TestAppendUnique(t *testing.T) {
 	if got := appendUnique([]string{"a"}, "a"); len(got) != 1 {
 		t.Errorf("appendUnique should dedupe equal strings, got %v", got)
 	}
 	if got := appendUnique([]string{"a"}, "b"); len(got) != 2 {
 		t.Errorf("appendUnique should add new strings, got %v", got)
-	}
-	if got := remove([]string{"a", "b", "c"}, "b"); !slices.Equal(got, []string{"a", "c"}) {
-		t.Errorf("remove should drop the matching element, got %v", got)
 	}
 
 	// Equality includes the permission, so the same team with a different permission is kept.

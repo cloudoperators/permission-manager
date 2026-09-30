@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	pmv1 "github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -104,7 +105,7 @@ func expectProviderReady(t *testing.T, ctx context.Context, c client.Client, nam
 			return false, fmt.Errorf("failed to get ASR %s/%s: %w", namespace, asrName, err)
 		}
 
-		providerStatus, ok := asr.Status.Providers[provider]
+		providerStatus, ok := asr.Status.Providers[pmmeta.ProviderType(provider)]
 		if !ok {
 			if !ready {
 				// No provider entry yet — if expecting not-ready, that counts
