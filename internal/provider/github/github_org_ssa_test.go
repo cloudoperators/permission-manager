@@ -205,7 +205,7 @@ func TestReconcileOrganizations_FieldManagerKeyedByASRObject(t *testing.T) {
 		newASR("asr-a", "shared", orgAdmin),
 		newASR("asr-b", "shared", orgAdmin),
 	} {
-		if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+		if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 			t.Fatalf("reconcileOrganizations %s: %v", asr.Name, err)
 		}
 	}
@@ -269,7 +269,7 @@ func TestReconcileOrganizations_ReleasesOrgsDroppedFromDesiredState(t *testing.T
 
 	// asr-x now has no org-level permissions.
 	asr := newASR("asr-x", "shared", nil)
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns"); err != nil {
+	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns"); err != nil {
 		t.Fatalf("reconcileOrganizations: %v", err)
 	}
 

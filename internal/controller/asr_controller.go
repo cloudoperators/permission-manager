@@ -20,7 +20,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
@@ -108,6 +110,18 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueASRForGithubTeam),
 		).
 		Watches(
+			// Recover missing-org ASRs when the CR appears. Create-only, so
+			// repo-guard's status updates don't cause an all-ASR reconcile storm.
+			&repoguardv1.GithubOrganization{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueASRsForGithubOrganization),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return true },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				DeleteFunc:  func(event.DeleteEvent) bool { return false },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			}),
+		).
+		Watches(
 			&greenhousev1alpha1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueASRsForCluster),
 		).
@@ -125,17 +139,22 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
 		var errs []error
+		var missingOrgs []string
 		for _, ref := range asr.Spec.ConnectorRefs {
 			cb := &v1alpha1.ConnectorBinding{}
 			if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: asr.Namespace}, cb); err != nil {
 				continue
 			}
 			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
-				if err := r.ghPhase.Reconcile(ctx, asr, cb); err != nil {
+				missing, err := r.ghPhase.Reconcile(ctx, asr, cb)
+				if err != nil {
 					errs = append(errs, err)
 				}
+				missingOrgs = append(missingOrgs, missing...)
 			}
 		}
+		// Set once from the aggregate so a healthy binding can't clear another's signal.
+		github.SetOrgConfigValidity(asr, missingOrgs)
 		if len(errs) > 0 {
 			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
 		}
@@ -295,9 +314,20 @@ func (r *ASRReconciler) enqueueASRForGithubTeam(_ context.Context, obj client.Ob
 
 // enqueueASRsForCluster enqueues all ASRs when a Cluster changes.
 func (r *ASRReconciler) enqueueASRsForCluster(ctx context.Context, _ client.Object) []ctrl.Request {
+	return r.enqueueAllActiveASRs(ctx, "cluster")
+}
+
+// enqueueASRsForGithubOrganization enqueues all ASRs when an org CR is created.
+func (r *ASRReconciler) enqueueASRsForGithubOrganization(ctx context.Context, _ client.Object) []ctrl.Request {
+	return r.enqueueAllActiveASRs(ctx, "githuborganization")
+}
+
+// enqueueAllActiveASRs returns requests for all non-deleting ASRs. trigger labels
+// the source in logs so the two watch arms are distinguishable.
+func (r *ASRReconciler) enqueueAllActiveASRs(ctx context.Context, trigger string) []ctrl.Request {
 	var list v1alpha1.ApplicationSpecificRoleList
 	if err := r.List(ctx, &list); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list ASRs for cluster change")
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list ASRs", "trigger", trigger)
 		return nil
 	}
 	requests := make([]ctrl.Request, 0, len(list.Items))

@@ -73,6 +73,16 @@ func TestReconcileOrganizations(t *testing.T) {
 			wantInternal: []teamPerm{{"team-x", "push"}},
 		},
 		{
+			// Read+write on the same visibility must collapse to one entry (listType=map,
+			// keyed by team) carrying the stronger permission.
+			name: "same visibility read and write keep one entry with the stronger permission",
+			perms: []v1alpha1.Permission{
+				perm(repoTypeCCRN("private"), "READ"),
+				perm(repoTypeCCRN("private"), "WRITE"),
+			},
+			wantPrivate: []teamPerm{{"team-x", "push"}},
+		},
+		{
 			name:  "non-github CCRN is ignored",
 			perms: []v1alpha1.Permission{perm("urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/c", "ADMIN")},
 		},
@@ -83,7 +93,7 @@ func TestReconcileOrganizations(t *testing.T) {
 			p, c := newPhase(newGithubOrg("test-ns", "my-org"))
 			asr := newASR("asr", "team-x", tt.perms)
 
-			if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+			if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 				t.Fatalf("reconcileOrganizations: %v", err)
 			}
 
@@ -116,13 +126,13 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 		perm(orgCCRN("my-org"), "ADMIN"),
 		perm(repoTypeCCRN("public"), "WRITE"),
 	})
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
 	// Second reconcile: permissions narrowed to private read only.
 	asr.Spec.Permissions = []v1alpha1.Permission{perm(repoTypeCCRN("private"), "READ")}
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
@@ -136,15 +146,6 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 	}
 	if got := teamPerms(org.Spec.DefaultPrivateRepositoryTeams); !slices.Equal(got, []teamPerm{{"team-x", "pull"}}) {
 		t.Errorf("expected the new private contribution, got %v", got)
-	}
-}
-
-func TestReconcileOrganizations_MissingOrgReturnsError(t *testing.T) {
-	p, _ := newPhase() // org not seeded
-	asr := newASR("asr", "team-x", []v1alpha1.Permission{perm(orgCCRN("missing"), "ADMIN")})
-
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns"); err == nil {
-		t.Fatal("expected an error when the GithubOrganization does not exist")
 	}
 }
 
@@ -175,7 +176,7 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 		perm(repoCCRN("github.example.com", "my-org", "repo-a"), "WRITE"),
 	})
 
-	if err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
+	if _, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
