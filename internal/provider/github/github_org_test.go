@@ -93,7 +93,7 @@ func TestReconcileOrganizations(t *testing.T) {
 			p, c := newPhase(newGithubOrg("test-ns", "my-org"))
 			asr := newASR("asr", "team-x", tt.perms)
 
-			if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+			if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 				t.Fatalf("reconcileOrganizations: %v", err)
 			}
 
@@ -126,13 +126,13 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 		perm(orgCCRN("my-org"), "ADMIN"),
 		perm(repoTypeCCRN("public"), "WRITE"),
 	})
-	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
 	// Second reconcile: permissions narrowed to private read only.
 	asr.Spec.Permissions = []v1alpha1.Permission{perm(repoTypeCCRN("private"), "READ")}
-	if _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 		perm(repoCCRN("github.example.com", "my-org", "repo-a"), "WRITE"),
 	})
 
-	if _, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
+	if _, _, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 

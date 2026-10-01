@@ -28,6 +28,9 @@ const fieldManagerPrefix = "permission-manager/"
 // fieldManagerMaxLen is the apiserver's managedFields manager limit.
 const fieldManagerMaxLen = 128
 
+// adminPermissionLabel: repo-guard's per-org label, "admin" or "admin-ondemand".
+const adminPermissionLabel = "repo-guard.cloudoperators.dev/admin-permission"
+
 // orgFieldManager keys on the ASR's namespace/name, not spec.name (shared spec.name
 // must not share a manager). Long ns/name hash to stay under the 128-byte limit.
 func orgFieldManager(asrNamespace, asrName string) string {
@@ -45,17 +48,22 @@ type orgContribution struct {
 	PrivateTeams  []repoguardv1.GithubTeamWithPermission
 	InternalTeams []repoguardv1.GithubTeamWithPermission
 	OwnerTeams    []string
+
+	// ownerCandidatePerms: org-level mapped perms, resolved to owners per-org at
+	// apply time against the org's admin-permission label.
+	ownerCandidatePerms []string
+	// ownerTeamName is the team added as owner when a candidate perm matches.
+	ownerTeamName string
 }
 
-// reconcileOrganizations patches GithubOrganization CRs for org-level permissions in the ASR.
-// Returns missing org CRs so the caller can aggregate across ConnectorBindings before setting
-// the InvalidConfig condition once.
+// reconcileOrganizations patches org-level permissions and returns desired org keys plus missing
+// org CRs. Pruning is the caller's job (see PruneStaleOrgs).
 func (p *Phase) reconcileOrganizations(
 	ctx context.Context,
 	asr *v1alpha1.ApplicationSpecificRole,
 	cbDef *GithubConnectorDefinition,
 	targetNamespace string,
-) ([]string, error) {
+) (desired []client.ObjectKey, missingOrgs []string, err error) {
 
 	log := p.Log.WithValues("asr", asr.Name)
 
@@ -74,10 +82,11 @@ func (p *Phase) reconcileOrganizations(
 
 		switch gh.ResourceType {
 		case ccrn.GithubResourceTypeOrganization:
-			// Org owner only when the capability maps to "admin".
-			if mappedPermission == "admin" {
+			// Admin-level caps are owner candidates; resolved per-org at apply time.
+			if isAdminPermission(mappedPermission) {
 				contrib := getOrCreateContrib(orgContribs, gh.Org)
-				contrib.OwnerTeams = appendUnique(contrib.OwnerTeams, teamName)
+				contrib.ownerCandidatePerms = appendUnique(contrib.ownerCandidatePerms, mappedPermission)
+				contrib.ownerTeamName = teamName
 			}
 		case ccrn.GithubResourceTypeRepositoryType:
 			teamEntry := repoguardv1.GithubTeamWithPermission{
@@ -106,11 +115,10 @@ func (p *Phase) reconcileOrganizations(
 	// Patch each org. A missing org CR is a permanent misconfig (repo-guard owns
 	// creation), surfaced as InvalidConfig rather than a requeue error; the
 	// GithubOrganization create watch re-enqueues the ASR once the CR appears.
-	var (
-		errs        []error
-		missingOrgs []string
-	)
+	var errs []error
+	desired = make([]client.ObjectKey, 0, len(orgContribs))
 	for orgName, contrib := range orgContribs {
+		desired = append(desired, client.ObjectKey{Namespace: targetNamespace, Name: orgName})
 		err := p.patchOrganization(ctx, asr.Namespace, asr.Name, orgName, targetNamespace, contrib)
 		if err == nil {
 			continue
@@ -122,23 +130,16 @@ func (p *Phase) reconcileOrganizations(
 		errs = append(errs, err)
 	}
 
-	// Release orgs this ASR manages but no longer contributes to.
-	if err := p.pruneStaleOrgs(ctx, asr, targetNamespace, orgContribs); err != nil {
-		errs = append(errs, err)
-	}
-
-	return missingOrgs, errors.Join(errs...)
+	return desired, missingOrgs, errors.Join(errs...)
 }
 
-// pruneStaleOrgs releases this ASR's entries on managed orgs missing from the desired set;
-// without it, dropped orgs keep stale entries until the ASR is deleted.
-func (p *Phase) pruneStaleOrgs(
-	ctx context.Context,
-	asr *v1alpha1.ApplicationSpecificRole,
-	targetNamespace string,
-	desired map[string]*orgContribution,
-) error {
-
+// PruneStaleOrgs releases this ASR's entries on managed orgs absent from desired. Caller passes
+// desired aggregated across all bindings (the field manager is per-ASR, not per-binding).
+func (p *Phase) PruneStaleOrgs(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, desired []client.ObjectKey) error {
+	want := make(map[client.ObjectKey]struct{}, len(desired))
+	for _, k := range desired {
+		want[k] = struct{}{}
+	}
 	var orgList repoguardv1.GithubOrganizationList
 	if err := p.Client.List(ctx, &orgList); err != nil {
 		return fmt.Errorf("failed to list GithubOrganizations: %w", err)
@@ -148,8 +149,8 @@ func (p *Phase) pruneStaleOrgs(
 		if !orgManagedByASR(org, asr.Namespace, asr.Name) {
 			continue
 		}
-		if _, ok := desired[org.Name]; ok && org.Namespace == targetNamespace {
-			continue // just applied above
+		if _, ok := want[client.ObjectKeyFromObject(org)]; ok {
+			continue // still desired
 		}
 		if err := p.removeASRFromOrg(ctx, org, asr.Namespace, asr.Name); err != nil {
 			return fmt.Errorf("failed to release org %s/%s: %w", org.Namespace, org.Name, err)
@@ -211,7 +212,13 @@ func (p *Phase) patchOrganization(
 		return fmt.Errorf("failed to get GithubOrganization %s/%s: %w", namespace, orgName, err)
 	}
 
-	applyObj := newOrgApplyObject(namespace, orgName, contrib)
+	// Resolve org ownership against the org's admin-permission label, before building
+	// the apply payload from contrib.
+	if slices.Contains(contrib.ownerCandidatePerms, p.orgAdminPermission(&org)) {
+		contrib.OwnerTeams = appendUnique(contrib.OwnerTeams, contrib.ownerTeamName)
+	}
+
+	applyObj := newOrgApplyObject(namespace, orgName, org.ResourceVersion, contrib)
 	if err := p.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(applyObj), client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
 		p.auditOrgFailure(ctx, asrName, orgName, namespace, err)
 		return fmt.Errorf("failed to apply GithubOrganization %s/%s: %w", namespace, orgName, err)
@@ -222,11 +229,12 @@ func (p *Phase) patchOrganization(
 	return nil
 }
 
-// removeASRFromOrg releases one ASR's entries on cleanup by applying an empty contribution
-// under its field manager; SSA prunes only this ASR's entries. Missing org is a no-op.
+// removeASRFromOrg releases one ASR's entries on cleanup via an empty apply under its
+// field manager. Missing org is a no-op.
 func (p *Phase) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrganization, asrNamespace, asrName string) error {
+	var fresh repoguardv1.GithubOrganization
 	orgKey := client.ObjectKeyFromObject(org)
-	if err := p.Client.Get(ctx, orgKey, &repoguardv1.GithubOrganization{}); err != nil {
+	if err := p.Client.Get(ctx, orgKey, &fresh); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Org deleted, nothing to clean up.
 			return nil
@@ -235,7 +243,7 @@ func (p *Phase) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrg
 		return err
 	}
 
-	applyObj := newOrgApplyObject(org.Namespace, org.Name, &orgContribution{})
+	applyObj := newOrgApplyObject(org.Namespace, org.Name, fresh.ResourceVersion, &orgContribution{})
 	if err := p.Client.Apply(ctx, client.ApplyConfigurationFromUnstructured(applyObj), client.FieldOwner(orgFieldManager(asrNamespace, asrName)), client.ForceOwnership); err != nil {
 		p.auditOrgFailure(ctx, asrName, org.Name, org.Namespace, err)
 		return err
@@ -247,12 +255,14 @@ func (p *Phase) removeASRFromOrg(ctx context.Context, org *repoguardv1.GithubOrg
 
 // newOrgApplyObject builds the SSA payload: only this ASR's team-list fields (no identity/
 // status). Each list is always sent (empty [] when none) so SSA releases dropped entries.
-func newOrgApplyObject(namespace, orgName string, contrib *orgContribution) *unstructured.Unstructured {
+// resourceVersion is a precondition so a delete between Get and apply fails, not recreates.
+func newOrgApplyObject(namespace, orgName, resourceVersion string, contrib *orgContribution) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetAPIVersion(repoguardv1.GroupVersion.String())
 	u.SetKind("GithubOrganization")
 	u.SetName(orgName)
 	u.SetNamespace(namespace)
+	u.SetResourceVersion(resourceVersion)
 	u.Object["spec"] = map[string]any{
 		"organizationOwnerTeams":         stringsToUnstructured(contrib.OwnerTeams),
 		"defaultPublicRepositoryTeams":   teamsToUnstructured(contrib.PublicTeams),
@@ -310,6 +320,25 @@ func orgManagedByASR(org *repoguardv1.GithubOrganization, asrNamespace, asrName 
 		}
 	}
 	return false
+}
+
+// isAdminPermission reports whether a mapped permission can grant org ownership.
+func isAdminPermission(p string) bool {
+	return p == repoguardv1.GithubTeamPermissionAdmin || p == repoguardv1.GithubTeamPermissionAdminOndemand
+}
+
+// orgAdminPermission returns the org's admin role from its label; missing defaults to admin,
+// an unrecognized value is returned as-is so it matches no owner candidate.
+func (p *Phase) orgAdminPermission(org *repoguardv1.GithubOrganization) string {
+	switch v := org.Labels[adminPermissionLabel]; v {
+	case "", repoguardv1.GithubTeamPermissionAdmin:
+		return repoguardv1.GithubTeamPermissionAdmin
+	case repoguardv1.GithubTeamPermissionAdminOndemand:
+		return repoguardv1.GithubTeamPermissionAdminOndemand
+	default:
+		p.Log.Info("unknown admin-permission label, not granting owner access", "value", v, "org", org.Name)
+		return v
+	}
 }
 
 func getOrCreateContrib(m map[string]*orgContribution, orgName string) *orgContribution {
