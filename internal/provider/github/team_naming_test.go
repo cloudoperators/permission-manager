@@ -50,6 +50,32 @@ func TestResolveDesiredNames(t *testing.T) {
 	}
 }
 
+// TestResolveDesiredNames_PropagatesLDAPAndTTLs threads the org CR's default-ldap-provider
+// and job-retention TTL labels onto the resolved DesiredTeam.
+func TestResolveDesiredNames_PropagatesLDAPAndTTLs(t *testing.T) {
+	org := newGithubOrgWithMeta("test-ns", "org-cr", "github.example.com", "ghe", "ldap-prod", "admin", "resolved-org")
+	org.Labels["repo-guard.cloudoperators.dev/completedTTL"] = "24h"
+	org.Labels["repo-guard.cloudoperators.dev/failedTTL"] = "72h"
+	c := newClient(org)
+	r := newOrgResolver(c, "test-ns", logr.Discard())
+
+	ds := &DesiredState{Teams: []DesiredTeam{{Instance: "github.example.com", Org: "resolved-org"}}}
+	if _, err := resolveDesiredNames(context.Background(), r, "my-team", ds); err != nil {
+		t.Fatalf("resolveDesiredNames: %v", err)
+	}
+	if len(ds.Teams) != 1 {
+		t.Fatalf("teams = %+v, want one", ds.Teams)
+	}
+	got := ds.Teams[0]
+	if got.LDAPProvider != "ldap-prod" {
+		t.Errorf("LDAPProvider = %q, want ldap-prod", got.LDAPProvider)
+	}
+	if got.TTLs["repo-guard.cloudoperators.dev/completedTTL"] != "24h" ||
+		got.TTLs["repo-guard.cloudoperators.dev/failedTTL"] != "72h" {
+		t.Errorf("TTLs = %v, want completedTTL=24h failedTTL=72h", got.TTLs)
+	}
+}
+
 func TestMergeMissingOrgs(t *testing.T) {
 	if got := mergeMissingOrgs(nil, nil); got != nil {
 		t.Errorf("empty union should be nil, got %v", got)

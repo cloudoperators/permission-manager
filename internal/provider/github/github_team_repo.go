@@ -31,8 +31,6 @@ func ReconcileTeamRepos(
 	al *audit.Logger,
 ) error {
 
-	labels := BuildLabels(asrName, asrNamespace)
-
 	desiredNames := make(map[string]struct{}, len(desired))
 	for _, dr := range desired {
 		if len(dr.Repositories) == 0 {
@@ -47,7 +45,11 @@ func ReconcileTeamRepos(
 			},
 		}
 		err := upsertWithAudit(ctx, c, al, teamRepo, "GithubTeamRepository", asrName, func() error {
-			teamRepo.Labels = labels
+			// Merge, don't replace: preserve labels PM doesn't own on a converged CR.
+			if teamRepo.Labels == nil {
+				teamRepo.Labels = map[string]string{}
+			}
+			mergeOwnershipLabels(teamRepo.Labels, asrName, asrNamespace)
 			teamRepo.Spec = repoguardv1.GithubTeamRepositorySpec{
 				Github:       dr.Instance,
 				Organization: dr.Org,

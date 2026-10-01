@@ -22,16 +22,43 @@ const (
 	labelGithubInstanceKey = "repo-guard.cloudoperators.dev/github-instance-key"
 	// labelDefaultLDAPProvider holds the default LDAP provider name for the org's teams.
 	labelDefaultLDAPProvider = "repo-guard.cloudoperators.dev/default-ldap-provider"
+
+	// The job-retention TTL labels. PM copies any present on the org CR onto the
+	// GithubTeam CRs it creates; org and team use the same key strings.
+	labelCompletedTTL = "repo-guard.cloudoperators.dev/completedTTL"
+	labelFailedTTL    = "repo-guard.cloudoperators.dev/failedTTL"
+	labelNotFoundTTL  = "repo-guard.cloudoperators.dev/notfoundTTL"
+	labelSkippedTTL   = "repo-guard.cloudoperators.dev/skippedTTL"
 )
 
+// ttlLabelKeys are the job-retention TTL labels PM propagates from a GithubOrganization CR
+// onto the GithubTeam CRs it creates (repo-guard#246).
+var ttlLabelKeys = []string{labelCompletedTTL, labelFailedTTL, labelNotFoundTTL, labelSkippedTTL}
+
 // orgLookup holds the per-org values PM reads from a GithubOrganization CR: the short
-// instance key (CR-name prefix), the org name, the default LDAP provider, and the admin
-// permission role.
+// instance key (CR-name prefix), the org name, the default LDAP provider, the admin
+// permission role, and the job-retention TTL labels to stamp on team CRs.
 type orgLookup struct {
 	InstanceKey     string
 	Org             string
 	LDAPProvider    string
 	AdminPermission string
+	TTLs            map[string]string
+}
+
+// ttlLabelsFrom returns the subset of ttlLabelKeys present in labels (verbatim key+value),
+// or nil when none are set.
+func ttlLabelsFrom(labels map[string]string) map[string]string {
+	var ttls map[string]string
+	for _, k := range ttlLabelKeys {
+		if v, ok := labels[k]; ok {
+			if ttls == nil {
+				ttls = make(map[string]string, len(ttlLabelKeys))
+			}
+			ttls[k] = v
+		}
+	}
+	return ttls
 }
 
 // orgCacheKey identifies a resolved org by the (hostname, org) pair it was looked up with.
@@ -114,6 +141,7 @@ func (r *orgResolver) doResolve(ctx context.Context, hostname, org string) orgRe
 		Org:             match.Spec.Organization,
 		LDAPProvider:    match.Labels[labelDefaultLDAPProvider],
 		AdminPermission: adminPermissionOrDefault(match.Labels[adminPermissionLabel]),
+		TTLs:            ttlLabelsFrom(match.Labels),
 	}}
 }
 
