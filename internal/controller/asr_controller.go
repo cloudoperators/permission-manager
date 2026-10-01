@@ -7,11 +7,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"maps"
 
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	toolscache "k8s.io/client-go/tools/cache"
@@ -110,13 +112,15 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueASRForGithubTeam),
 		).
 		Watches(
-			// Recover missing-org ASRs when the CR appears. Create-only, so
-			// repo-guard's status updates don't cause an all-ASR reconcile storm.
+			// Recover missing-org ASRs when the CR appears, and refresh ASRs that target an
+			// org whose labels/identity change (PM copies org labels & LDAP onto team CRs, so
+			// those must track org edits). Update fires only on label/spec.organization changes,
+			// never on repo-guard's status-only churn.
 			&repoguardv1.GithubOrganization{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueASRsForGithubOrganization),
 			builder.WithPredicates(predicate.Funcs{
 				CreateFunc:  func(event.CreateEvent) bool { return true },
-				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				UpdateFunc:  githubOrgTriggersReconcile,
 				DeleteFunc:  func(event.DeleteEvent) bool { return false },
 				GenericFunc: func(event.GenericEvent) bool { return false },
 			}),
@@ -328,9 +332,77 @@ func (r *ASRReconciler) enqueueASRsForCluster(ctx context.Context, _ client.Obje
 	return r.enqueueAllActiveASRs(ctx, "cluster")
 }
 
-// enqueueASRsForGithubOrganization enqueues all ASRs when an org CR is created.
-func (r *ASRReconciler) enqueueASRsForGithubOrganization(ctx context.Context, _ client.Object) []ctrl.Request {
-	return r.enqueueAllActiveASRs(ctx, "githuborganization")
+// githubOrgTriggersReconcile reports whether a GithubOrganization Update event should
+// re-enqueue dependent ASRs: only a label or spec.organization change (the fields PM reads
+// and copies onto team CRs), never repo-guard's status-only churn.
+func githubOrgTriggersReconcile(e event.UpdateEvent) bool {
+	oldOrg, ok1 := e.ObjectOld.(*repoguardv1.GithubOrganization)
+	newOrg, ok2 := e.ObjectNew.(*repoguardv1.GithubOrganization)
+	if !ok1 || !ok2 {
+		return false
+	}
+	return !maps.Equal(oldOrg.Labels, newOrg.Labels) ||
+		oldOrg.Spec.Organization != newOrg.Spec.Organization
+}
+
+// enqueueASRsForGithubOrganization enqueues the ASRs affected by an org CR event: those
+// blocked on this org being missing (recovery), plus those whose github target is this org
+// (so org label/LDAP edits refresh their team CRs). Other ASRs are skipped so an org event
+// doesn't re-reconcile everything.
+func (r *ASRReconciler) enqueueASRsForGithubOrganization(ctx context.Context, obj client.Object) []ctrl.Request {
+	var list v1alpha1.ApplicationSpecificRoleList
+	if err := r.List(ctx, &list); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list ASRs", "trigger", "githuborganization")
+		return nil
+	}
+
+	// The changed org's target id, to match ASRs that provision into it. Empty when the CR
+	// lacks the instance label / spec.organization (e.g. a create before Helm fills them in);
+	// then only the missing-org recovery arm applies.
+	var changedTargetID string
+	if org, ok := obj.(*repoguardv1.GithubOrganization); ok {
+		changedTargetID = github.OrgTargetID(org)
+	}
+
+	requests := make([]ctrl.Request, 0)
+	for i := range list.Items {
+		asr := &list.Items[i]
+		if !asr.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if asrBlockedOnMissingOrg(asr) || asrTargetsGithubOrg(asr, changedTargetID) {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: asr.Name, Namespace: asr.Namespace},
+			})
+		}
+	}
+	return requests
+}
+
+// asrBlockedOnMissingOrg reports whether the ASR is held in InvalidConfig for a missing
+// GithubOrganization, so a new/updated org CR can release it.
+func asrBlockedOnMissingOrg(asr *v1alpha1.ApplicationSpecificRole) bool {
+	c := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	return c != nil && c.Status == metav1.ConditionTrue &&
+		c.Reason == string(pmmeta.MissingGithubOrganizationReason)
+}
+
+// asrTargetsGithubOrg reports whether the ASR has a github provider target with the given id.
+// An empty targetID never matches.
+func asrTargetsGithubOrg(asr *v1alpha1.ApplicationSpecificRole, targetID string) bool {
+	if targetID == "" {
+		return false
+	}
+	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub)
+	if ps == nil {
+		return false
+	}
+	for _, t := range ps.Targets {
+		if t.TargetID == targetID {
+			return true
+		}
+	}
+	return false
 }
 
 // enqueueAllActiveASRs returns requests for all non-deleting ASRs. trigger labels
