@@ -25,16 +25,10 @@ spec:
           properties:
             spec:
               type: object
-              properties:
-                teamName:
-                  type: string
-              required:
-                - teamName
+              x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
-              properties:
-                teamStatus:
-                  type: string
+              x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
 ---
@@ -61,16 +55,7 @@ spec:
           properties:
             spec:
               type: object
-              properties:
-                repositories:
-                  type: array
-                  items:
-                    type: string
-                permission:
-                  type: string
-              required:
-                - repositories
-                - permission
+              x-kubernetes-preserve-unknown-fields: true
 ---
 # Minimal CRD for GithubOrganization — just enough schema for E2E testing.
 apiVersion: apiextensions.k8s.io/v1
@@ -95,6 +80,9 @@ spec:
           properties:
             spec:
               type: object
+              # Keep the team-list fields typed (listType markers drive SSA merge);
+              # preserve the rest so PM's identity writes (spec.organization, etc.) persist.
+              x-kubernetes-preserve-unknown-fields: true
               properties:
                 defaultPublicRepositoryTeams:
                   type: array

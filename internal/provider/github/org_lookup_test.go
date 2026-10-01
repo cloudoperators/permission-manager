@@ -26,7 +26,7 @@ func (c *listCountingClient) List(ctx context.Context, list client.ObjectList, o
 }
 
 func TestOrgResolver_Resolve_ReturnsLabelsAndSpec(t *testing.T) {
-	org := newGithubOrgWithMeta("gh--my-org", "github.example.com", "ghe", "corp-ldap", "admin-ondemand", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "corp-ldap", "admin-ondemand", "my-org")
 	c := newClient(org)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -47,7 +47,7 @@ func TestOrgResolver_Resolve_ReturnsLabelsAndSpec(t *testing.T) {
 
 func TestOrgResolver_Resolve_Defaults(t *testing.T) {
 	// No LDAP label, no admin-permission label: LDAP empty, admin defaults to "admin".
-	org := newGithubOrgWithMeta("gh--my-org", "github.example.com", "ghe", "", "", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "", "", "my-org")
 	c := newClient(org)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -64,7 +64,7 @@ func TestOrgResolver_Resolve_Defaults(t *testing.T) {
 }
 
 func TestOrgResolver_Resolve_UnknownAdminPermissionDefaultsToAdmin(t *testing.T) {
-	org := newGithubOrgWithMeta("gh--my-org", "github.example.com", "ghe", "", "bogus", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "", "bogus", "my-org")
 	c := newClient(org)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -79,7 +79,7 @@ func TestOrgResolver_Resolve_UnknownAdminPermissionDefaultsToAdmin(t *testing.T)
 
 func TestOrgResolver_Resolve_NoLabelMatch_NotFound(t *testing.T) {
 	// Org exists but on a different instance.
-	org := newGithubOrgWithMeta("gh--my-org", "github.other.com", "ghe", "", "admin", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.other.com", "ghe", "", "admin", "my-org")
 	c := newClient(org)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -91,7 +91,7 @@ func TestOrgResolver_Resolve_NoLabelMatch_NotFound(t *testing.T) {
 
 func TestOrgResolver_Resolve_LabelMatchButWrongOrg_NotFound(t *testing.T) {
 	// Instance label matches, but no org on it has spec.organization == "my-org".
-	org := newGithubOrgWithMeta("gh--other", "github.example.com", "ghe", "", "admin", "other-org")
+	org := newGithubOrgWithMeta("default", "gh--other", "github.example.com", "ghe", "", "admin", "other-org")
 	c := newClient(org)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -103,8 +103,8 @@ func TestOrgResolver_Resolve_LabelMatchButWrongOrg_NotFound(t *testing.T) {
 
 func TestOrgResolver_Resolve_PicksOrgMatchingSpecAmongInstance(t *testing.T) {
 	// Two orgs on the same instance; resolve must return the one matching spec.organization.
-	a := newGithubOrgWithMeta("gh--org-a", "github.example.com", "key-a", "", "admin", "org-a")
-	b := newGithubOrgWithMeta("gh--org-b", "github.example.com", "key-b", "", "admin", "org-b")
+	a := newGithubOrgWithMeta("default", "gh--org-a", "github.example.com", "key-a", "", "admin", "org-a")
+	b := newGithubOrgWithMeta("default", "gh--org-b", "github.example.com", "key-b", "", "admin", "org-b")
 	c := newClient(a, b)
 	r := newOrgResolver(c, "default", logr.Discard())
 
@@ -118,7 +118,7 @@ func TestOrgResolver_Resolve_PicksOrgMatchingSpecAmongInstance(t *testing.T) {
 }
 
 func TestOrgResolver_Resolve_CachesResult(t *testing.T) {
-	org := newGithubOrgWithMeta("gh--my-org", "github.example.com", "ghe", "", "admin", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "", "admin", "my-org")
 	counting := &listCountingClient{Client: newClient(org)}
 	r := newOrgResolver(counting, "default", logr.Discard())
 
@@ -150,19 +150,19 @@ func TestOrgResolver_Resolve_CachesNotFound(t *testing.T) {
 
 func TestOrgTargetID(t *testing.T) {
 	// Matches the SanitizeInstance(instance)+"/"+org id computeProviderStatus records.
-	org := newGithubOrgWithMeta("gh--my-org", "github.example.com", "ghe", "", "", "my-org")
+	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "", "", "my-org")
 	if got := OrgTargetID(org); got != "github-example-com/my-org" {
 		t.Errorf("OrgTargetID = %q, want github-example-com/my-org", got)
 	}
 
 	// No instance label -> empty, so watch matching treats it as "no target".
-	noLabel := newGithubOrgWithMeta("gh--my-org", "", "", "", "", "my-org")
+	noLabel := newGithubOrgWithMeta("default", "gh--my-org", "", "", "", "", "my-org")
 	if got := OrgTargetID(noLabel); got != "" {
 		t.Errorf("OrgTargetID without instance label = %q, want empty", got)
 	}
 
 	// No spec.organization -> empty.
-	noOrg := newGithubOrgWithMeta("gh--x", "github.example.com", "ghe", "", "", "")
+	noOrg := newGithubOrgWithMeta("default", "gh--x", "github.example.com", "ghe", "", "", "")
 	if got := OrgTargetID(noOrg); got != "" {
 		t.Errorf("OrgTargetID without spec.organization = %q, want empty", got)
 	}

@@ -79,6 +79,7 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	r.k8sClusterStore = sharedInformer.GetStore()
 	r.ghPhase = github.New(r.Client, r.AuditLog, r.Log)
+	r.ghPhase.APIReader = mgr.GetAPIReader()
 
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),

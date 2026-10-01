@@ -83,8 +83,7 @@ spec:
 	})
 
 	// Step 3: Wait for the GithubTeamRepository to appear with spec.permission = "pull".
-	// The naming convention is: asr-<asrName>-<org-slug>-<permission>
-	gtrName := "asr-" + asrName + "-github-example-com-e2e-org-pull"
+	gtrName := githubTeamRepoCRName("e2e-org", asrName, "pull")
 	assertGithubTeamRepoExists(t, ctx, mgmtClient, controllerNamespace, gtrName)
 	assertGithubTeamRepoPermission(t, ctx, mgmtClient, controllerNamespace, gtrName, "pull")
 	t.Log("GithubTeamRepository created with permission=pull")
@@ -115,7 +114,7 @@ spec:
 	// Step 6: Verify the GithubTeamRepository CR is updated/recreated with permission = "triage".
 	// The old "pull" GTR might be deleted and a new "triage" one created, or the existing one updated.
 	// We check for a GTR with permission "triage" using a list-by-label approach.
-	newGtrName := "asr-" + asrName + "-github-example-com-e2e-org-triage"
+	newGtrName := githubTeamRepoCRName("e2e-org", asrName, "triage")
 	err = pollUntil(t, ctx, resourcePropagationTimeout, pollInterval, func() (bool, error) {
 		// Check if a GTR with the new name and triage permission exists
 		var list unstructured.UnstructuredList

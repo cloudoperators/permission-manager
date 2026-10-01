@@ -17,7 +17,8 @@ import (
 
 // ReconcileTeamRepos creates/updates GithubTeamRepository CRs for the desired state
 // and deletes stale ones that are no longer needed. A DesiredTeamRepo with an empty
-// Repositories list is skipped and cleaned up as stale.
+// Repositories list is skipped and cleaned up as stale. Stale deletion is skipped when
+// deleteStale is false (e.g. a missing org left the desired set incomplete).
 func ReconcileTeamRepos(
 	ctx context.Context,
 	c client.Client,
@@ -26,6 +27,7 @@ func ReconcileTeamRepos(
 	targetNamespace string,
 	asrName string,
 	asrNamespace string,
+	deleteStale bool,
 	al *audit.Logger,
 ) error {
 
@@ -60,8 +62,10 @@ func ReconcileTeamRepos(
 		}
 	}
 
-	if err := deleteStaleTeamRepos(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
-		return fmt.Errorf("failed to delete stale GithubTeamRepositories: %w", err)
+	if deleteStale {
+		if err := deleteStaleTeamRepos(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
+			return fmt.Errorf("failed to delete stale GithubTeamRepositories: %w", err)
+		}
 	}
 
 	return nil

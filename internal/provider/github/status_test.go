@@ -17,10 +17,10 @@ import (
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
-func teamWithStatus(asrName, instance, org string, state repoguardv1.GithubTeamState) *repoguardv1.GithubTeam {
+func teamWithStatus(name, asrName string, state repoguardv1.GithubTeamState) *repoguardv1.GithubTeam {
 	return &repoguardv1.GithubTeam{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      TeamCRName(asrName, instance, org),
+			Name:      name,
 			Namespace: "default",
 			Labels: map[string]string{
 				pmapis.LabelManagedByKey: pmapis.ManagedByGithub,
@@ -83,14 +83,14 @@ func TestComputeProviderStatus_UnmappedCapsDegraded(t *testing.T) {
 func TestComputeProviderStatus_AggregatesTeamStates(t *testing.T) {
 	asr := &v1alpha1.ApplicationSpecificRole{ObjectMeta: metav1.ObjectMeta{Name: "asr", Namespace: "default"}}
 	desired := &DesiredState{Teams: []DesiredTeam{
-		{Instance: "github.example.com", Org: "ready", CRName: TeamCRName("asr", "github.example.com", "ready")},
-		{Instance: "github.example.com", Org: "broken", CRName: TeamCRName("asr", "github.example.com", "broken")},
-		{Instance: "github.example.com", Org: "absent", CRName: TeamCRName("asr", "github.example.com", "absent")},
+		{Instance: "github.example.com", Org: "ready", CRName: TeamCRName("ghe", "ready", "team")},
+		{Instance: "github.example.com", Org: "broken", CRName: TeamCRName("ghe", "broken", "team")},
+		{Instance: "github.example.com", Org: "absent", CRName: TeamCRName("ghe", "absent", "team")},
 	}}
 	// The "absent" team CR is intentionally not created.
 	c := newClient(
-		teamWithStatus("asr", "github.example.com", "ready", repoguardv1.GithubTeamStateComplete),
-		teamWithStatus("asr", "github.example.com", "broken", repoguardv1.GithubTeamStateFailed),
+		teamWithStatus(TeamCRName("ghe", "ready", "team"), "asr", repoguardv1.GithubTeamStateComplete),
+		teamWithStatus(TeamCRName("ghe", "broken", "team"), "asr", repoguardv1.GithubTeamStateFailed),
 	)
 
 	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
@@ -116,9 +116,9 @@ func TestComputeProviderStatus_AggregatesTeamStates(t *testing.T) {
 func TestComputeProviderStatus_AllCompleteIsReady(t *testing.T) {
 	asr := &v1alpha1.ApplicationSpecificRole{ObjectMeta: metav1.ObjectMeta{Name: "asr", Namespace: "default"}}
 	desired := &DesiredState{Teams: []DesiredTeam{
-		{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("asr", "github.example.com", "my-org")},
+		{Instance: "github.example.com", Org: "my-org", CRName: TeamCRName("ghe", "my-org", "team")},
 	}}
-	c := newClient(teamWithStatus("asr", "github.example.com", "my-org", repoguardv1.GithubTeamStateComplete))
+	c := newClient(teamWithStatus(TeamCRName("ghe", "my-org", "team"), "asr", repoguardv1.GithubTeamStateComplete))
 
 	status := computeProviderStatus(context.Background(), c, asr, desired, nil)
 	if !status.Ready {

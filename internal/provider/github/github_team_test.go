@@ -18,14 +18,14 @@ import (
 func TestReconcileTeams_CreatesTeamWithSpecAndLabels(t *testing.T) {
 	ctx := context.Background()
 	c := newClient()
-	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "asr-test-cc"}}
+	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "ghe--cc--test-cc"}}
 
-	if err := ReconcileTeams(ctx, c, desired, "MY_TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	if err := ReconcileTeams(ctx, c, desired, "MY_TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeams: %v", err)
 	}
 
 	var team repoguardv1.GithubTeam
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc", Namespace: "pm-system"}, &team); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc", Namespace: "pm-system"}, &team); err != nil {
 		t.Fatalf("get team: %v", err)
 	}
 	if team.Spec.Team != "MY_TEAM" || team.Spec.Github != "github.example.com" || team.Spec.Organization != "cc" {
@@ -38,17 +38,17 @@ func TestReconcileTeams_CreatesTeamWithSpecAndLabels(t *testing.T) {
 
 func TestReconcileTeams_UpdatesExistingTeam(t *testing.T) {
 	ctx := context.Background()
-	existing := newOwnedTeam("asr-test-cc", "pm-system", "test-asr")
+	existing := newOwnedTeam("ghe--cc--test-cc", "pm-system", "test-asr")
 	existing.Spec.Team = "OLD"
 	c := newClient(existing)
 
-	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "asr-test-cc"}}
-	if err := ReconcileTeams(ctx, c, desired, "NEW", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "ghe--cc--test-cc"}}
+	if err := ReconcileTeams(ctx, c, desired, "NEW", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeams: %v", err)
 	}
 
 	var team repoguardv1.GithubTeam
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc", Namespace: "pm-system"}, &team); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc", Namespace: "pm-system"}, &team); err != nil {
 		t.Fatalf("get team: %v", err)
 	}
 	if team.Spec.Team != "NEW" {
@@ -58,21 +58,21 @@ func TestReconcileTeams_UpdatesExistingTeam(t *testing.T) {
 
 func TestReconcileTeams_DeletesStaleButKeepsOtherASRs(t *testing.T) {
 	ctx := context.Background()
-	stale := newOwnedTeam("asr-test-stale", "pm-system", "test-asr")
-	otherASR := newOwnedTeam("asr-other-cc", "pm-system", "other-asr")
+	stale := newOwnedTeam("ghe--cc--test-stale", "pm-system", "test-asr")
+	otherASR := newOwnedTeam("ghe--cc--other-cc", "pm-system", "other-asr")
 	c := newClient(stale, otherASR)
 
 	// Desired state no longer includes the stale team.
-	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "asr-test-cc"}}
-	if err := ReconcileTeams(ctx, c, desired, "MY_TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	desired := []DesiredTeam{{Instance: "github.example.com", Org: "cc", CRName: "ghe--cc--test-cc"}}
+	if err := ReconcileTeams(ctx, c, desired, "MY_TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeams: %v", err)
 	}
 
 	var team repoguardv1.GithubTeam
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-stale", Namespace: "pm-system"}, &team); err == nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-stale", Namespace: "pm-system"}, &team); err == nil {
 		t.Error("stale team should have been deleted")
 	}
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-other-cc", Namespace: "pm-system"}, &team); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--other-cc", Namespace: "pm-system"}, &team); err != nil {
 		t.Errorf("other ASR's team should be preserved: %v", err)
 	}
 }
