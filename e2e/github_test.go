@@ -25,9 +25,9 @@ var _ = Describe("ASR provisioning: github", func() {
 		})
 		DeferCleanup(func() { deleteASR(asrName) })
 
-		// read maps to the pull permission in the fixture.
-		teamCRName := pmgithub.TeamCRName(asrName, testGithubInstance, testGithubOrg)
-		teamRepoCRName := pmgithub.TeamRepoCRName(asrName, testGithubInstance, testGithubOrg, "pull")
+		// read maps to the pull permission in the fixture; the team name is the ASR name.
+		teamCRName := pmgithub.TeamCRName(testGithubInstanceKey, testGithubOrg, asrName)
+		teamRepoCRName := pmgithub.TeamRepoCRName(testGithubInstanceKey, testGithubOrg, asrName, "pull")
 
 		assertGithubTeamExists(ctx, orgNamespace, teamCRName)
 		assertGithubTeamRepoExists(ctx, orgNamespace, teamRepoCRName)

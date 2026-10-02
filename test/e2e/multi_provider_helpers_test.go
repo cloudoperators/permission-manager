@@ -189,10 +189,14 @@ kind: GithubOrganization
 metadata:
   name: %s
   namespace: %s
+  labels:
+    repo-guard.cloudoperators.dev/github-instance: github.example.com
+    repo-guard.cloudoperators.dev/github-instance-key: ghe
 spec:
+  organization: %s
   organizationOwnerTeams: []
   defaultPublicRepositoryTeams: []
-  defaultPrivateRepositoryTeams: []`, name, namespace)
+  defaultPrivateRepositoryTeams: []`, name, namespace, name)
 
 	cmd := exec.Command("kubectl", "--context", mgmtCtx, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(orgYAML)

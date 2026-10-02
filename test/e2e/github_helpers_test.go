@@ -15,7 +15,23 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	pmgithub "github.com/cloudoperators/permission-manager/internal/provider/github"
 )
+
+// testGithubInstanceKey is the instance-key label repo-guard stamps on the e2e
+// GithubOrganization; PM uses it as the CR-name prefix.
+const testGithubInstanceKey = "ghe"
+
+// githubTeamCRName and githubTeamRepoCRName build the expected CR names via the same
+// naming code PM uses in production, so the tests track the convention automatically.
+func githubTeamCRName(org, team string) string {
+	return pmgithub.TeamCRName(testGithubInstanceKey, org, team)
+}
+
+func githubTeamRepoCRName(org, team, permission string) string {
+	return pmgithub.TeamRepoCRName(testGithubInstanceKey, org, team, permission)
+}
 
 // assertGithubTeamExists polls until a GithubTeam CR with the given name exists
 // in the specified namespace on the management cluster.

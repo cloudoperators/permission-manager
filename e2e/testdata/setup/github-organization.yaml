@@ -5,7 +5,12 @@ apiVersion: repo-guard.cloudoperators.dev/v1
 kind: GithubOrganization
 metadata:
   name: e2e-org
+  labels:
+    # Naming inputs the provider reads to resolve and name team CRs.
+    repo-guard.cloudoperators.dev/github-instance: github.example.com
+    repo-guard.cloudoperators.dev/github-instance-key: ghe
 spec:
+  organization: e2e-org
   organizationOwnerTeams: []
   defaultPublicRepositoryTeams: []
   defaultPrivateRepositoryTeams: []

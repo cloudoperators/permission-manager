@@ -20,9 +20,12 @@ import (
 
 // Phase holds dependencies shared across github provider reconcile calls.
 type Phase struct {
-	Client   client.Client
-	AuditLog *audit.Logger
-	Log      logr.Logger
+	Client client.Client
+	// APIReader reads uncached so cleanup sees managedFields, which the cache
+	// may strip; falls back to Client when unset (tests).
+	APIReader client.Reader
+	AuditLog  *audit.Logger
+	Log       logr.Logger
 }
 
 // New returns a Phase with the given dependencies.
@@ -36,19 +39,19 @@ func New(c client.Client, al *audit.Logger, log logr.Logger) *Phase {
 
 // Reconcile runs the github provider create/update logic for one ConnectorBinding.
 // Returns this binding's missing org CRs so the caller aggregates them across bindings.
-func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) ([]string, error) {
+func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) (desiredOrgs []client.ObjectKey, missingOrgs []string, err error) {
 	log := p.Log.WithValues("asr", asr.Name, "connectorBinding", cb.Name)
 
 	advConfig, err := ParseAdvancedConfig(asr.Spec.AdvancedConfig)
 	if err != nil {
 		log.Error(err, "failed to parse advancedConfig")
-		return nil, fmt.Errorf("failed to parse advancedConfig: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse advancedConfig: %w", err)
 	}
 
 	cbDef, err := ParseConnectorDefinition(cb.Spec.Definition)
 	if err != nil {
 		log.Error(err, "failed to parse ConnectorBinding definition")
-		return nil, fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
 	}
 
 	targetNamespace := ResolveTargetNamespace(advConfig, cbDef, asr)
@@ -61,6 +64,14 @@ func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecific
 		)
 	}
 
+	// Resolve CR names against the org CRs (repo-guard naming convention). Teams whose
+	// GithubOrganization is missing are dropped and reported as missing orgs.
+	resolver := newOrgResolver(p.Client, targetNamespace, log)
+	missingFromNaming, err := resolveDesiredNames(ctx, resolver, asr.Spec.Name, desired)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve GithubTeam names: %w", err)
+	}
+
 	log.Info("reconciling GitHub resources",
 		"targetNamespace", targetNamespace,
 		"teams", len(desired.Teams),
@@ -69,23 +80,31 @@ func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecific
 
 	var errs []error
 
-	if err := ReconcileTeams(ctx, p.Client, desired.Teams, asr.Spec.Name, targetNamespace, asr.Name, asr.Namespace, p.AuditLog); err != nil {
+	// Skip stale deletion while an org is missing: the desired set is incomplete, so
+	// deleting "unmatched" CRs could remove teams the current view cannot account for.
+	deleteStale := len(missingFromNaming) == 0
+
+	if err := ReconcileTeams(ctx, p.Client, desired.Teams, asr.Spec.Name, targetNamespace, asr.Name, asr.Namespace, deleteStale, p.AuditLog); err != nil {
 		errs = append(errs, fmt.Errorf("failed to reconcile GithubTeams: %w", err))
 	}
 
-	if err := ReconcileTeamRepos(ctx, p.Client, desired.TeamRepos, asr.Spec.Name, targetNamespace, asr.Name, asr.Namespace, p.AuditLog); err != nil {
+	if err := ReconcileTeamRepos(ctx, p.Client, desired.TeamRepos, asr.Spec.Name, targetNamespace, asr.Name, asr.Namespace, deleteStale, p.AuditLog); err != nil {
 		errs = append(errs, fmt.Errorf("failed to reconcile GithubTeamRepositories: %w", err))
 	}
 
-	missingOrgs, err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace)
+	desiredOrgs, missingFromOrgs, err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
+	// Merge missing orgs from the naming and org-patch paths; the caller aggregates
+	// across bindings and sets InvalidConfig once.
+	missingOrgs = mergeMissingOrgs(missingFromNaming, missingFromOrgs)
+
 	ps := computeProviderStatus(ctx, p.Client, asr, desired, unmappedCaps)
 	asr.Status.Providers = pmmeta.SetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub, ps)
 
-	return missingOrgs, errors.Join(errs...)
+	return desiredOrgs, missingOrgs, errors.Join(errs...)
 }
 
 // ReconcileDelete runs the github provider cleanup logic for the ASR.
@@ -160,8 +179,13 @@ func (p *Phase) cleanupOwnedResources(ctx context.Context, asr *v1alpha1.Applica
 // cleanupOrgEntries removes all organization entries contributed by this ASR
 // across all GithubOrganization resources in all namespaces.
 func (p *Phase) cleanupOrgEntries(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole) error {
+	// Read uncached: orgManagedByASR needs managedFields, which the cache may strip.
+	reader := client.Reader(p.Client)
+	if p.APIReader != nil {
+		reader = p.APIReader
+	}
 	var orgList repoguardv1.GithubOrganizationList
-	if err := p.Client.List(ctx, &orgList); err != nil {
+	if err := reader.List(ctx, &orgList); err != nil {
 		return fmt.Errorf("failed to list GithubOrganizations: %w", err)
 	}
 

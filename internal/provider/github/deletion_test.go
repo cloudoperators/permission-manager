@@ -24,10 +24,10 @@ func TestReconcileDelete_DeletesOwnedResourcesKeepingOtherASRs(t *testing.T) {
 	asr := newASR("asr-del", "team-del", nil)
 
 	// Owned resources span two namespaces; other-ASR resources must survive.
-	ownedTeam := newOwnedTeam("asr-del-team", "ns-a", "asr-del")
-	ownedRepo := newOwnedTeamRepo("asr-del-repo", "ns-b", "asr-del", []string{"r"}, "push")
-	otherTeam := newOwnedTeam("asr-other-team", "ns-a", "asr-other")
-	otherRepo := newOwnedTeamRepo("asr-other-repo", "ns-b", "asr-other", []string{"r"}, "push")
+	ownedTeam := newOwnedTeam("ghe--org--team-del", "ns-a", "asr-del")
+	ownedRepo := newOwnedTeamRepo("ghe--org--team-del--push", "ns-b", "asr-del", []string{"r"}, "push")
+	otherTeam := newOwnedTeam("ghe--org--team-other", "ns-a", "asr-other")
+	otherRepo := newOwnedTeamRepo("ghe--org--team-other--push", "ns-b", "asr-other", []string{"r"}, "push")
 
 	p, c := newPhase(ownedTeam, ownedRepo, otherTeam, otherRepo)
 
@@ -36,17 +36,17 @@ func TestReconcileDelete_DeletesOwnedResourcesKeepingOtherASRs(t *testing.T) {
 	}
 
 	var team repoguardv1.GithubTeam
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-a", Name: "asr-del-team"}, &team); err == nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-a", Name: "ghe--org--team-del"}, &team); err == nil {
 		t.Error("owned team should be deleted")
 	}
 	var repo repoguardv1.GithubTeamRepository
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-b", Name: "asr-del-repo"}, &repo); err == nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-b", Name: "ghe--org--team-del--push"}, &repo); err == nil {
 		t.Error("owned team repository should be deleted")
 	}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-a", Name: "asr-other-team"}, &team); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-a", Name: "ghe--org--team-other"}, &team); err != nil {
 		t.Errorf("other ASR's team should be preserved: %v", err)
 	}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-b", Name: "asr-other-repo"}, &repo); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns-b", Name: "ghe--org--team-other--push"}, &repo); err != nil {
 		t.Errorf("other ASR's team repository should be preserved: %v", err)
 	}
 }

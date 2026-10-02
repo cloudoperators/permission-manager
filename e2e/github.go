@@ -16,10 +16,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// The GithubOrganization is pre-seeded by applyFixtures.
+// The GithubOrganization is pre-seeded by applyFixtures with the instance-key label below.
 const (
-	testGithubInstance = "github.example.com"
-	testGithubOrg      = "e2e-org"
+	testGithubInstance    = "github.example.com"
+	testGithubOrg         = "e2e-org"
+	testGithubInstanceKey = "ghe"
 )
 
 func repoGuardObj(kind string) *unstructured.Unstructured {

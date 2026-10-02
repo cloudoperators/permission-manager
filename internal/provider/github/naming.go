@@ -11,16 +11,12 @@ import (
 	"github.com/cloudoperators/permission-manager/internal/naming"
 )
 
-const (
-	// crNamePrefix is the prefix for all generated CR names.
-	crNamePrefix = "asr-"
-)
-
 // invalidCharsRegex matches any characters that are not valid in Kubernetes names.
 var invalidCharsRegex = regexp.MustCompile(`[^a-z0-9\-]`)
 
 // SanitizeInstance transforms a GitHub instance hostname into a valid
-// Kubernetes name segment (lowercase, alphanumeric + hyphens).
+// Kubernetes name segment (lowercase, alphanumeric + hyphens). Still used for the
+// provider status TargetID; not part of CR names.
 func SanitizeInstance(instance string) string {
 	s := strings.ToLower(instance)
 	s = strings.ReplaceAll(s, ".", "-")
@@ -30,20 +26,41 @@ func SanitizeInstance(instance string) string {
 	return s
 }
 
-// TeamCRName generates the CR name for a GithubTeam.
-// Format: asr-<asrName>-<sanitizedInstance>-<org>
+// TeamCRName generates the CR name for a GithubTeam using repo-guard's convention
+// (charts/.../githubteam.yaml): <instance-key>--<org>--<team-slug>.
 // If the result exceeds 253 chars, it is truncated with a hash suffix.
-func TeamCRName(asrName, instance, org string) string {
-	name := fmt.Sprintf("%s%s-%s-%s", crNamePrefix, asrName, SanitizeInstance(instance), sanitizeSegment(org))
+func TeamCRName(instanceKey, org, team string) string {
+	name := fmt.Sprintf("%s--%s--%s", instanceKey, orgSlug(org), teamSlug(team))
 	return truncateWithHash(name)
 }
 
-// TeamRepoCRName generates the CR name for a GithubTeamRepository.
-// Format: asr-<asrName>-<sanitizedInstance>-<org>-<capability>
+// TeamRepoCRName generates the CR name for a GithubTeamRepository using repo-guard's
+// convention (charts/.../githubteamrepository.yaml): <instance-key>--<org>--<team-slug>--<permission>.
 // If the result exceeds 253 chars, it is truncated with a hash suffix.
-func TeamRepoCRName(asrName, instance, org, capability string) string {
-	name := fmt.Sprintf("%s%s-%s-%s-%s", crNamePrefix, asrName, SanitizeInstance(instance), sanitizeSegment(org), sanitizeSegment(capability))
+func TeamRepoCRName(instanceKey, org, team, permission string) string {
+	name := fmt.Sprintf("%s--%s--%s--%s", instanceKey, orgSlug(org), teamSlug(team), sanitizeSegment(permission))
 	return truncateWithHash(name)
+}
+
+// orgSlug normalizes a GitHub org for CR-name use, mirroring the chart's
+// `replace "/" "-" | lower`.
+func orgSlug(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "/", "-")
+	s = invalidCharsRegex.ReplaceAllString(s, "")
+	s = strings.Trim(s, "-")
+	return s
+}
+
+// teamSlug normalizes a team name for CR-name use, mirroring the chart's
+// `replace "_" "-" | replace " " "-" | lower`.
+func teamSlug(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", "-")
+	s = strings.ReplaceAll(s, " ", "-")
+	s = invalidCharsRegex.ReplaceAllString(s, "")
+	s = strings.Trim(s, "-")
+	return s
 }
 
 // sanitizeSegment makes a string safe for Kubernetes name use.

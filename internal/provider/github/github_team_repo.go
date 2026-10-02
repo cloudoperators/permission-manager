@@ -17,7 +17,8 @@ import (
 
 // ReconcileTeamRepos creates/updates GithubTeamRepository CRs for the desired state
 // and deletes stale ones that are no longer needed. A DesiredTeamRepo with an empty
-// Repositories list is skipped and cleaned up as stale.
+// Repositories list is skipped and cleaned up as stale. Stale deletion is skipped when
+// deleteStale is false (e.g. a missing org left the desired set incomplete).
 func ReconcileTeamRepos(
 	ctx context.Context,
 	c client.Client,
@@ -26,10 +27,9 @@ func ReconcileTeamRepos(
 	targetNamespace string,
 	asrName string,
 	asrNamespace string,
+	deleteStale bool,
 	al *audit.Logger,
 ) error {
-
-	labels := BuildLabels(asrName, asrNamespace)
 
 	desiredNames := make(map[string]struct{}, len(desired))
 	for _, dr := range desired {
@@ -45,7 +45,11 @@ func ReconcileTeamRepos(
 			},
 		}
 		err := upsertWithAudit(ctx, c, al, teamRepo, "GithubTeamRepository", asrName, func() error {
-			teamRepo.Labels = labels
+			// Merge, don't replace: preserve labels PM doesn't own on a converged CR.
+			if teamRepo.Labels == nil {
+				teamRepo.Labels = map[string]string{}
+			}
+			mergeOwnershipLabels(teamRepo.Labels, asrName, asrNamespace)
 			teamRepo.Spec = repoguardv1.GithubTeamRepositorySpec{
 				Github:       dr.Instance,
 				Organization: dr.Org,
@@ -60,8 +64,10 @@ func ReconcileTeamRepos(
 		}
 	}
 
-	if err := deleteStaleTeamRepos(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
-		return fmt.Errorf("failed to delete stale GithubTeamRepositories: %w", err)
+	if deleteStale {
+		if err := deleteStaleTeamRepos(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
+			return fmt.Errorf("failed to delete stale GithubTeamRepositories: %w", err)
+		}
 	}
 
 	return nil

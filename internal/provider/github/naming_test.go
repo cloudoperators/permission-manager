@@ -24,11 +24,12 @@ func TestSanitizeInstance(t *testing.T) {
 }
 
 func TestCRNames(t *testing.T) {
-	if got, want := TeamCRName("my-asr", "github.example.com", "cc"), "asr-my-asr-github-example-com-cc"; got != want {
+	// repo-guard convention: <instance-key>--<org>--<team-slug>.
+	if got, want := TeamCRName("ghe", "my-org", "my-team"), "ghe--my-org--my-team"; got != want {
 		t.Errorf("TeamCRName = %q, want %q", got, want)
 	}
-	// Underscores in segments are sanitized to hyphens.
-	if got, want := TeamRepoCRName("my-asr", "github.com", "my_org", "admin"), "asr-my-asr-github-com-my-org-admin"; got != want {
+	// Underscores/spaces in the team slug become hyphens; permission is appended.
+	if got, want := TeamRepoCRName("ghe", "my-org", "my_team", "admin"), "ghe--my-org--my-team--admin"; got != want {
 		t.Errorf("TeamRepoCRName = %q, want %q", got, want)
 	}
 }
