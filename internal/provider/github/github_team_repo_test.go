@@ -19,16 +19,16 @@ func TestReconcileTeamRepos_CreatesOneCRPerPermission(t *testing.T) {
 	ctx := context.Background()
 	c := newClient()
 	desired := []DesiredTeamRepo{
-		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"repo-a", "repo-b"}, CRName: "asr-test-cc-push"},
-		{Instance: "github.example.com", Org: "cc", Permission: "pull", Repositories: []string{"repo-c"}, CRName: "asr-test-cc-pull"},
+		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"repo-a", "repo-b"}, CRName: "ghe--cc--test-cc--push"},
+		{Instance: "github.example.com", Org: "cc", Permission: "pull", Repositories: []string{"repo-c"}, CRName: "ghe--cc--test-cc--pull"},
 	}
 
-	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeamRepos: %v", err)
 	}
 
 	var push repoguardv1.GithubTeamRepository
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc-push", Namespace: "pm-system"}, &push); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc--push", Namespace: "pm-system"}, &push); err != nil {
 		t.Fatalf("get push repo: %v", err)
 	}
 	if push.Spec.Permission != "push" || len(push.Spec.Repository) != 2 {
@@ -39,25 +39,25 @@ func TestReconcileTeamRepos_CreatesOneCRPerPermission(t *testing.T) {
 	}
 
 	var pull repoguardv1.GithubTeamRepository
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc-pull", Namespace: "pm-system"}, &pull); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc--pull", Namespace: "pm-system"}, &pull); err != nil {
 		t.Errorf("the pull CR should also be created: %v", err)
 	}
 }
 
 func TestReconcileTeamRepos_UpdatesRepositoryList(t *testing.T) {
 	ctx := context.Background()
-	existing := newOwnedTeamRepo("asr-test-cc-push", "pm-system", "test-asr", []string{"repo-a"}, "push")
+	existing := newOwnedTeamRepo("ghe--cc--test-cc--push", "pm-system", "test-asr", []string{"repo-a"}, "push")
 	c := newClient(existing)
 
 	desired := []DesiredTeamRepo{
-		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"repo-a", "repo-b"}, CRName: "asr-test-cc-push"},
+		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"repo-a", "repo-b"}, CRName: "ghe--cc--test-cc--push"},
 	}
-	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeamRepos: %v", err)
 	}
 
 	var repo repoguardv1.GithubTeamRepository
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc-push", Namespace: "pm-system"}, &repo); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc--push", Namespace: "pm-system"}, &repo); err != nil {
 		t.Fatalf("get repo: %v", err)
 	}
 	if len(repo.Spec.Repository) != 2 {
@@ -67,41 +67,41 @@ func TestReconcileTeamRepos_UpdatesRepositoryList(t *testing.T) {
 
 func TestReconcileTeamRepos_EmptyRepositoriesDeletesCR(t *testing.T) {
 	ctx := context.Background()
-	existing := newOwnedTeamRepo("asr-test-cc-push", "pm-system", "test-asr", []string{"repo-a"}, "push")
+	existing := newOwnedTeamRepo("ghe--cc--test-cc--push", "pm-system", "test-asr", []string{"repo-a"}, "push")
 	c := newClient(existing)
 
 	// An empty Repositories list means the CR is no longer desired.
 	desired := []DesiredTeamRepo{
-		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: nil, CRName: "asr-test-cc-push"},
+		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: nil, CRName: "ghe--cc--test-cc--push"},
 	}
-	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeamRepos: %v", err)
 	}
 
 	var repo repoguardv1.GithubTeamRepository
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc-push", Namespace: "pm-system"}, &repo); err == nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc--push", Namespace: "pm-system"}, &repo); err == nil {
 		t.Error("a CR with empty repositories should have been deleted")
 	}
 }
 
 func TestReconcileTeamRepos_DeletesStaleButKeepsOtherASRs(t *testing.T) {
 	ctx := context.Background()
-	stale := newOwnedTeamRepo("asr-test-cc-admin", "pm-system", "test-asr", []string{"old"}, "admin")
-	otherASR := newOwnedTeamRepo("asr-other-cc-push", "pm-system", "other-asr", []string{"theirs"}, "push")
+	stale := newOwnedTeamRepo("ghe--cc--test-cc--admin", "pm-system", "test-asr", []string{"old"}, "admin")
+	otherASR := newOwnedTeamRepo("ghe--cc--other-cc--push", "pm-system", "other-asr", []string{"theirs"}, "push")
 	c := newClient(stale, otherASR)
 
 	desired := []DesiredTeamRepo{
-		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"new"}, CRName: "asr-test-cc-push"},
+		{Instance: "github.example.com", Org: "cc", Permission: "push", Repositories: []string{"new"}, CRName: "ghe--cc--test-cc--push"},
 	}
-	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", audit.Disabled()); err != nil {
+	if err := ReconcileTeamRepos(ctx, c, desired, "TEAM", "pm-system", "test-asr", "default", true, audit.Disabled()); err != nil {
 		t.Fatalf("ReconcileTeamRepos: %v", err)
 	}
 
 	var repo repoguardv1.GithubTeamRepository
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-test-cc-admin", Namespace: "pm-system"}, &repo); err == nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--test-cc--admin", Namespace: "pm-system"}, &repo); err == nil {
 		t.Error("stale repo should have been deleted")
 	}
-	if err := c.Get(ctx, types.NamespacedName{Name: "asr-other-cc-push", Namespace: "pm-system"}, &repo); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "ghe--cc--other-cc--push", Namespace: "pm-system"}, &repo); err != nil {
 		t.Errorf("other ASR's repo should be preserved: %v", err)
 	}
 }

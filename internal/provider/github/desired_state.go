@@ -26,6 +26,11 @@ type DesiredTeam struct {
 	Org string
 	// CRName is the computed Kubernetes CR name.
 	CRName string
+	// LDAPProvider is the org's default LDAP provider (empty if unset); it becomes the
+	// team's spec.externalMemberProvider.ldap.provider.
+	LDAPProvider string
+	// TTLs are the job-retention labels copied verbatim from the GithubOrganization CR.
+	TTLs map[string]string
 }
 
 // DesiredTeamRepo represents the desired state of a GithubTeamRepository CR.
@@ -132,11 +137,12 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 		repos[rk] = append(repos[rk], gh.Repo)
 	}
 
-	return buildResult(asr.Name, teams, repos), unmappedCaps
+	return buildResult(teams, repos), unmappedCaps
 }
 
-// buildResult transforms the collected maps into the final DesiredState.
-func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
+// buildResult transforms the collected maps into the final DesiredState. CRName is left
+// empty here; resolveDesiredNames fills it once the org CR (and its instance key) is known.
+func buildResult(teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
 	state := &DesiredState{}
 
 	// Build teams (sorted for deterministic output)
@@ -155,7 +161,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 		state.Teams = append(state.Teams, DesiredTeam{
 			Instance: tk.instance,
 			Org:      tk.org,
-			CRName:   TeamCRName(asrName, tk.instance, tk.org),
 		})
 	}
 
@@ -184,7 +189,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 			Org:          rk.org,
 			Permission:   rk.permission,
 			Repositories: repositories,
-			CRName:       TeamRepoCRName(asrName, rk.instance, rk.org, rk.permission),
 		})
 	}
 
@@ -208,4 +212,12 @@ func BuildLabels(asrName, asrNamespace string) map[string]string {
 		pmapis.LabelSourceASR:       asrName,
 		pmapis.LabelSourceNamespace: asrNamespace,
 	}
+}
+
+// mergeOwnershipLabels sets PM's ownership labels on dst in place, preserving unrelated ones.
+// On converge, PM claims the CR (managed-by=github) so the status/deletion lookups still find it.
+func mergeOwnershipLabels(dst map[string]string, asrName, asrNamespace string) {
+	dst[pmapis.LabelManagedByKey] = pmapis.ManagedByGithub
+	dst[pmapis.LabelSourceASR] = asrName
+	dst[pmapis.LabelSourceNamespace] = asrNamespace
 }

@@ -34,14 +34,30 @@ func expandRuleForCluster(rule CapabilityRule, cluster *greenhousev1alpha1.Clust
 	if cluster.Status.DiscoveryCache == nil || len(cluster.Status.DiscoveryCache.Groups) == 0 {
 		return nil, fmt.Errorf("discovery cache unavailable for cluster %q", cluster.Name)
 	}
-	allGroups := cluster.Status.DiscoveryCache.Groups
+
+	// DiscoveryCache.Groups holds full "group/version" strings (Greenhouse v0.16.1+).
+	// Build group-name list and group→groupVersion map from the cache to avoid
+	// calling ServerGroups() against the remote cluster.
+	allGVs := cluster.Status.DiscoveryCache.Groups
+	cacheGV := make(map[string]string, len(allGVs))
+	groupNames := make([]string, 0, len(allGVs))
+	for _, gv := range allGVs {
+		if gv == "" {
+			return nil, fmt.Errorf("invalid discovery cache entry for cluster %q: empty group/version", cluster.Name)
+		}
+		g := groupFromGV(gv)
+		if _, dup := cacheGV[g]; !dup {
+			cacheGV[g] = gv
+			groupNames = append(groupNames, g)
+		}
+	}
 
 	// Resolve which groups this rule applies to. "*" means every discovered
 	// group; an explicit list is intersected with discovery so we never emit a
 	// grant for a group the cluster doesn't serve.
-	requested := allGroups
+	requested := groupNames
 	if !wildcard(rule.APIGroups) {
-		requested = intersect(rule.APIGroups, allGroups)
+		requested = intersect(rule.APIGroups, groupNames)
 	}
 
 	// deniedByGroup maps an API group to the set of resource names to exclude.
@@ -81,18 +97,11 @@ func expandRuleForCluster(rule CapabilityRule, cluster *greenhousev1alpha1.Clust
 		return out, nil
 	}
 
-	// Only denied groups need a live resource lookup, and the cache holds group
-	// names only, so resolve each group's preferred version first.
-	prefGV, err := preferredGroupVersions(disco)
-	if err != nil {
-		return nil, err
-	}
+	// Each denied group needs a live resource enumeration; the preferred
+	// group/version comes from the cache.
 	sort.Strings(denied)
 	for _, g := range denied {
-		gv := prefGV[g]
-		if g == "" {
-			gv = "v1" // core group is served at /api/v1
-		}
+		gv := cacheGV[g]
 		if gv == "" {
 			return nil, fmt.Errorf("no preferred version for API group %q on cluster %q", g, cluster.Name)
 		}
@@ -123,19 +132,13 @@ func expandRuleForCluster(rule CapabilityRule, cluster *greenhousev1alpha1.Clust
 	return out, nil
 }
 
-// preferredGroupVersions builds a map of API group name to its preferred
-// group/version string (e.g. "apps" -> "apps/v1") from a single ServerGroups
-// call. The core group appears as "" with GroupVersion "v1".
-func preferredGroupVersions(disco discovery.DiscoveryInterface) (map[string]string, error) {
-	groups, err := disco.ServerGroups()
-	if err != nil {
-		return nil, fmt.Errorf("discover server groups: %w", err)
+// groupFromGV extracts the API group name from a "group/version" string as
+// stored in DiscoveryCache.Groups. "apps/v1" → "apps"; "v1" → "" (core group).
+func groupFromGV(gv string) string {
+	if i := strings.LastIndex(gv, "/"); i >= 0 {
+		return gv[:i]
 	}
-	out := make(map[string]string, len(groups.Groups))
-	for _, g := range groups.Groups {
-		out[g.Name] = g.PreferredVersion.GroupVersion
-	}
-	return out, nil
+	return ""
 }
 
 // isExcluded reports whether a resource name is denied. A denied name matches the

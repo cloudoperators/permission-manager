@@ -39,6 +39,7 @@ jobs:
             controller
             deps
             docs
+            adr
             e2e
             provider
             provider\/k8s

@@ -4,7 +4,10 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
+	"testing"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +30,8 @@ func newScheme() *runtime.Scheme {
 }
 
 func newClient(objs ...client.Object) client.Client {
-	return fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).Build()
+	// WithReturnManagedFields so orgManagedByASR can read the per-ASR SSA field manager.
+	return fake.NewClientBuilder().WithScheme(newScheme()).WithReturnManagedFields().WithObjects(objs...).Build()
 }
 
 func newPhase(objs ...client.Object) (*Phase, client.Client) {
@@ -91,19 +95,27 @@ func newGithubOrg(namespace, name string) *repoguardv1.GithubOrganization {
 	}
 }
 
-// newOrgWithContrib pre-populates an org with one ASR's contribution (spec
-// entries plus tracking annotations), as a prior reconcile would have written it.
-func newOrgWithContrib(namespace, name, asrName string, contrib *orgContribution) *repoguardv1.GithubOrganization {
-	org := newGithubOrg(namespace, name)
-	contribJSON, _ := json.Marshal(contrib)
-	org.Annotations = map[string]string{
-		AnnotationASRManagedConfig:                asrName,
-		annotationASRDefaultTeamsPrefix + asrName: string(contribJSON),
+// newGithubOrgWithMeta builds a GithubOrganization carrying the repo-guard labels
+// (github-instance, github-instance-key, default-ldap-provider, admin-permission) and
+// spec.organization that the org resolver reads. Empty label values are omitted.
+func newGithubOrgWithMeta(namespace, name, hostname, instanceKey, ldap, adminPerm, org string) *repoguardv1.GithubOrganization {
+	labels := map[string]string{}
+	if hostname != "" {
+		labels[labelGithubInstance] = hostname
 	}
-	org.Spec.OrganizationOwnerTeams = contrib.OwnerTeams
-	org.Spec.DefaultPublicRepositoryTeams = contrib.PublicTeams
-	org.Spec.DefaultPrivateRepositoryTeams = contrib.PrivateTeams
-	return org
+	if instanceKey != "" {
+		labels[labelGithubInstanceKey] = instanceKey
+	}
+	if ldap != "" {
+		labels[labelDefaultLDAPProvider] = ldap
+	}
+	if adminPerm != "" {
+		labels[adminPermissionLabel] = adminPerm
+	}
+	return &repoguardv1.GithubOrganization{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
+		Spec:       repoguardv1.GithubOrganizationSpec{Organization: org},
+	}
 }
 
 func newOwnedTeam(name, namespace, asrName string) *repoguardv1.GithubTeam {
@@ -120,5 +132,24 @@ func newOwnedTeamRepo(name, namespace, asrName string, repos []string, permissio
 			Repository: repos,
 			Permission: repoguardv1.GithubTeamPermission(permission),
 		},
+	}
+}
+
+// seedOrgViaSSA creates an empty org and applies each ASR's contribution via
+// patchOrganization, so the team-list fields carry that ASR's SSA field manager.
+func seedOrgViaSSA(t *testing.T, p *Phase, c client.Client, ns, name string, contribs map[string]*orgContribution) {
+	t.Helper()
+	if err := c.Create(context.Background(), newGithubOrg(ns, name)); err != nil {
+		t.Fatalf("create org %s/%s: %v", ns, name, err)
+	}
+	asrNames := make([]string, 0, len(contribs))
+	for asr := range contribs {
+		asrNames = append(asrNames, asr)
+	}
+	slices.Sort(asrNames) // deterministic apply order
+	for _, asr := range asrNames {
+		if err := p.patchOrganization(context.Background(), "default", asr, name, ns, contribs[asr]); err != nil {
+			t.Fatalf("seed contribution %q into %s/%s: %v", asr, ns, name, err)
+		}
 	}
 }

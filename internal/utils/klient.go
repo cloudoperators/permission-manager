@@ -9,21 +9,20 @@ import (
 	"os"
 	"strconv"
 
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
+	"github.com/cloudoperators/greenhouse/pkg/lifecycle"
 )
 
 const (
-	greenhouseKubeconfigKey = "greenhousekubeconfig"
-
 	// apiServerOverrideAnnotation lets a developer running the controller
 	// outside the kind docker network point the remote client at a host-
 	// reachable address (e.g. https://127.0.0.1:53097) while keeping the
@@ -35,28 +34,21 @@ const (
 	apiServerOverrideEnv        = "DEV_API_SERVER_OVERRIDE"
 )
 
-// restConfigForCluster reads the named cluster's greenhousekubeconfig Secret from
-// the management cluster and returns a *rest.Config for it. Shared by
-// NewRemoteClient and NewRemoteDiscoveryClient so both reach the remote cluster
-// through the same credential path and dev host override.
+// restConfigForCluster uses greenhouse lifecycle.NewRemoteKubeCfg to build a rest.Config for the named cluster
+// and applies the apiServerOverrideAnnotation if present and allowed by the DEV_API_SERVER_OVERRIDE env var.
 func restConfigForCluster(ctx context.Context, c client.Client, clusterName, namespace string) (*rest.Config, error) {
-	secret := &corev1.Secret{}
-	if err := c.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, secret); err != nil {
-		return nil, fmt.Errorf("kubeconfig secret: %w", err)
+	cluster := &greenhousev1alpha1.Cluster{}
+	if err := c.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster); err != nil {
+		return nil, fmt.Errorf("cluster %q: %w", clusterName, err)
 	}
 
-	kubeconfigBytes, ok := secret.Data[greenhouseKubeconfigKey]
-	if !ok {
-		return nil, fmt.Errorf("secret %q missing %s key", clusterName, greenhouseKubeconfigKey)
-	}
-
-	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigBytes)
+	restConfig, err := lifecycle.NewRemoteKubeCfg(ctx, c, cluster)
 	if err != nil {
-		return nil, fmt.Errorf("malformed kubeconfig: %w", err)
+		return nil, fmt.Errorf("remote kubeconfig for cluster %q: %w", clusterName, err)
 	}
 
 	if allow, err := strconv.ParseBool(os.Getenv(apiServerOverrideEnv)); err == nil && allow {
-		if override := secret.Annotations[apiServerOverrideAnnotation]; override != "" {
+		if override := cluster.Annotations[apiServerOverrideAnnotation]; override != "" {
 			ctrl.LoggerFrom(ctx).Info("api server override active",
 				"cluster", clusterName, "from", restConfig.Host, "to", override)
 			restConfig.Host = override
@@ -67,7 +59,7 @@ func restConfigForCluster(ctx context.Context, c client.Client, clusterName, nam
 }
 
 // NewRemoteClient builds a controller-runtime client for the named cluster
-// by reading its greenhousekubeconfig Secret from the management cluster.
+// using the greenhouse lifecycle.NewRemoteKubeCfg.
 // Additional scheme registration functions can be passed to extend the default
 // scheme (clientgoscheme + rbacv1).
 func NewRemoteClient(ctx context.Context, c client.Client, clusterName, namespace string, addToScheme ...func(*runtime.Scheme) error) (client.Client, error) {
@@ -86,9 +78,8 @@ func NewRemoteClient(ctx context.Context, c client.Client, clusterName, namespac
 	return client.New(restConfig, client.Options{Scheme: scheme})
 }
 
-// NewRemoteDiscoveryClient builds a discovery client for the named cluster from
-// the same greenhousekubeconfig Secret NewRemoteClient uses. Used to enumerate a
-// denied API group's resources live during deny-driven RBAC expansion.
+// NewRemoteDiscoveryClient builds a discovery client for the named cluster using the greenhouse lifecycle.NewRemoteKubeCfg.
+// Used to enumerate a denied API group's resources live during deny-driven RBAC expansion.
 func NewRemoteDiscoveryClient(ctx context.Context, c client.Client, clusterName, namespace string) (discovery.DiscoveryInterface, error) {
 	restConfig, err := restConfigForCluster(ctx, c, clusterName, namespace)
 	if err != nil {

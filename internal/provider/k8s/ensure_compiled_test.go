@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	greenhousemetav1alpha1 "github.com/cloudoperators/greenhouse/api/meta/v1alpha1"
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,11 +34,26 @@ func newClusterStore(t *testing.T, names ...string) cache.Store {
 	t.Helper()
 	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
 	for _, n := range names {
-		require.NoError(t, store.Add(&greenhousev1alpha1.Cluster{
-			ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: testNamespace},
-		}))
+		require.NoError(t, store.Add(newCluster(n, true)))
 	}
 	return store
+}
+
+// newCluster builds a greenhouse Cluster with a Ready condition set to
+// True/False per ready.
+func newCluster(name string, ready bool) *greenhousev1alpha1.Cluster {
+	status := metav1.ConditionFalse
+	if ready {
+		status = metav1.ConditionTrue
+	}
+	c := &greenhousev1alpha1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+	}
+	c.Status.SetConditions(greenhousemetav1alpha1.Condition{
+		Type:   greenhousemetav1alpha1.ReadyCondition,
+		Status: status,
+	})
+	return c
 }
 
 func newCB(t *testing.T, name string, verbs ...string) *v1alpha1.ConnectorBinding {
@@ -215,6 +231,102 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				require.Equal(t, string(pmmeta.NoTargetsResolvedReason), invalid.Reason)
 			}
 			if !tc.wantUnknownCap && !tc.wantNoTargets {
+				require.Nil(t, invalid)
+			}
+		})
+	}
+}
+
+// Test_EnsureRbacCompiled_PartialSuccess covers mixed valid/invalid clusters:
+// Ready clusters compile while missing or not-ready ones are skipped without
+// hard-failing the ASR, unless nothing usable resolves.
+func Test_EnsureRbacCompiled_PartialSuccess(t *testing.T) {
+	const readyCluster = "ready-1"
+	const notReadyCluster = "not-ready-1"
+	const missingCluster = "missing-1"
+
+	ccrnFor := func(name string) string {
+		return "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/" + name
+	}
+
+	cases := []struct {
+		name         string
+		clusters     []*greenhousev1alpha1.Cluster
+		permClusters []string
+		wantCompiled []string
+		wantInvalid  bool
+		wantReason   pmmeta.ConditionReason
+	}{
+		{
+			name:         "valid cluster compiles while a missing one is skipped",
+			clusters:     []*greenhousev1alpha1.Cluster{newCluster(readyCluster, true)},
+			permClusters: []string{readyCluster, missingCluster},
+			wantCompiled: []string{readyCluster},
+			wantInvalid:  false,
+		},
+		{
+			name:         "valid cluster compiles while a not-ready one is skipped",
+			clusters:     []*greenhousev1alpha1.Cluster{newCluster(readyCluster, true), newCluster(notReadyCluster, false)},
+			permClusters: []string{readyCluster, notReadyCluster},
+			wantCompiled: []string{readyCluster},
+			wantInvalid:  false,
+		},
+		{
+			name:         "all missing clusters yield NoTargetsResolved",
+			clusters:     nil,
+			permClusters: []string{missingCluster},
+			wantCompiled: nil,
+			wantInvalid:  true,
+			wantReason:   pmmeta.NoTargetsResolvedReason,
+		},
+		{
+			name:         "all not-ready clusters yield NoTargetsResolved",
+			clusters:     []*greenhousev1alpha1.Cluster{newCluster(notReadyCluster, false)},
+			permClusters: []string{notReadyCluster},
+			wantCompiled: nil,
+			wantInvalid:  true,
+			wantReason:   pmmeta.NoTargetsResolvedReason,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+			for _, c := range tc.clusters {
+				require.NoError(t, store.Add(c))
+			}
+
+			perms := make([]v1alpha1.Permission, 0, len(tc.permClusters))
+			for _, name := range tc.permClusters {
+				perms = append(perms, v1alpha1.Permission{Resource: ccrnFor(name), Capability: testCapability})
+			}
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName, Permissions: perms},
+			}
+
+			p := &pmk8s.Phase{
+				ClusterStore: store,
+				AuditLog:     audit.Disabled(),
+				Log:          ctrl.Log.WithName("test"),
+				CCRNParser:   ccrn.NewParser(nil),
+			}
+			p.SetCBs([]*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")})
+
+			_, err := p.EnsureRbacCompiled(asr)(context.Background())
+			require.NoError(t, err)
+
+			var compiledNames []string
+			for _, ct := range p.Compiled() {
+				compiledNames = append(compiledNames, ct.ClusterName)
+			}
+			require.ElementsMatch(t, tc.wantCompiled, compiledNames)
+
+			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+			if tc.wantInvalid {
+				require.NotNil(t, invalid)
+				require.Equal(t, string(tc.wantReason), invalid.Reason)
+			} else {
 				require.Nil(t, invalid)
 			}
 		})

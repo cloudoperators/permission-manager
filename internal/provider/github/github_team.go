@@ -15,8 +15,19 @@ import (
 	"github.com/cloudoperators/permission-manager/internal/audit"
 )
 
+const (
+	// labelAddUser and labelRemoveUser gate repo-guard membership management; without them
+	// set to labelMutationEnabled repo-guard leaves the team's members untouched.
+	labelAddUser    = "repo-guard.cloudoperators.dev/addUser"
+	labelRemoveUser = "repo-guard.cloudoperators.dev/removeUser"
+	// labelMutationEnabled turns a membership gate on.
+	labelMutationEnabled = "true"
+)
+
 // ReconcileTeams creates/updates GithubTeam CRs for the desired state and
-// deletes stale ones that are no longer needed.
+// deletes stale ones that are no longer needed. Stale deletion is skipped when
+// deleteStale is false (e.g. a missing org left the desired set incomplete),
+// to avoid deleting CRs the current view cannot account for.
 func ReconcileTeams(
 	ctx context.Context,
 	c client.Client,
@@ -25,10 +36,9 @@ func ReconcileTeams(
 	targetNamespace string,
 	asrName string,
 	asrNamespace string,
+	deleteStale bool,
 	al *audit.Logger,
 ) error {
-
-	labels := BuildLabels(asrName, asrNamespace)
 
 	desiredNames := make(map[string]struct{}, len(desired))
 	for _, dt := range desired {
@@ -43,11 +53,33 @@ func ReconcileTeams(
 			},
 		}
 		err := upsertWithAudit(ctx, c, al, team, "GithubTeam", asrName, func() error {
-			team.Labels = labels
-			team.Spec = repoguardv1.GithubTeamSpec{
-				Github:       dt.Instance,
-				Organization: dt.Org,
-				Team:         teamName,
+			// Merge, don't replace: preserve labels PM doesn't own (e.g. dryRun) on a converged CR.
+			if team.Labels == nil {
+				team.Labels = map[string]string{}
+			}
+			mergeOwnershipLabels(team.Labels, asrName, asrNamespace)
+			team.Labels[labelAddUser] = labelMutationEnabled
+			team.Labels[labelRemoveUser] = labelMutationEnabled
+			// Sync TTLs to the org: set present ones, drop any the org dropped.
+			for _, k := range ttlLabelKeys {
+				if v, ok := dt.TTLs[k]; ok {
+					team.Labels[k] = v
+				} else {
+					delete(team.Labels, k)
+				}
+			}
+
+			// Set fields individually so a pre-existing CR's other spec fields survive.
+			team.Spec.Github = dt.Instance
+			team.Spec.Organization = dt.Org
+			team.Spec.Team = teamName
+			if dt.LDAPProvider != "" {
+				team.Spec.ExternalMemberProvider = &repoguardv1.ExternalMemberProviderConfig{
+					LDAP: &repoguardv1.GenericProvider{
+						ExternalMemberProvider: dt.LDAPProvider,
+						Group:                  teamName,
+					},
+				}
 			}
 			return nil
 		})
@@ -56,8 +88,10 @@ func ReconcileTeams(
 		}
 	}
 
-	if err := deleteStaleTeams(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
-		return fmt.Errorf("failed to delete stale GithubTeams: %w", err)
+	if deleteStale {
+		if err := deleteStaleTeams(ctx, c, targetNamespace, asrName, desiredNames, al); err != nil {
+			return fmt.Errorf("failed to delete stale GithubTeams: %w", err)
+		}
 	}
 
 	return nil

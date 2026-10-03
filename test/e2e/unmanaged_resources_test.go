@@ -214,9 +214,8 @@ func TestUnmanaged_GitHub_CRs(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	// Wait for the managed GithubTeam to appear (proves controller reconciled)
-	// Naming convention: asr-<asrName>-<sanitizedInstance>-<org>
-	managedTeamName := fmt.Sprintf("asr-%s-github-example-com-test-org", asrName)
+	// Wait for the managed GithubTeam to appear (proves controller reconciled).
+	managedTeamName := githubTeamCRName("test-org", asrName)
 	assertGithubTeamExists(t, ctx, mgmtClient, controllerNamespace, managedTeamName)
 
 	// --- Assertion: unmanaged resources must still exist ---

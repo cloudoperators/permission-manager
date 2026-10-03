@@ -23,16 +23,9 @@ import (
 )
 
 // fakeCompileDiscovery is a minimal discovery.DiscoveryInterface for the compile
-// test; only ServerGroups and ServerResourcesForGroupVersion are exercised.
+// test; only ServerResourcesForGroupVersion is exercised.
 type fakeCompileDiscovery struct {
 	discovery.DiscoveryInterface
-}
-
-func (fakeCompileDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
-	return &metav1.APIGroupList{Groups: []metav1.APIGroup{
-		{Name: "", PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "v1"}},
-		{Name: "apps", PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "apps/v1"}},
-	}}, nil
 }
 
 func (fakeCompileDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
@@ -49,7 +42,7 @@ func (fakeCompileDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.A
 func clusterStoreWithGroups(t *testing.T, name string, groups []string) cache.Store {
 	t.Helper()
 	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
-	c := &greenhousev1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace}}
+	c := newCluster(name, true)
 	if groups != nil {
 		c.Status.DiscoveryCache = &greenhousev1alpha1.DiscoveryCache{Groups: groups}
 	}
@@ -81,7 +74,7 @@ func Test_EnsureRbacCompiled_ExcludeResources(t *testing.T) {
 	}
 
 	p := &pmk8s.Phase{
-		ClusterStore: clusterStoreWithGroups(t, testClusterName, []string{"", "apps"}),
+		ClusterStore: clusterStoreWithGroups(t, testClusterName, []string{"v1", "apps/v1"}),
 		AuditLog:     audit.Disabled(),
 		Log:          ctrl.Log.WithName("test"),
 		CCRNParser:   ccrn.NewParser(nil),

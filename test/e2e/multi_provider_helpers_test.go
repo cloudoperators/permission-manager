@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	pmv1 "github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
 
@@ -66,7 +67,7 @@ func expectProviderTargetStatus(t *testing.T, ctx context.Context, c client.Clie
 			return false, fmt.Errorf("failed to get ASR %s/%s: %w", namespace, asrName, err)
 		}
 
-		ps, ok := asr.Status.Providers[provider]
+		ps, ok := asr.Status.Providers[pmmeta.ProviderType(provider)]
 		if !ok {
 			return false, fmt.Errorf("ASR %s has no provider %q in status (providers: %v)", asrName, provider, mapKeys(asr.Status.Providers))
 		}
@@ -90,10 +91,10 @@ func expectProviderTargetStatus(t *testing.T, ctx context.Context, c client.Clie
 }
 
 // mapKeys returns the keys of a map as a slice of strings (for diagnostics).
-func mapKeys(m map[string]pmv1.ProviderStatus) []string {
+func mapKeys(m map[pmmeta.ProviderType]pmmeta.ProviderStatus) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
-		keys = append(keys, k)
+		keys = append(keys, string(k))
 	}
 	return keys
 }
@@ -188,10 +189,14 @@ kind: GithubOrganization
 metadata:
   name: %s
   namespace: %s
+  labels:
+    repo-guard.cloudoperators.dev/github-instance: github.example.com
+    repo-guard.cloudoperators.dev/github-instance-key: ghe
 spec:
+  organization: %s
   organizationOwnerTeams: []
   defaultPublicRepositoryTeams: []
-  defaultPrivateRepositoryTeams: []`, name, namespace)
+  defaultPrivateRepositoryTeams: []`, name, namespace, name)
 
 	cmd := exec.Command("kubectl", "--context", mgmtCtx, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(orgYAML)
