@@ -5,6 +5,7 @@ package github
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -96,23 +97,33 @@ func parseGithubPerms(asr *v1alpha1.ApplicationSpecificRole) []githubPerm {
 // Rules:
 //   - organization CCRNs create a GithubTeam but NO GithubTeamRepository
 //   - repository CCRNs create both a GithubTeam AND aggregate into GithubTeamRepository
-//   - repository_type (wildcard) CCRNs are SKIPPED (handled by org-patching, separate issue)
+//   - repository_type CCRNs are handled by org-patching (no GithubTeamRepository here)
+//   - a wildcard repository CCRN (repo == "*") is reported as an invalid CCRN
 //   - Capability is mapped through capabilityMapping from the ConnectorBinding definition
 //
-// Returns the desired state and a deduplicated list of unmapped capability names.
-func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping map[string]string) (desired *DesiredState, unmappedCaps []string) {
+// Returns the desired state, the deduplicated unmapped capability names, and the deduplicated
+// invalid CCRN ids (wildcard repository CCRNs).
+func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping map[string]string) (desired *DesiredState, unmappedCaps, invalidCCRNs []string) {
 	teams := make(map[teamKey]struct{})
 	repos := make(map[repoKey][]string)
 	unmappedSeen := make(map[string]struct{})
+	invalidSeen := make(map[string]struct{})
 
 	for _, p := range parseGithubPerms(asr) {
 		gh := p.gh
 
-		// repository_type and wildcard repository CCRNs are handled by org patching.
+		// repository_type CCRNs are handled by org patching.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepositoryType {
 			continue
 		}
+		// Wildcard repository CCRN: a misconfig (all-repo access uses repository_type). Report as
+		// InvalidConfig, deduped per org, instead of silently skipping.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepository && gh.Repo == "*" {
+			id := fmt.Sprintf("%s/%s/*", gh.Instance, gh.Org)
+			if _, seen := invalidSeen[id]; !seen {
+				invalidSeen[id] = struct{}{}
+				invalidCCRNs = append(invalidCCRNs, id)
+			}
 			continue
 		}
 
@@ -137,7 +148,7 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 		repos[rk] = append(repos[rk], gh.Repo)
 	}
 
-	return buildResult(teams, repos), unmappedCaps
+	return buildResult(teams, repos), unmappedCaps, invalidCCRNs
 }
 
 // buildResult transforms the collected maps into the final DesiredState. CRName is left

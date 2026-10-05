@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
 )
 
-// resolveDesiredNames fills the CRName of every desired GithubTeam / GithubTeamRepository
-// using the org CR's instance key (repo-guard naming convention). Entries whose
-// GithubOrganization CR is missing are dropped from ds and reported in missingOrgs
-// (as "namespace/name"), so the caller can surface InvalidConfig instead of naming a team
-// it cannot address. A non-not-found list error aborts the pass and is returned.
+// resolveDesiredNames fills each desired entry's CRName from the org CR's instance key. Entries
+// whose GithubOrganization is missing are dropped and reported in missingOrgs ("namespace/name");
+// a non-not-found list error aborts the pass.
 func resolveDesiredNames(ctx context.Context, r *orgResolver, team string, ds *DesiredState) (missingOrgs []string, err error) {
 	missing := make(map[string]struct{})
 
@@ -44,6 +44,10 @@ func resolveDesiredNames(ctx context.Context, r *orgResolver, team string, ds *D
 				continue
 			}
 			return nil, resErr
+		}
+		// admin-ondemand orgs promote "admin" (before naming — permission is part of the CR name).
+		if tr.Permission == repoguardv1.GithubTeamPermissionAdmin && lookup.AdminPermission == repoguardv1.GithubTeamPermissionAdminOndemand {
+			tr.Permission = repoguardv1.GithubTeamPermissionAdminOndemand
 		}
 		tr.CRName = TeamRepoCRName(lookup.InstanceKey, lookup.Org, team, tr.Permission)
 		keptRepos = append(keptRepos, tr)

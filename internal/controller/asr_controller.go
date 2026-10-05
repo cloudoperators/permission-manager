@@ -144,7 +144,7 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 
 	if r.Cfg.Enabled(string(pmmeta.ProviderGithub)) {
 		var errs []error
-		var missingOrgs []string
+		var problems github.GithubConfigProblems
 		var desiredOrgs []client.ObjectKey
 		prunable := true
 		for _, ref := range asr.Spec.ConnectorRefs {
@@ -154,11 +154,11 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 				continue
 			}
 			if cb.Spec.Provider == string(pmmeta.ProviderGithub) {
-				desired, missing, err := r.ghPhase.Reconcile(ctx, asr, cb)
+				desired, probs, err := r.ghPhase.Reconcile(ctx, asr, cb)
 				if err != nil {
 					errs = append(errs, err)
 				}
-				missingOrgs = append(missingOrgs, missing...)
+				problems.Merge(probs)
 				desiredOrgs = append(desiredOrgs, desired...)
 			}
 		}
@@ -170,7 +170,7 @@ func (r *ASRReconciler) EnsureCreated(ctx context.Context, obj lifecycle.Runtime
 			}
 		}
 		// Set once from the aggregate so a healthy binding can't clear another's signal.
-		github.SetOrgConfigValidity(asr, missingOrgs)
+		github.SetGithubConfigValidity(asr, problems)
 		if len(errs) > 0 {
 			return ctrl.Result{}, lifecycle.Failed, errors.Join(errs...)
 		}

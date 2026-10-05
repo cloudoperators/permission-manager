@@ -20,6 +20,7 @@ resources:
   - asr-github-write.yaml
   - asr-k8s-read.yaml
   - asr-k8s-revoke-test.yaml
+  - connector-binding-github.yaml
   - connector-binding-k8s.yaml
   - connector-binding-k8s-revoke-test.yaml
   - functional-role.yaml
