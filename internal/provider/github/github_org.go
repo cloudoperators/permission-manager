@@ -63,7 +63,7 @@ func (p *Phase) reconcileOrganizations(
 	asr *v1alpha1.ApplicationSpecificRole,
 	cbDef *GithubConnectorDefinition,
 	targetNamespace string,
-) (desired []client.ObjectKey, missingOrgs []string, err error) {
+) (desired []client.ObjectKey, problems GithubConfigProblems, err error) {
 
 	log := p.Log.WithValues("asr", asr.Name)
 
@@ -76,6 +76,11 @@ func (p *Phase) reconcileOrganizations(
 
 		mappedPermission, ok := cbDef.CapabilityMapping[p.capability]
 		if !ok {
+			// An unmapped cap on a repository_type CCRN would be dropped silently; surface it.
+			// Other resource types are reported on the team path (provider status).
+			if gh.ResourceType == ccrn.GithubResourceTypeRepositoryType {
+				problems.UnmappedCaps = appendUnique(problems.UnmappedCaps, p.capability)
+			}
 			log.V(1).Info("capability not in mapping, skipping", "capability", p.capability)
 			continue
 		}
@@ -112,9 +117,8 @@ func (p *Phase) reconcileOrganizations(
 		// Non-wildcard repository CCRNs are handled by a different reconciler (team-repository)
 	}
 
-	// Patch each org. A missing org CR is a permanent misconfig (repo-guard owns
-	// creation), surfaced as InvalidConfig rather than a requeue error; the
-	// GithubOrganization create watch re-enqueues the ASR once the CR appears.
+	// Patch each org. A missing org CR is surfaced as InvalidConfig, not a requeue error — the
+	// create watch re-enqueues the ASR once it appears.
 	var errs []error
 	desired = make([]client.ObjectKey, 0, len(orgContribs))
 	for orgName, contrib := range orgContribs {
@@ -124,13 +128,13 @@ func (p *Phase) reconcileOrganizations(
 			continue
 		}
 		if notFound, ok := errors.AsType[*githubOrgNotFoundError](err); ok {
-			missingOrgs = append(missingOrgs, fmt.Sprintf("%s/%s", notFound.namespace, notFound.name))
+			problems.MissingOrgs = append(problems.MissingOrgs, fmt.Sprintf("%s/%s", notFound.namespace, notFound.name))
 			continue
 		}
 		errs = append(errs, err)
 	}
 
-	return desired, missingOrgs, errors.Join(errs...)
+	return desired, problems, errors.Join(errs...)
 }
 
 // PruneStaleOrgs releases this ASR's entries on managed orgs absent from desired. Caller passes
@@ -159,21 +163,60 @@ func (p *Phase) PruneStaleOrgs(ctx context.Context, asr *v1alpha1.ApplicationSpe
 	return nil
 }
 
-// SetOrgConfigValidity sets InvalidConfig (mirrored on Ready) for missing orgs, or clears it
-// when none. Pass orgs missing across all bindings.
-func SetOrgConfigValidity(asr *v1alpha1.ApplicationSpecificRole, missingOrgs []string) {
-	if len(missingOrgs) == 0 {
-		asr.ClearInvalidConfigIfReason(pmmeta.MissingGithubOrganizationReason)
-		// Drop the Ready we set so it is re-derived downstream.
-		if r := asr.GetReadyCondition(); r != nil && r.Reason == string(pmmeta.MissingGithubOrganizationReason) {
-			asr.RemoveCondition(pmmeta.ReadyCondition)
+// githubConfigReasons are the InvalidConfig reasons the github provider owns (set at most one, clear all).
+var githubConfigReasons = []pmmeta.ConditionReason{
+	pmmeta.MissingGithubOrganizationReason,
+	pmmeta.InvalidGithubCCRNReason,
+	pmmeta.UnmappedGithubCapabilityReason,
+}
+
+// SetGithubConfigValidity sets one InvalidConfig condition (mirrored on Ready) for the highest-
+// precedence problem (missing org > invalid CCRN > unmapped capability), or clears it when none.
+// Pass problems aggregated across all bindings.
+func SetGithubConfigValidity(asr *v1alpha1.ApplicationSpecificRole, problems GithubConfigProblems) {
+	reason, msg := githubConfigVerdict(problems)
+	if reason == "" {
+		asr.ClearInvalidConfigIfReason(githubConfigReasons...)
+		// Drop the Ready mirror if it still carries one of our reasons.
+		if r := asr.GetReadyCondition(); r != nil {
+			for _, gr := range githubConfigReasons {
+				if r.Reason == string(gr) {
+					asr.RemoveCondition(pmmeta.ReadyCondition)
+					break
+				}
+			}
 		}
 		return
 	}
-	slices.Sort(missingOrgs)
-	msg := fmt.Sprintf("GithubOrganization %s not found; ensure repo-guard has created it", strings.Join(missingOrgs, ", "))
-	asr.SetCondition(pmmeta.TrueCondition(pmmeta.InvalidConfigCondition, pmmeta.MissingGithubOrganizationReason, msg))
-	asr.SetCondition(pmmeta.FalseCondition(pmmeta.ReadyCondition, pmmeta.MissingGithubOrganizationReason, msg))
+	asr.SetCondition(pmmeta.TrueCondition(pmmeta.InvalidConfigCondition, reason, msg))
+	asr.SetCondition(pmmeta.FalseCondition(pmmeta.ReadyCondition, reason, msg))
+}
+
+// githubConfigVerdict picks the highest-precedence problem and builds its reason + message.
+func githubConfigVerdict(p GithubConfigProblems) (reason pmmeta.ConditionReason, msg string) {
+	switch {
+	case len(p.MissingOrgs) > 0:
+		v := sortedUnique(p.MissingOrgs)
+		return pmmeta.MissingGithubOrganizationReason,
+			fmt.Sprintf("GithubOrganization %s not found; ensure repo-guard has created it", strings.Join(v, ", "))
+	case len(p.InvalidCCRNs) > 0:
+		v := sortedUnique(p.InvalidCCRNs)
+		return pmmeta.InvalidGithubCCRNReason,
+			fmt.Sprintf("wildcard repository CCRN not supported; use a repository_type CCRN for all-repo access (%s)", strings.Join(v, ", "))
+	case len(p.UnmappedCaps) > 0:
+		v := sortedUnique(p.UnmappedCaps)
+		return pmmeta.UnmappedGithubCapabilityReason,
+			fmt.Sprintf("capability %s on a repository_type CCRN is not mapped in the ConnectorBinding", strings.Join(v, ", "))
+	default:
+		return "", ""
+	}
+}
+
+// sortedUnique returns a sorted, de-duplicated copy of in.
+func sortedUnique(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // githubOrgNotFoundError marks a missing GithubOrganization CR; the caller surfaces

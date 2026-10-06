@@ -35,6 +35,10 @@ const (
 	MissingGithubOrganizationReason ConditionReason = "MissingGithubOrganization"
 	DiscoveryUnavailableReason      ConditionReason = "DiscoveryUnavailable"
 
+	// github-specific so the k8s phase can't clear them (it clears the generic reasons).
+	InvalidGithubCCRNReason        ConditionReason = "InvalidGithubCCRN"
+	UnmappedGithubCapabilityReason ConditionReason = "UnmappedGithubCapability"
+
 	ProvisioningSucceededReason ConditionReason = "ProvisioningSucceeded"
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"
 	PartialProvisioningReason   ConditionReason = "PartialProvisioning"

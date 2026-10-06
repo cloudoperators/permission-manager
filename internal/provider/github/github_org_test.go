@@ -216,3 +216,49 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 		t.Errorf("expected target github-example-com/my-org, got %+v", ps.Targets)
 	}
 }
+
+// TestPhaseReconcile_RepositoryType: a repository_type CCRN flows through Reconcile to org patching,
+// creates no team/repo CR, and sets provider status, with no config problems.
+func TestPhaseReconcile_RepositoryType(t *testing.T) {
+	mapping := map[string]string{"WRITE": "push"}
+	p, c := newPhase(newGithubOrgWithMeta("test-ns", "my-org", "github.example.com", "ghe", "", "admin", "my-org"))
+	asr := newASR("asr-rt", "team-rt", []v1alpha1.Permission{perm(repoTypeCCRN("public"), "WRITE")})
+
+	_, problems, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping))
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(problems.MissingOrgs) != 0 || len(problems.InvalidCCRNs) != 0 || len(problems.UnmappedCaps) != 0 {
+		t.Fatalf("unexpected config problems: %+v", problems)
+	}
+
+	// No team / team-repository CRs for a repository_type CCRN.
+	var teams repoguardv1.GithubTeamList
+	if err := c.List(context.Background(), &teams, client.InNamespace("test-ns")); err != nil {
+		t.Fatalf("list teams: %v", err)
+	}
+	if len(teams.Items) != 0 {
+		t.Errorf("expected 0 teams, got %d", len(teams.Items))
+	}
+	var repos repoguardv1.GithubTeamRepositoryList
+	if err := c.List(context.Background(), &repos, client.InNamespace("test-ns")); err != nil {
+		t.Fatalf("list team repositories: %v", err)
+	}
+	if len(repos.Items) != 0 {
+		t.Errorf("expected 0 team repositories, got %d", len(repos.Items))
+	}
+
+	// The org's default public teams were patched.
+	var org repoguardv1.GithubOrganization
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &org); err != nil {
+		t.Fatalf("get org: %v", err)
+	}
+	if len(org.Spec.DefaultPublicRepositoryTeams) != 1 || org.Spec.DefaultPublicRepositoryTeams[0].Team != "team-rt" {
+		t.Errorf("default public teams = %+v, want one entry for team-rt", org.Spec.DefaultPublicRepositoryTeams)
+	}
+
+	// Provider status was written on the ASR.
+	if pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub) == nil {
+		t.Error("expected github provider status on the ASR")
+	}
+}

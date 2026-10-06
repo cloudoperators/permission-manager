@@ -37,26 +37,41 @@ func New(c client.Client, al *audit.Logger, log logr.Logger) *Phase {
 	}
 }
 
-// Reconcile runs the github provider create/update logic for one ConnectorBinding.
-// Returns this binding's missing org CRs so the caller aggregates them across bindings.
-func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) (desiredOrgs []client.ObjectKey, missingOrgs []string, err error) {
+// GithubConfigProblems collects per-binding ASR misconfigurations; the controller aggregates them
+// across bindings for one SetGithubConfigValidity verdict.
+type GithubConfigProblems struct {
+	MissingOrgs  []string // "namespace/name" of GithubOrganization CRs not found
+	InvalidCCRNs []string // unsupported CCRN inputs, e.g. wildcard repository
+	UnmappedCaps []string // repository_type caps absent from capabilityMapping
+}
+
+// Merge appends another binding's problems in place.
+func (p *GithubConfigProblems) Merge(o GithubConfigProblems) {
+	p.MissingOrgs = append(p.MissingOrgs, o.MissingOrgs...)
+	p.InvalidCCRNs = append(p.InvalidCCRNs, o.InvalidCCRNs...)
+	p.UnmappedCaps = append(p.UnmappedCaps, o.UnmappedCaps...)
+}
+
+// Reconcile runs the github create/update logic for one ConnectorBinding, returning its desired
+// org keys and config problems for the caller to aggregate across bindings.
+func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, cb *v1alpha1.ConnectorBinding) (desiredOrgs []client.ObjectKey, problems GithubConfigProblems, err error) {
 	log := p.Log.WithValues("asr", asr.Name, "connectorBinding", cb.Name)
 
 	advConfig, err := ParseAdvancedConfig(asr.Spec.AdvancedConfig)
 	if err != nil {
 		log.Error(err, "failed to parse advancedConfig")
-		return nil, nil, fmt.Errorf("failed to parse advancedConfig: %w", err)
+		return nil, GithubConfigProblems{}, fmt.Errorf("failed to parse advancedConfig: %w", err)
 	}
 
 	cbDef, err := ParseConnectorDefinition(cb.Spec.Definition)
 	if err != nil {
 		log.Error(err, "failed to parse ConnectorBinding definition")
-		return nil, nil, fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
+		return nil, GithubConfigProblems{}, fmt.Errorf("failed to parse ConnectorBinding definition: %w", err)
 	}
 
 	targetNamespace := ResolveTargetNamespace(advConfig, cbDef, asr)
 
-	desired, unmappedCaps := BuildDesiredState(asr, cbDef.CapabilityMapping)
+	desired, unmappedCaps, invalidCCRNs := BuildDesiredState(asr, cbDef.CapabilityMapping)
 	for _, capName := range unmappedCaps {
 		log.Info("unmapped capability in ConnectorBinding capabilityMapping",
 			"capability", capName,
@@ -69,7 +84,7 @@ func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecific
 	resolver := newOrgResolver(p.Client, targetNamespace, log)
 	missingFromNaming, err := resolveDesiredNames(ctx, resolver, asr.Spec.Name, desired)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve GithubTeam names: %w", err)
+		return nil, GithubConfigProblems{}, fmt.Errorf("failed to resolve GithubTeam names: %w", err)
 	}
 
 	log.Info("reconciling GitHub resources",
@@ -92,19 +107,23 @@ func (p *Phase) Reconcile(ctx context.Context, asr *v1alpha1.ApplicationSpecific
 		errs = append(errs, fmt.Errorf("failed to reconcile GithubTeamRepositories: %w", err))
 	}
 
-	desiredOrgs, missingFromOrgs, err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace)
+	desiredOrgs, orgProblems, err := p.reconcileOrganizations(ctx, asr, cbDef, targetNamespace)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	// Merge missing orgs from the naming and org-patch paths; the caller aggregates
-	// across bindings and sets InvalidConfig once.
-	missingOrgs = mergeMissingOrgs(missingFromNaming, missingFromOrgs)
+	// This binding's problems; the caller aggregates across bindings. Missing orgs come from
+	// both the naming and org-patch paths.
+	problems = GithubConfigProblems{
+		MissingOrgs:  mergeMissingOrgs(missingFromNaming, orgProblems.MissingOrgs),
+		InvalidCCRNs: invalidCCRNs,
+		UnmappedCaps: orgProblems.UnmappedCaps,
+	}
 
 	ps := computeProviderStatus(ctx, p.Client, asr, desired, unmappedCaps)
 	asr.Status.Providers = pmmeta.SetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub, ps)
 
-	return desiredOrgs, missingOrgs, errors.Join(errs...)
+	return desiredOrgs, problems, errors.Join(errs...)
 }
 
 // ReconcileDelete runs the github provider cleanup logic for the ASR.
