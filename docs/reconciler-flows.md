@@ -22,7 +22,8 @@ to the enabled providers.
   there is no separate greenhouse-teams provider and no standalone
   status-aggregator controller.
 - **Provider routing** is decided two ways: globally by
-  `r.Cfg.Enabled("kubernetes" | "github")` (the `pm-provider-cm` ConfigMap), and
+  `r.Cfg.Enabled("kubernetes" | "github")` (the provider feature-gate ConfigMap,
+  `permission-manager-provider-cm` by default, set via `--provider-config-name`), and
   per ASR by each referenced ConnectorBinding's `spec.provider`.
 - **One shared finalizer** governs deletion for the whole ASR:
   `pm.cloudoperators.dev/cleanup`. Providers do not each hold their own finalizer.
@@ -228,10 +229,11 @@ per-namespace rules into `Role pm-‹asr›` in that namespace. This is the desi
 chosen in [ADR-015](adr/015-scope-separated-clusterroles.md). Three failure
 accumulators are set here and each stamps `InvalidConfig=True` + `Ready=False`
 directly in this subroutine: capabilities not found in any binding
-(`unmappedCaps` -> reason `UnknownCapability`), cluster patterns that match
-nothing (`unmatchedClusterPatterns` -> `NoTargetsResolved`), and clusters whose
-deny-driven rules could not be expanded because discovery was unavailable
-(`discoveryDegraded` -> `DiscoveryUnavailable`). The subroutine still
+(`unmappedCaps` -> reason `UnknownCapability`); nothing compiled at all because
+every referenced cluster pattern matched no cluster or only not-ready ones
+(`unmatchedClusterPatterns` / not-ready clusters -> reason `NoTargetsResolved`);
+and clusters whose deny-driven rules could not be expanded because discovery was
+unavailable (`discoveryDegraded` -> `DiscoveryUnavailable`). The subroutine still
 `Continue`s.
 
 > **Deny-driven capabilities (`excludeResources`).** A capability rule may carry
@@ -261,13 +263,13 @@ immutable, so a roleRef change forces delete-and-recreate. It writes the
 is skipped and any stale `Provisioned` condition is removed.
 
 **`EnsureProviderStatus`** ([`ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go))
-is terminal. If any of `unmappedCaps`, `invalidCCRNs`, or
-`unmatchedClusterPatterns` is non-empty it writes a degraded
-`status.providers.kubernetes` in place of the per-target view (note this fold
-does not include `discoveryDegraded`, which already set `InvalidConfig` in the
-compile step); otherwise it writes the per-cluster target statuses. It then
-calls `asr.CalculateReady()` and aggregates provision/orphan errors; a non-nil
-aggregate `Break`s the chain.
+is terminal. If either `unmappedCaps` or `invalidCCRNs` is non-empty it writes a
+degraded `status.providers.kubernetes` in place of the per-target view (note this
+fold is driven only by those two accumulators: `unmatchedClusterPatterns` surface
+as per-target `Error` entries instead, and `discoveryDegraded` already set
+`InvalidConfig` in the compile step); otherwise it writes the per-cluster target
+statuses. It then calls `asr.CalculateReady()` and aggregates provision/orphan
+errors; a non-nil aggregate `Break`s the chain.
 
 ---
 
