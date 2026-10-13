@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Example ConnectorBinding for the GitHub provider. asr-github-write.yaml references it by
+# metadata.name via connectorRefs. capabilityMapping keys match the ASR's (uppercase) capabilities.
+# Keep ADMIN mapped to admin; PM resolves it to admin-ondemand on the CR when the org's
+# admin-permission label says so (don't put admin-ondemand in the mapping).
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ConnectorBinding
+metadata:
+  name: github-connector
+spec:
+  name: GitHub Production
+  provider: github
+  definition:
+    # Namespace for the generated GithubTeam/GithubTeamRepository CRs; override per-ASR via advancedConfig.
+    defaultTargetNamespace: github-teams
+    capabilityMapping:
+      READ: pull
+      WRITE: push
+      ADMIN: admin

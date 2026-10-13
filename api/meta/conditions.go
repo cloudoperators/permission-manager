@@ -28,11 +28,16 @@ const (
 
 // Condition reasons are reused across types and providers.
 const (
-	InvalidCCRNReason             ConditionReason = "InvalidCCRN"
-	UnknownCapabilityReason       ConditionReason = "UnknownCapability"
-	NoTargetsResolvedReason       ConditionReason = "NoTargetsResolved"
-	MissingConnectorBindingReason ConditionReason = "MissingConnectorBinding"
-	DiscoveryUnavailableReason    ConditionReason = "DiscoveryUnavailable"
+	InvalidCCRNReason               ConditionReason = "InvalidCCRN"
+	UnknownCapabilityReason         ConditionReason = "UnknownCapability"
+	NoTargetsResolvedReason         ConditionReason = "NoTargetsResolved"
+	MissingConnectorBindingReason   ConditionReason = "MissingConnectorBinding"
+	MissingGithubOrganizationReason ConditionReason = "MissingGithubOrganization"
+	DiscoveryUnavailableReason      ConditionReason = "DiscoveryUnavailable"
+
+	// github-specific so the k8s phase can't clear them (it clears the generic reasons).
+	InvalidGithubCCRNReason        ConditionReason = "InvalidGithubCCRN"
+	UnmappedGithubCapabilityReason ConditionReason = "UnmappedGithubCapability"
 
 	ProvisioningSucceededReason ConditionReason = "ProvisioningSucceeded"
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"

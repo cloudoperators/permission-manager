@@ -5,6 +5,7 @@ package github
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -26,6 +27,11 @@ type DesiredTeam struct {
 	Org string
 	// CRName is the computed Kubernetes CR name.
 	CRName string
+	// LDAPProvider is the org's default LDAP provider (empty if unset); it becomes the
+	// team's spec.externalMemberProvider.ldap.provider.
+	LDAPProvider string
+	// TTLs are the job-retention labels copied verbatim from the GithubOrganization CR.
+	TTLs map[string]string
 }
 
 // DesiredTeamRepo represents the desired state of a GithubTeamRepository CR.
@@ -91,23 +97,33 @@ func parseGithubPerms(asr *v1alpha1.ApplicationSpecificRole) []githubPerm {
 // Rules:
 //   - organization CCRNs create a GithubTeam but NO GithubTeamRepository
 //   - repository CCRNs create both a GithubTeam AND aggregate into GithubTeamRepository
-//   - repository_type (wildcard) CCRNs are SKIPPED (handled by org-patching, separate issue)
+//   - repository_type CCRNs are handled by org-patching (no GithubTeamRepository here)
+//   - a wildcard repository CCRN (repo == "*") is reported as an invalid CCRN
 //   - Capability is mapped through capabilityMapping from the ConnectorBinding definition
 //
-// Returns the desired state and a deduplicated list of unmapped capability names.
-func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping map[string]string) (desired *DesiredState, unmappedCaps []string) {
+// Returns the desired state, the deduplicated unmapped capability names, and the deduplicated
+// invalid CCRN ids (wildcard repository CCRNs).
+func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping map[string]string) (desired *DesiredState, unmappedCaps, invalidCCRNs []string) {
 	teams := make(map[teamKey]struct{})
 	repos := make(map[repoKey][]string)
 	unmappedSeen := make(map[string]struct{})
+	invalidSeen := make(map[string]struct{})
 
 	for _, p := range parseGithubPerms(asr) {
 		gh := p.gh
 
-		// repository_type and wildcard repository CCRNs are handled by org patching.
+		// repository_type CCRNs are handled by org patching.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepositoryType {
 			continue
 		}
+		// Wildcard repository CCRN: a misconfig (all-repo access uses repository_type). Report as
+		// InvalidConfig, deduped per org, instead of silently skipping.
 		if gh.ResourceType == ccrn.GithubResourceTypeRepository && gh.Repo == "*" {
+			id := fmt.Sprintf("%s/%s/*", gh.Instance, gh.Org)
+			if _, seen := invalidSeen[id]; !seen {
+				invalidSeen[id] = struct{}{}
+				invalidCCRNs = append(invalidCCRNs, id)
+			}
 			continue
 		}
 
@@ -132,11 +148,12 @@ func BuildDesiredState(asr *v1alpha1.ApplicationSpecificRole, capabilityMapping 
 		repos[rk] = append(repos[rk], gh.Repo)
 	}
 
-	return buildResult(asr.Name, teams, repos), unmappedCaps
+	return buildResult(teams, repos), unmappedCaps, invalidCCRNs
 }
 
-// buildResult transforms the collected maps into the final DesiredState.
-func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
+// buildResult transforms the collected maps into the final DesiredState. CRName is left
+// empty here; resolveDesiredNames fills it once the org CR (and its instance key) is known.
+func buildResult(teams map[teamKey]struct{}, repos map[repoKey][]string) *DesiredState {
 	state := &DesiredState{}
 
 	// Build teams (sorted for deterministic output)
@@ -155,7 +172,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 		state.Teams = append(state.Teams, DesiredTeam{
 			Instance: tk.instance,
 			Org:      tk.org,
-			CRName:   TeamCRName(asrName, tk.instance, tk.org),
 		})
 	}
 
@@ -184,7 +200,6 @@ func buildResult(asrName string, teams map[teamKey]struct{}, repos map[repoKey][
 			Org:          rk.org,
 			Permission:   rk.permission,
 			Repositories: repositories,
-			CRName:       TeamRepoCRName(asrName, rk.instance, rk.org, rk.permission),
 		})
 	}
 
@@ -208,4 +223,12 @@ func BuildLabels(asrName, asrNamespace string) map[string]string {
 		pmapis.LabelSourceASR:       asrName,
 		pmapis.LabelSourceNamespace: asrNamespace,
 	}
+}
+
+// mergeOwnershipLabels sets PM's ownership labels on dst in place, preserving unrelated ones.
+// On converge, PM claims the CR (managed-by=github) so the status/deletion lookups still find it.
+func mergeOwnershipLabels(dst map[string]string, asrName, asrNamespace string) {
+	dst[pmapis.LabelManagedByKey] = pmapis.ManagedByGithub
+	dst[pmapis.LabelSourceASR] = asrName
+	dst[pmapis.LabelSourceNamespace] = asrNamespace
 }

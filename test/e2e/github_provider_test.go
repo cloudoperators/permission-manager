@@ -180,11 +180,11 @@ func assertGithubOrgHasPublicTeam(t *testing.T, ctx context.Context, c client.Cl
 			if !ok {
 				continue
 			}
-			if m["name"] == teamName && m["permission"] == permission {
+			if m["team"] == teamName && m["permission"] == permission {
 				return true, nil
 			}
 		}
-		return false, fmt.Errorf("defaultPublicRepositoryTeams does not contain {name:%q, permission:%q}", teamName, permission)
+		return false, fmt.Errorf("defaultPublicRepositoryTeams does not contain {team:%q, permission:%q}", teamName, permission)
 	})
 	if err != nil {
 		t.Fatalf("assertGithubOrgHasPublicTeam(%s/%s, team=%q, perm=%q): %v", namespace, orgName, teamName, permission, err)
@@ -216,14 +216,50 @@ func assertGithubOrgHasPrivateTeam(t *testing.T, ctx context.Context, c client.C
 			if !ok {
 				continue
 			}
-			if m["name"] == teamName && m["permission"] == permission {
+			if m["team"] == teamName && m["permission"] == permission {
 				return true, nil
 			}
 		}
-		return false, fmt.Errorf("defaultPrivateRepositoryTeams does not contain {name:%q, permission:%q}", teamName, permission)
+		return false, fmt.Errorf("defaultPrivateRepositoryTeams does not contain {team:%q, permission:%q}", teamName, permission)
 	})
 	if err != nil {
 		t.Fatalf("assertGithubOrgHasPrivateTeam(%s/%s, team=%q, perm=%q): %v", namespace, orgName, teamName, permission, err)
+	}
+}
+
+// assertGithubOrgHasInternalTeam polls until GithubOrganization has the team in defaultInternalRepositoryTeams.
+func assertGithubOrgHasInternalTeam(t *testing.T, ctx context.Context, c client.Client, namespace, orgName, teamName, permission string) {
+	t.Helper()
+
+	err := pollUntil(t, ctx, defaultAssertTimeout, assertPollInterval, func() (bool, error) {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "repo-guard.cloudoperators.dev",
+			Version: "v1",
+			Kind:    "GithubOrganization",
+		})
+		key := types.NamespacedName{Namespace: namespace, Name: orgName}
+		if err := c.Get(ctx, key, obj); err != nil {
+			return false, fmt.Errorf("failed to get GithubOrganization: %v", err)
+		}
+
+		teams, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaultInternalRepositoryTeams")
+		if err != nil || !found {
+			return false, fmt.Errorf("missing spec.defaultInternalRepositoryTeams")
+		}
+		for _, entry := range teams {
+			m, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["team"] == teamName && m["permission"] == permission {
+				return true, nil
+			}
+		}
+		return false, fmt.Errorf("defaultInternalRepositoryTeams does not contain {team:%q, permission:%q}", teamName, permission)
+	})
+	if err != nil {
+		t.Fatalf("assertGithubOrgHasInternalTeam(%s/%s, team=%q, perm=%q): %v", namespace, orgName, teamName, permission, err)
 	}
 }
 
@@ -251,7 +287,7 @@ func assertGithubOrgLacksPublicTeam(t *testing.T, ctx context.Context, c client.
 			if !ok {
 				continue
 			}
-			if m["name"] == teamName {
+			if m["team"] == teamName {
 				found = true
 				break
 			}
@@ -290,7 +326,7 @@ func assertGithubOrgLacksPrivateTeam(t *testing.T, ctx context.Context, c client
 			if !ok {
 				continue
 			}
-			if m["name"] == teamName {
+			if m["team"] == teamName {
 				found = true
 				break
 			}
@@ -408,8 +444,8 @@ func TestGithub_Basic_TeamAndRepoCreation(t *testing.T) {
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
 	// Expected CR names
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-pull", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "pull")
 
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, teamRepoCRName)
@@ -433,7 +469,7 @@ func TestGithub_Basic_TwoReposSameCapabilityAggregated(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, teamRepoCRName)
 	assertGithubTeamRepoContains(t, ctx, c, controllerNamespace, teamRepoCRName, "repo-a")
@@ -457,8 +493,8 @@ func TestGithub_Basic_TwoReposDifferentCapabilities(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	pullCRName := fmt.Sprintf("asr-%s-%s-%s-pull", asrName, testGithubInstanceSanitized, testGithubOrg)
-	pushCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	pullCRName := githubTeamRepoCRName(testGithubOrg, asrName, "pull")
+	pushCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, pullCRName)
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, pushCRName)
@@ -486,8 +522,8 @@ func TestGithub_Basic_TwoOrgs(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	team1CRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
-	team2CRName := fmt.Sprintf("asr-%s-%s-e2e-org-2", asrName, testGithubInstanceSanitized)
+	team1CRName := githubTeamCRName(testGithubOrg, asrName)
+	team2CRName := githubTeamCRName("e2e-org-2", asrName)
 
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, team1CRName)
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, team2CRName)
@@ -531,6 +567,23 @@ func TestGithub_Wildcard_PrivateRepoType(t *testing.T) {
 	assertGithubOrgHasPrivateTeam(t, ctx, c, controllerNamespace, testGithubOrg, asrName, "push")
 }
 
+// TestGithub_Wildcard_InternalRepoType verifies that a repository_type CCRN with
+// visibility=internal patches the GithubOrg defaultInternalRepositoryTeams.
+func TestGithub_Wildcard_InternalRepoType(t *testing.T) {
+	t.Parallel()
+	const asrName = "gh-wildcard-internal"
+	ctx := context.Background()
+	c := crClientForCluster(t, mgmtClusterName)
+
+	resource := fmt.Sprintf("repository_type.github.ccrn.cloudoperators.dev/v1/%s/%s/internal", testGithubInstance, testGithubOrg)
+	createASR(t, asrName, []string{"test-github"}, []map[string]string{
+		{"resource": resource, "capability": "write"},
+	})
+	t.Cleanup(func() { deleteASR(t, asrName) })
+
+	assertGithubOrgHasInternalTeam(t, ctx, c, controllerNamespace, testGithubOrg, asrName, "push")
+}
+
 // TestGithub_Wildcard_AllVisibility verifies that a repository_type CCRN with
 // visibility=* patches both public and private repository teams.
 func TestGithub_Wildcard_AllVisibility(t *testing.T) {
@@ -547,6 +600,7 @@ func TestGithub_Wildcard_AllVisibility(t *testing.T) {
 
 	assertGithubOrgHasPublicTeam(t, ctx, c, controllerNamespace, testGithubOrg, asrName, "admin")
 	assertGithubOrgHasPrivateTeam(t, ctx, c, controllerNamespace, testGithubOrg, asrName, "admin")
+	assertGithubOrgHasInternalTeam(t, ctx, c, controllerNamespace, testGithubOrg, asrName, "admin")
 }
 
 // TestGithub_Org_AdminCapability verifies that an organization CCRN with admin
@@ -605,7 +659,7 @@ func TestGithub_Update_AddRepoPermission(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, teamRepoCRName)
 	assertGithubTeamRepoContains(t, ctx, c, controllerNamespace, teamRepoCRName, "repo-first")
 
@@ -636,7 +690,7 @@ func TestGithub_Update_RemoveRepoPermission(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 	assertGithubTeamRepoRepoCount(t, ctx, c, controllerNamespace, teamRepoCRName, 2)
 
 	// Remove the second repo
@@ -662,8 +716,8 @@ func TestGithub_Update_ChangeCapability(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	pullCRName := fmt.Sprintf("asr-%s-%s-%s-pull", asrName, testGithubInstanceSanitized, testGithubOrg)
-	pushCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	pullCRName := githubTeamRepoCRName(testGithubOrg, asrName, "pull")
+	pushCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, pullCRName)
 
@@ -693,8 +747,8 @@ func TestGithub_Deletion_ASRDeleteCleansUpCRs(t *testing.T) {
 		{"resource": resource, "capability": "write"},
 	})
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "push")
 
 	// Wait for CRs to appear
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
@@ -750,7 +804,7 @@ func TestGithub_CB_NonGithubCBOnly(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 
 	// Wait long enough for controller to have acted
 	time.Sleep(15 * time.Second)
@@ -773,7 +827,7 @@ func TestGithub_CB_AddGithubCBLater(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 
 	// Clean up any stale GithubTeam from a prior run (deleteASR bypasses controller cleanup).
 	mgmtCtx := "kind-" + mgmtClusterName
@@ -807,7 +861,7 @@ func TestGithub_CB_RemoveGithubCB(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 
 	// Wait for CRs to appear
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
@@ -870,7 +924,7 @@ func TestGithub_Status_TeamComplete(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
 
 	// Patch the GithubTeam status to "complete"
@@ -895,7 +949,7 @@ func TestGithub_Status_TeamFailed(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
 
 	// Patch the GithubTeam status to "failed"
@@ -920,7 +974,7 @@ func TestGithub_Status_TeamRatelimited(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, teamCRName)
 
 	// Patch the GithubTeam status to "ratelimited"
@@ -951,9 +1005,9 @@ func TestGithub_Status_UnmappedCapability(t *testing.T) {
 	// Wait for reconciliation to complete
 	time.Sleep(10 * time.Second)
 
-	teamRepoCRName := fmt.Sprintf("asr-%s-%s-%s-", asrName, testGithubInstanceSanitized, testGithubOrg)
-	// No team repo should exist with any permission suffix
-	assertGithubTeamRepoAbsent(t, ctx, c, controllerNamespace, teamRepoCRName+"delete")
+	// No team repo should exist for the unmapped "delete" capability.
+	teamRepoCRName := githubTeamRepoCRName(testGithubOrg, asrName, "delete")
+	assertGithubTeamRepoAbsent(t, ctx, c, controllerNamespace, teamRepoCRName)
 
 	// Since the capability is unmapped, no team will be created either (repo CCRN requires
 	// a valid mapped capability to contribute to team creation via desired state)
@@ -984,7 +1038,7 @@ func TestGithub_Namespace_AdvancedConfigOverride(t *testing.T) {
 	}, advancedConfig)
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 	assertGithubTeamExists(t, ctx, c, targetNS, teamCRName)
 }
 
@@ -1021,7 +1075,7 @@ func TestGithub_Namespace_CBDefault(t *testing.T) {
 	})
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 	assertGithubTeamExists(t, ctx, c, targetNS, teamCRName)
 }
 
@@ -1065,7 +1119,7 @@ func TestGithub_Namespace_AdvancedConfigOverridesCBDefault(t *testing.T) {
 	}, advancedConfig)
 	t.Cleanup(func() { deleteASR(t, asrName) })
 
-	teamCRName := fmt.Sprintf("asr-%s-%s-%s", asrName, testGithubInstanceSanitized, testGithubOrg)
+	teamCRName := githubTeamCRName(testGithubOrg, asrName)
 
 	// Should be in the advancedConfig namespace, NOT the CB default
 	assertGithubTeamExists(t, ctx, c, advNS, teamCRName)
@@ -1102,15 +1156,15 @@ func TestGithub_MultiASR_SameOrgSeparateCRs(t *testing.T) {
 	t.Cleanup(func() { deleteASR(t, asrName2) })
 
 	// Each ASR gets its own GithubTeam CR
-	team1CRName := fmt.Sprintf("asr-%s-%s-%s", asrName1, testGithubInstanceSanitized, testGithubOrg)
-	team2CRName := fmt.Sprintf("asr-%s-%s-%s", asrName2, testGithubInstanceSanitized, testGithubOrg)
+	team1CRName := githubTeamCRName(testGithubOrg, asrName1)
+	team2CRName := githubTeamCRName(testGithubOrg, asrName2)
 
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, team1CRName)
 	assertGithubTeamExists(t, ctx, c, controllerNamespace, team2CRName)
 
 	// Each ASR gets its own GithubTeamRepository
-	teamRepo1CRName := fmt.Sprintf("asr-%s-%s-%s-pull", asrName1, testGithubInstanceSanitized, testGithubOrg)
-	teamRepo2CRName := fmt.Sprintf("asr-%s-%s-%s-push", asrName2, testGithubInstanceSanitized, testGithubOrg)
+	teamRepo1CRName := githubTeamRepoCRName(testGithubOrg, asrName1, "pull")
+	teamRepo2CRName := githubTeamRepoCRName(testGithubOrg, asrName2, "push")
 
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, teamRepo1CRName)
 	assertGithubTeamRepoExists(t, ctx, c, controllerNamespace, teamRepo2CRName)

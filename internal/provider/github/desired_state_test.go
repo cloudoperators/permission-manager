@@ -25,6 +25,7 @@ func TestBuildDesiredState(t *testing.T) {
 		wantTeams    []string // formatted as "instance/org"
 		wantRepos    []wantRepo
 		wantUnmapped []string
+		wantInvalid  []string // wildcard repository CCRN ids
 	}{
 		{
 			name: "repository CCRNs aggregate and sort under the mapped permission",
@@ -43,12 +44,22 @@ func TestBuildDesiredState(t *testing.T) {
 			wantTeams: []string{"github.example.com/cc"},
 		},
 		{
-			name: "repository_type and wildcard repository are skipped",
+			name: "repository_type is skipped; wildcard repository is reported as invalid",
 			perms: []v1alpha1.Permission{
 				perm("urn:ccrn:repository_type.github.ccrn.cloudoperators.dev/v1/github.example.com/cc/internal", "WRITE"),
 				perm(repoCCRN("github.example.com", "cc", "*"), "WRITE"),
 			},
-			mapping: mapping,
+			mapping:     mapping,
+			wantInvalid: []string{"github.example.com/cc/*"},
+		},
+		{
+			name: "duplicate wildcard repository CCRNs are reported once",
+			perms: []v1alpha1.Permission{
+				perm(repoCCRN("github.example.com", "cc", "*"), "WRITE"),
+				perm(repoCCRN("github.example.com", "cc", "*"), "READ"),
+			},
+			mapping:     mapping,
+			wantInvalid: []string{"github.example.com/cc/*"},
 		},
 		{
 			name: "distinct capabilities produce one team repository each",
@@ -127,7 +138,7 @@ func TestBuildDesiredState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			state, unmapped := BuildDesiredState(newASR("asr", "SPEC", tt.perms), tt.mapping)
+			state, unmapped, invalid := BuildDesiredState(newASR("asr", "SPEC", tt.perms), tt.mapping)
 
 			var gotTeams []string
 			for _, team := range state.Teams {
@@ -147,6 +158,10 @@ func TestBuildDesiredState(t *testing.T) {
 
 			if !reflect.DeepEqual(unmapped, tt.wantUnmapped) {
 				t.Errorf("unmapped = %v, want %v", unmapped, tt.wantUnmapped)
+			}
+
+			if !reflect.DeepEqual(invalid, tt.wantInvalid) {
+				t.Errorf("invalid = %v, want %v", invalid, tt.wantInvalid)
 			}
 		})
 	}

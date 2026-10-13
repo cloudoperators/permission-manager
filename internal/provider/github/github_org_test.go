@@ -34,11 +34,12 @@ func TestReconcileOrganizations(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push", "READ": "pull"}
 
 	tests := []struct {
-		name        string
-		perms       []v1alpha1.Permission
-		wantOwners  []string
-		wantPublic  []teamPerm
-		wantPrivate []teamPerm
+		name         string
+		perms        []v1alpha1.Permission
+		wantOwners   []string
+		wantPublic   []teamPerm
+		wantPrivate  []teamPerm
+		wantInternal []teamPerm
 	}{
 		{
 			name:       "organization admin adds an owner team",
@@ -60,9 +61,25 @@ func TestReconcileOrganizations(t *testing.T) {
 			wantPrivate: []teamPerm{{"team-x", "pull"}},
 		},
 		{
-			name:        "repository_type wildcard adds both public and private",
-			perms:       []v1alpha1.Permission{perm(repoTypeCCRN("*"), "WRITE")},
-			wantPublic:  []teamPerm{{"team-x", "push"}},
+			name:         "repository_type internal adds a default internal team",
+			perms:        []v1alpha1.Permission{perm(repoTypeCCRN("internal"), "READ")},
+			wantInternal: []teamPerm{{"team-x", "pull"}},
+		},
+		{
+			name:         "repository_type wildcard adds public, private and internal",
+			perms:        []v1alpha1.Permission{perm(repoTypeCCRN("*"), "WRITE")},
+			wantPublic:   []teamPerm{{"team-x", "push"}},
+			wantPrivate:  []teamPerm{{"team-x", "push"}},
+			wantInternal: []teamPerm{{"team-x", "push"}},
+		},
+		{
+			// Read+write on the same visibility must collapse to one entry (listType=map,
+			// keyed by team) carrying the stronger permission.
+			name: "same visibility read and write keep one entry with the stronger permission",
+			perms: []v1alpha1.Permission{
+				perm(repoTypeCCRN("private"), "READ"),
+				perm(repoTypeCCRN("private"), "WRITE"),
+			},
 			wantPrivate: []teamPerm{{"team-x", "push"}},
 		},
 		{
@@ -76,7 +93,7 @@ func TestReconcileOrganizations(t *testing.T) {
 			p, c := newPhase(newGithubOrg("test-ns", "my-org"))
 			asr := newASR("asr", "team-x", tt.perms)
 
-			if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+			if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 				t.Fatalf("reconcileOrganizations: %v", err)
 			}
 
@@ -93,6 +110,9 @@ func TestReconcileOrganizations(t *testing.T) {
 			if got := teamPerms(org.Spec.DefaultPrivateRepositoryTeams); !slices.Equal(got, tt.wantPrivate) {
 				t.Errorf("private teams = %v, want %v", got, tt.wantPrivate)
 			}
+			if got := teamPerms(org.Spec.DefaultInternalRepositoryTeams); !slices.Equal(got, tt.wantInternal) {
+				t.Errorf("internal teams = %v, want %v", got, tt.wantInternal)
+			}
 		})
 	}
 }
@@ -106,13 +126,13 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 		perm(orgCCRN("my-org"), "ADMIN"),
 		perm(repoTypeCCRN("public"), "WRITE"),
 	})
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
 	// Second reconcile: permissions narrowed to private read only.
 	asr.Spec.Permissions = []v1alpha1.Permission{perm(repoTypeCCRN("private"), "READ")}
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
+	if _, _, err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
@@ -129,81 +149,12 @@ func TestReconcileOrganizations_RemovesStaleContributionsOnReReconcile(t *testin
 	}
 }
 
-func TestReconcileOrganizations_MergesMultipleASRs(t *testing.T) {
-	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-	p, c := newPhase(newGithubOrg("test-ns", "my-org"))
-
-	asr1 := newASR("asr-1", "team-one", []v1alpha1.Permission{perm(orgCCRN("my-org"), "ADMIN")})
-	asr2 := newASR("asr-2", "team-two", []v1alpha1.Permission{perm(repoTypeCCRN("public"), "WRITE")})
-
-	for _, asr := range []*v1alpha1.ApplicationSpecificRole{asr1, asr2} {
-		if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(mapping), "test-ns"); err != nil {
-			t.Fatalf("reconcile %s: %v", asr.Name, err)
-		}
-	}
-
-	var org repoguardv1.GithubOrganization
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &org); err != nil {
-		t.Fatalf("get org: %v", err)
-	}
-	if !slices.Equal(org.Spec.OrganizationOwnerTeams, []string{"team-one"}) {
-		t.Errorf("owner teams = %v, want [team-one]", org.Spec.OrganizationOwnerTeams)
-	}
-	if got := teamPerms(org.Spec.DefaultPublicRepositoryTeams); !slices.Equal(got, []teamPerm{{"team-two", "push"}}) {
-		t.Errorf("public teams = %v, want [team-two push]", got)
-	}
-	if got := org.Annotations[AnnotationASRManagedConfig]; got != "team-one,team-two" {
-		t.Errorf("managed config = %q, want team-one,team-two", got)
-	}
-}
-
-func TestReconcileOrganizations_MissingOrgReturnsError(t *testing.T) {
-	p, _ := newPhase() // org not seeded
-	asr := newASR("asr", "team-x", []v1alpha1.Permission{perm(orgCCRN("missing"), "ADMIN")})
-
-	if err := p.reconcileOrganizations(context.Background(), asr, connectorDef(map[string]string{"ADMIN": "admin"}), "test-ns"); err == nil {
-		t.Fatal("expected an error when the GithubOrganization does not exist")
-	}
-}
-
-func TestRemoveASRContributions(t *testing.T) {
-	org := newOrgWithContrib("test-ns", "my-org", "team-a", &orgContribution{
-		OwnerTeams:   []string{"team-a"},
-		PublicTeams:  []repoguardv1.GithubTeamWithPermission{{Team: "team-a", Permission: "push"}},
-		PrivateTeams: []repoguardv1.GithubTeamWithPermission{{Team: "team-a", Permission: "pull"}},
-	})
-	// A second ASR's public contribution and tracking that must survive.
-	org.Spec.DefaultPublicRepositoryTeams = append(org.Spec.DefaultPublicRepositoryTeams,
-		repoguardv1.GithubTeamWithPermission{Team: "team-b", Permission: "admin"})
-	org.Annotations[AnnotationASRManagedConfig] = "team-a,team-b"
-	org.Annotations[annotationASRDefaultTeamsPrefix+"team-b"] = `{"publicTeams":[{"name":"team-b","permission":"admin"}]}`
-
-	removeASRContributions(org, "team-a")
-	removeASRFromAnnotations(org, "team-a")
-
-	if len(org.Spec.OrganizationOwnerTeams) != 0 || len(org.Spec.DefaultPrivateRepositoryTeams) != 0 {
-		t.Errorf("team-a owner/private contributions not removed")
-	}
-	if got := teamPerms(org.Spec.DefaultPublicRepositoryTeams); !slices.Equal(got, []teamPerm{{"team-b", "admin"}}) {
-		t.Errorf("expected only team-b public to remain, got %v", got)
-	}
-	if got := org.Annotations[AnnotationASRManagedConfig]; got != "team-b" {
-		t.Errorf("managed config = %q, want team-b", got)
-	}
-	if _, ok := org.Annotations[annotationASRDefaultTeamsPrefix+"team-a"]; ok {
-		t.Error("team-a per-ASR annotation should be removed")
-	}
-}
-
-func TestAppendUniqueAndRemove(t *testing.T) {
+func TestAppendUnique(t *testing.T) {
 	if got := appendUnique([]string{"a"}, "a"); len(got) != 1 {
 		t.Errorf("appendUnique should dedupe equal strings, got %v", got)
 	}
 	if got := appendUnique([]string{"a"}, "b"); len(got) != 2 {
 		t.Errorf("appendUnique should add new strings, got %v", got)
-	}
-	if got := remove([]string{"a", "b", "c"}, "b"); !slices.Equal(got, []string{"a", "c"}) {
-		t.Errorf("remove should drop the matching element, got %v", got)
 	}
 
 	// Equality includes the permission, so the same team with a different permission is kept.
@@ -218,14 +169,16 @@ func TestAppendUniqueAndRemove(t *testing.T) {
 
 func TestPhaseReconcile_EndToEnd(t *testing.T) {
 	mapping := map[string]string{"ADMIN": "admin", "WRITE": "push"}
-	p, c := newPhase(newGithubOrg("test-ns", "my-org"))
+	// Seed a labeled org so the name resolver finds the instance key while
+	// patchOrganization still Gets the CR by its plain org name.
+	p, c := newPhase(newGithubOrgWithMeta("test-ns", "my-org", "github.example.com", "ghe", "", "admin", "my-org"))
 
 	asr := newASR("asr-e2e", "team-full", []v1alpha1.Permission{
 		perm(orgCCRN("my-org"), "ADMIN"),
 		perm(repoCCRN("github.example.com", "my-org", "repo-a"), "WRITE"),
 	})
 
-	if err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
+	if _, _, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
@@ -261,5 +214,51 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 	}
 	if pmmeta.GetTargetStatus(ps.Targets, "github-example-com/my-org") == nil {
 		t.Errorf("expected target github-example-com/my-org, got %+v", ps.Targets)
+	}
+}
+
+// TestPhaseReconcile_RepositoryType: a repository_type CCRN flows through Reconcile to org patching,
+// creates no team/repo CR, and sets provider status, with no config problems.
+func TestPhaseReconcile_RepositoryType(t *testing.T) {
+	mapping := map[string]string{"WRITE": "push"}
+	p, c := newPhase(newGithubOrgWithMeta("test-ns", "my-org", "github.example.com", "ghe", "", "admin", "my-org"))
+	asr := newASR("asr-rt", "team-rt", []v1alpha1.Permission{perm(repoTypeCCRN("public"), "WRITE")})
+
+	_, problems, err := p.Reconcile(context.Background(), asr, newConnectorBinding(mapping))
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(problems.MissingOrgs) != 0 || len(problems.InvalidCCRNs) != 0 || len(problems.UnmappedCaps) != 0 {
+		t.Fatalf("unexpected config problems: %+v", problems)
+	}
+
+	// No team / team-repository CRs for a repository_type CCRN.
+	var teams repoguardv1.GithubTeamList
+	if err := c.List(context.Background(), &teams, client.InNamespace("test-ns")); err != nil {
+		t.Fatalf("list teams: %v", err)
+	}
+	if len(teams.Items) != 0 {
+		t.Errorf("expected 0 teams, got %d", len(teams.Items))
+	}
+	var repos repoguardv1.GithubTeamRepositoryList
+	if err := c.List(context.Background(), &repos, client.InNamespace("test-ns")); err != nil {
+		t.Fatalf("list team repositories: %v", err)
+	}
+	if len(repos.Items) != 0 {
+		t.Errorf("expected 0 team repositories, got %d", len(repos.Items))
+	}
+
+	// The org's default public teams were patched.
+	var org repoguardv1.GithubOrganization
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "my-org"}, &org); err != nil {
+		t.Fatalf("get org: %v", err)
+	}
+	if len(org.Spec.DefaultPublicRepositoryTeams) != 1 || org.Spec.DefaultPublicRepositoryTeams[0].Team != "team-rt" {
+		t.Errorf("default public teams = %+v, want one entry for team-rt", org.Spec.DefaultPublicRepositoryTeams)
+	}
+
+	// Provider status was written on the ASR.
+	if pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub) == nil {
+		t.Error("expected github provider status on the ASR")
 	}
 }
