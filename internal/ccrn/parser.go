@@ -325,14 +325,17 @@ func parseResourceSegment(apiGroup, segment string) (*K8sResource, error) {
 	if group == coreGroupToken {
 		group = ""
 	}
-	resource := segment
-	sub := ""
-	if i := strings.Index(segment, ":"); i >= 0 {
-		resource = segment[:i]
-		sub = segment[i+1:]
-	}
+	resource, sub, hasSub := strings.Cut(segment, ":")
 	if resource == "" {
 		return nil, errors.New("resource must not be empty")
+	}
+	if hasSub {
+		if sub == "" {
+			return nil, errors.New("subresource must not be empty")
+		}
+		if strings.Contains(sub, ":") {
+			return nil, errors.New("resource must not contain more than one ':' subresource delimiter")
+		}
 	}
 	return &K8sResource{APIGroup: group, Resource: resource, SubResource: sub}, nil
 }
