@@ -476,3 +476,92 @@ func Test_EnsureRbacCompiled_MergesRules(t *testing.T) {
 	require.Equal(t, []string{"pods/exec"}, rules[1].Resources)
 	require.Equal(t, []string{"create"}, rules[1].Verbs)
 }
+
+func Test_EnsureRbacCompiled_ResourceCCRNs(t *testing.T) {
+	const (
+		clusterResourceRead  = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+		clusterResourceWrite = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+		nsResourceRead       = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:log"
+	)
+
+	t.Run("cluster-resource READ compiles a ClusterRole with get/list/watch and no CB", func(t *testing.T) {
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec: v1alpha1.ApplicationSpecificRoleSpec{
+				Name:        testSpecName,
+				Permissions: []v1alpha1.Permission{{Resource: clusterResourceRead, Capability: "READ"}},
+			},
+		}
+		p := &pmk8s.Phase{
+			AuditLog:     audit.Disabled(),
+			Log:          ctrl.Log.WithName("test"),
+			ClusterStore: newClusterStore(t, testClusterName),
+			CCRNParser:   ccrn.NewParser(nil),
+		}
+		result, err := p.EnsureRbacCompiled(asr)(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, lifecycle.Continue(), result)
+
+		compiled := p.Compiled()
+		require.Len(t, compiled, 1)
+		require.Len(t, compiled[0].ClusterRoles, 1)
+		rules := compiled[0].ClusterRoles[0].Rules
+		require.Len(t, rules, 1)
+		require.Equal(t, []string{"apps"}, rules[0].APIGroups)
+		require.Equal(t, []string{"deployments"}, rules[0].Resources)
+		require.Equal(t, []string{"get", "list", "watch"}, rules[0].Verbs)
+	})
+
+	t.Run("READ+WRITE on same target union into one PolicyRule", func(t *testing.T) {
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec: v1alpha1.ApplicationSpecificRoleSpec{
+				Name: testSpecName,
+				Permissions: []v1alpha1.Permission{
+					{Resource: clusterResourceRead, Capability: "READ"},
+					{Resource: clusterResourceWrite, Capability: "WRITE"},
+				},
+			},
+		}
+		p := &pmk8s.Phase{
+			AuditLog:     audit.Disabled(),
+			Log:          ctrl.Log.WithName("test"),
+			ClusterStore: newClusterStore(t, testClusterName),
+			CCRNParser:   ccrn.NewParser(nil),
+		}
+		_, err := p.EnsureRbacCompiled(asr)(context.Background())
+		require.NoError(t, err)
+		compiled := p.Compiled()
+		require.Len(t, compiled, 1)
+		require.Len(t, compiled[0].ClusterRoles, 1)
+		rules := compiled[0].ClusterRoles[0].Rules
+		require.Len(t, rules, 1)
+		require.Equal(t, []string{"create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"}, rules[0].Verbs)
+	})
+
+	t.Run("namespace-resource with subresource compiles a Role with resource/subresource", func(t *testing.T) {
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec: v1alpha1.ApplicationSpecificRoleSpec{
+				Name:        testSpecName,
+				Permissions: []v1alpha1.Permission{{Resource: nsResourceRead, Capability: "READ"}},
+			},
+		}
+		p := &pmk8s.Phase{
+			AuditLog:     audit.Disabled(),
+			Log:          ctrl.Log.WithName("test"),
+			ClusterStore: newClusterStore(t, testClusterName),
+			CCRNParser:   ccrn.NewParser(nil),
+		}
+		_, err := p.EnsureRbacCompiled(asr)(context.Background())
+		require.NoError(t, err)
+		compiled := p.Compiled()
+		require.Len(t, compiled, 1)
+		require.Len(t, compiled[0].Roles, 1)
+		require.Equal(t, testNamespace, compiled[0].Roles[0].Namespace)
+		rules := compiled[0].Roles[0].Rules
+		require.Len(t, rules, 1)
+		require.Equal(t, []string{""}, rules[0].APIGroups)
+		require.Equal(t, []string{"pods/log"}, rules[0].Resources)
+	})
+}

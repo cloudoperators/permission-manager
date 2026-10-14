@@ -80,14 +80,23 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 				continue
 			}
 
-			rules, found := UnionRulesForCapability(p.cbs, perm.Capability)
-			if !found {
-				capability := perm.Capability
-				if _, seen := unmappedSeen[capability]; !seen {
-					unmappedSeen[capability] = struct{}{}
-					p.unmappedCaps = append(p.unmappedCaps, capability)
+			var rules []CapabilityRule
+			if parsed.K8sResource != nil {
+				rules = resourceRulesFor(parsed.K8sResource, perm.Capability)
+				if len(rules) == 0 {
+					continue
 				}
-				continue
+			} else {
+				r, found := UnionRulesForCapability(p.cbs, perm.Capability)
+				if !found {
+					capability := perm.Capability
+					if _, seen := unmappedSeen[capability]; !seen {
+						unmappedSeen[capability] = struct{}{}
+						p.unmappedCaps = append(p.unmappedCaps, capability)
+					}
+					continue
+				}
+				rules = r
 			}
 
 			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
@@ -212,6 +221,39 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 
 		return lifecycle.Continue(), nil
 	}
+}
+
+// resourceVerbsFor returns the hardcoded verb set for a resource-scoped CCRN
+// capability. The capabilityMapping is intentionally not consulted. WRITE
+// includes deletecollection for parity with the built-in edit/admin roles.
+func resourceVerbsFor(capability string) []string {
+	switch strings.ToUpper(capability) {
+	case "READ":
+		return []string{"get", "list", "watch"}
+	case "WRITE":
+		return []string{"create", "update", "patch", "delete", "deletecollection"}
+	default:
+		return nil
+	}
+}
+
+// resourceRulesFor builds the single CapabilityRule a resource CCRN grants: its
+// apiGroup/resource[/subresource] target with the hardcoded verb set. Returns
+// nil for an unknown capability (the validator rejects those as InvalidCCRN).
+func resourceRulesFor(res *ccrn.K8sResource, capability string) []CapabilityRule {
+	verbs := resourceVerbsFor(capability)
+	if len(verbs) == 0 {
+		return nil
+	}
+	resource := res.Resource
+	if res.SubResource != "" {
+		resource = res.Resource + "/" + res.SubResource
+	}
+	return []CapabilityRule{{
+		APIGroups: []string{res.APIGroup},
+		Resources: []string{resource},
+		Verbs:     verbs,
+	}}
 }
 
 // rulesNeedExpansion reports whether any rule is deny-driven (has
