@@ -236,6 +236,7 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 		Log:             r.Log,
 		ClusterStore:    r.k8sClusterStore,
 		CCRNParser:      r.K8sCCRNParser,
+		RESTMapper:      r.Client.RESTMapper(),
 	}
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),
@@ -245,7 +246,11 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 		p.EnsureRbacApplied(asr),
 		p.EnsureProviderStatus(asr),
 	}
-	return lifecycle.ExecuteSubRoutine(ctx, routines)
+	res, reconcileResult, err := lifecycle.ExecuteSubRoutine(ctx, routines)
+	for _, w := range p.ConfigWarnings() {
+		r.recorder.Eventf(asr, nil, corev1.EventTypeWarning, w.Reason, "Validate", "%s", w.Message)
+	}
+	return res, reconcileResult, err
 }
 
 // cleanUpKubernetes constructs a fresh k8s Phase and runs the delete-path

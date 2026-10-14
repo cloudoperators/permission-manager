@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,10 @@ type Phase struct {
 	ClusterStore    cache.Store
 	CCRNParser      *ccrn.Parser
 
+	// RESTMapper resolves apiGroup/resource to scope on the management cluster,
+	// used by EnsureASRValidity for the kind-vs-scope warning.
+	RESTMapper meta.RESTMapper
+
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding
 
@@ -50,6 +55,11 @@ type Phase struct {
 	unmatchedClusterPatterns []string
 	notReadyClusters         []string
 	discoveryDegraded        []string
+
+	// non-fatal configuration warnings. The validator accumulates these and sets
+	// the ConfigWarning condition; the controller emits one Warning Event per
+	// entry after the subroutine chain.
+	configWarnings []ConfigWarning
 
 	// per-cluster outcomes from EnsureRbacApplied / EnsureOrphansCleanedUp.
 	provisionStatuses []clusterStatus
@@ -89,3 +99,16 @@ const (
 	kindRole               = "Role"
 	kindRoleBinding        = "RoleBinding"
 )
+
+// ConfigWarning is one non-fatal configuration warning accumulated by the
+// validator, carrying the Event reason and human-readable message.
+type ConfigWarning struct {
+	Reason  string
+	Message string
+}
+
+// ConfigWarnings returns the warnings accumulated this reconcile, for the
+// controller to emit as Kubernetes Warning Events.
+func (p *Phase) ConfigWarnings() []ConfigWarning {
+	return p.configWarnings
+}
