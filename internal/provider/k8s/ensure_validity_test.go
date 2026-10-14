@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
@@ -267,6 +269,83 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 				require.Equal(t, string(pmmeta.InvalidCCRNReason), invalid.Reason)
 			} else {
 				require.Nil(t, invalid)
+			}
+		})
+	}
+}
+
+func newTestRESTMapper() meta.RESTMapper {
+	m := meta.NewDefaultRESTMapper(nil)
+	m.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}, meta.RESTScopeRoot)
+	m.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	return m
+}
+
+func Test_EnsureASRValidity_Warnings(t *testing.T) {
+	const (
+		nsResOnNode        = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/nodes"
+		nsResOnDeploy      = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/apps/deployments"
+		nsResOnCRD         = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/example.io/widgets"
+		clusterWriteDeploy = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	)
+	cases := []struct {
+		name        string
+		permissions []v1alpha1.Permission
+		wantWarning bool
+	}{
+		{
+			name:        "namespace-resource on cluster-scoped kind warns",
+			permissions: []v1alpha1.Permission{{Resource: nsResOnNode, Capability: "read"}},
+			wantWarning: true,
+		},
+		{
+			name:        "namespace-resource on namespaced kind does not warn",
+			permissions: []v1alpha1.Permission{{Resource: nsResOnDeploy, Capability: "read"}},
+			wantWarning: false,
+		},
+		{
+			name:        "unknown kind fails open without warning",
+			permissions: []v1alpha1.Permission{{Resource: nsResOnCRD, Capability: "read"}},
+			wantWarning: false,
+		},
+		{
+			name:        "write without read warns",
+			permissions: []v1alpha1.Permission{{Resource: clusterWriteDeploy, Capability: "write"}},
+			wantWarning: true,
+		},
+		{
+			name: "write with read does not warn",
+			permissions: []v1alpha1.Permission{
+				{Resource: clusterWriteDeploy, Capability: "read"},
+				{Resource: clusterWriteDeploy, Capability: "write"},
+			},
+			wantWarning: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: tc.permissions},
+			}
+			p := &pmk8s.Phase{
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
+				RESTMapper: newTestRESTMapper(),
+			}
+			_, err := p.EnsureASRValidity(asr)(context.Background())
+			require.NoError(t, err)
+
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ReadyCondition))
+
+			warn := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ConfigWarningCondition)
+			if tc.wantWarning {
+				require.NotNil(t, warn)
+				require.Equal(t, metav1.ConditionTrue, warn.Status)
+			} else {
+				require.Nil(t, warn)
 			}
 		})
 	}

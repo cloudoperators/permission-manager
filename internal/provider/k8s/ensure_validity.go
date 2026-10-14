@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/ccrn"
@@ -27,6 +30,8 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 		if parser == nil {
 			parser = ccrn.NewParser(nil)
 		}
+		// capabilities granted per resource CCRN, to flag WRITE without READ.
+		caps := map[string]map[string]bool{}
 		for _, perm := range asr.Spec.Permissions {
 			parsed, err := parser.Parse(perm.Resource)
 			if err != nil {
@@ -36,15 +41,61 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			if !parsed.IsKubernetes() {
 				continue
 			}
-			// Namespace wildcards are unsupported (scenarios doc §373).
+			// Namespace wildcards are unsupported.
 			if parsed.Namespace != "" && ccrn.IsWildcard(parsed.Namespace) {
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
 				continue
 			}
-			if parsed.K8sResource != nil && resourceCCRNInvalid(parsed, perm.Capability) {
+			if parsed.K8sResource == nil {
+				continue
+			}
+			if resourceCCRNInvalid(parsed, perm.Capability) {
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
 				continue
 			}
+			// A namespace-resource targeting a cluster-scoped kind can't bind
+			// namespaced RBAC; warn but don't block.
+			if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource.Resource != "*" {
+				if clusterScoped, known := p.resolveClusterScoped(parsed.K8sResource.APIGroup, parsed.K8sResource.Resource); known && clusterScoped {
+					p.configWarnings = append(p.configWarnings, ConfigWarning{
+						Reason:  string(pmmeta.ScopeMismatchReason),
+						Message: fmt.Sprintf("namespace-resource CCRN %q names cluster-scoped resource %q; the RoleBinding cannot grant it", perm.Resource, parsed.K8sResource.Resource),
+					})
+				}
+			}
+			if caps[perm.Resource] == nil {
+				caps[perm.Resource] = map[string]bool{}
+			}
+			caps[perm.Resource][strings.ToUpper(perm.Capability)] = true
+		}
+
+		// WRITE granted on a resource without the matching READ.
+		for _, perm := range asr.Spec.Permissions {
+			c, ok := caps[perm.Resource]
+			if !ok {
+				continue
+			}
+			if c["WRITE"] && !c["READ"] {
+				p.configWarnings = append(p.configWarnings, ConfigWarning{
+					Reason:  string(pmmeta.WriteWithoutReadReason),
+					Message: fmt.Sprintf("resource CCRN %q grants WRITE without READ; apply/server-side-apply tooling may break", perm.Resource),
+				})
+			}
+			delete(caps, perm.Resource)
+		}
+
+		if len(p.configWarnings) > 0 {
+			msgs := make([]string, 0, len(p.configWarnings))
+			for _, w := range p.configWarnings {
+				msgs = append(msgs, w.Message)
+			}
+			asr.SetCondition(pmmeta.TrueCondition(
+				pmmeta.ConfigWarningCondition,
+				pmmeta.ConfigurationWarningReason,
+				strings.Join(msgs, "; "),
+			))
+		} else {
+			asr.RemoveCondition(pmmeta.ConfigWarningCondition)
 		}
 
 		if len(p.invalidCCRNs) > 0 {
@@ -65,6 +116,24 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason)
 		return lifecycle.Continue(), nil
 	}
+}
+
+// resolveClusterScoped reports whether apiGroup/resource is cluster-scoped on
+// the management cluster. known is false when the mapper can't resolve the
+// resource, so callers fail open and skip the scope warning.
+func (p *Phase) resolveClusterScoped(apiGroup, resource string) (clusterScoped, known bool) {
+	if p.RESTMapper == nil {
+		return false, false
+	}
+	gvk, err := p.RESTMapper.KindFor(schema.GroupVersionResource{Group: apiGroup, Resource: resource})
+	if err != nil {
+		return false, false
+	}
+	mapping, err := p.RESTMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return false, false
+	}
+	return mapping.Scope.Name() == meta.RESTScopeNameRoot, true
 }
 
 // resourceCCRNInvalid reports whether a parsed resource-scoped CCRN violates a
