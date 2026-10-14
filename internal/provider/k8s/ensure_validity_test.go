@@ -208,3 +208,66 @@ func Test_EnsureASRValidity_CustomCCRNGroup(t *testing.T) {
 		})
 	}
 }
+
+func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
+	const (
+		apigroupWildcard  = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/deployments"
+		subresOnWildcard  = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/*:log"
+		wildcardNamespace = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/apps/deployments"
+		validResourceCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	)
+	cases := []struct {
+		name              string
+		permissions       []v1alpha1.Permission
+		wantInvalidConfig bool
+	}{
+		{
+			name:              "wildcard apiGroup is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: apigroupWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "subresource on wildcard resource is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: subresOnWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "wildcard namespace is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: wildcardNamespace, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "capability other than read/write is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "valid resource ccrn passes",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "write"}},
+			wantInvalidConfig: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: tc.permissions},
+			}
+			p := &pmk8s.Phase{
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
+			}
+			_, err := p.EnsureASRValidity(asr)(context.Background())
+			require.NoError(t, err)
+			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+			if tc.wantInvalidConfig {
+				require.NotNil(t, invalid)
+				require.Equal(t, metav1.ConditionTrue, invalid.Status)
+				require.Equal(t, string(pmmeta.InvalidCCRNReason), invalid.Reason)
+			} else {
+				require.Nil(t, invalid)
+			}
+		})
+	}
+}
