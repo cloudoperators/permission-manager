@@ -609,3 +609,91 @@ func TestParser_DeduplicatesGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_ResourceScopedCCRNs(t *testing.T) {
+	p := NewParser(nil)
+	tests := []struct {
+		name      string
+		input     string
+		wantType  ResourceType
+		wantNS    string
+		wantGroup string
+		wantRes   string
+		wantSub   string
+		wantErr   bool
+	}{
+		{
+			name:      "cluster-resource with named group",
+			input:     "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments",
+			wantType:  ResourceTypeClusterResource,
+			wantGroup: "apps",
+			wantRes:   "deployments",
+		},
+		{
+			name:      "cluster-resource core group v1 maps to empty",
+			input:     "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/v1/nodes",
+			wantType:  ResourceTypeClusterResource,
+			wantGroup: "",
+			wantRes:   "nodes",
+		},
+		{
+			name:      "namespace-resource with subresource",
+			input:     "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:log",
+			wantType:  ResourceTypeNamespaceResource,
+			wantNS:    "demo",
+			wantGroup: "",
+			wantRes:   "pods",
+			wantSub:   "log",
+		},
+		{
+			name:    "cluster-resource missing resource segment is an error",
+			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps",
+			wantErr: true,
+		},
+		{
+			name:    "literal slash in resource overflows segment count",
+			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments/scale",
+			wantErr: true,
+		},
+		{
+			name:    "cluster-resource empty apigroup is an error",
+			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster//deployments",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := p.Parse(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got.IsKubernetes() {
+				t.Errorf("IsKubernetes() = false, want true")
+			}
+			if got.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", got.Type, tt.wantType)
+			}
+			if got.Namespace != tt.wantNS {
+				t.Errorf("Namespace = %v, want %v", got.Namespace, tt.wantNS)
+			}
+			if got.K8sResource == nil {
+				t.Fatalf("K8sResource = nil, want non-nil")
+			}
+			if got.K8sResource.APIGroup != tt.wantGroup {
+				t.Errorf("APIGroup = %q, want %q", got.K8sResource.APIGroup, tt.wantGroup)
+			}
+			if got.K8sResource.Resource != tt.wantRes {
+				t.Errorf("Resource = %q, want %q", got.K8sResource.Resource, tt.wantRes)
+			}
+			if got.K8sResource.SubResource != tt.wantSub {
+				t.Errorf("SubResource = %q, want %q", got.K8sResource.SubResource, tt.wantSub)
+			}
+		})
+	}
+}
