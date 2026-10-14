@@ -660,6 +660,16 @@ func TestParse_ResourceScopedCCRNs(t *testing.T) {
 			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster//deployments",
 			wantErr: true,
 		},
+		{
+			name:    "trailing subresource delimiter is an error",
+			input:   "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:",
+			wantErr: true,
+		},
+		{
+			name:    "repeated subresource delimiter is an error",
+			input:   "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:log:extra",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

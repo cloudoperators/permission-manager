@@ -80,7 +80,8 @@ verb sets:
 | `WRITE` | `create`, `update`, `patch`, `delete`, `deletecollection` |
 
 Any other capability value (including `*`) is rejected as `InvalidCCRN`. `deletecollection`
-mirrors the built-in `edit`/`admin` ClusterRoles and grants nothing a `delete` holder lacks.
+is included in WRITE for parity with the built-in `edit`/`admin` ClusterRoles; it is a
+distinct RBAC verb that authorizes deleting a whole collection in one request.
 
 > Note: ADR-018 extends the resource CCRN vocabulary with a third capability, `MANAGE`
 > (the union of the READ and WRITE verb sets), as part of the closed per-scope vocabulary.

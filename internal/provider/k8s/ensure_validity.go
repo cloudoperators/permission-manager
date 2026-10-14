@@ -125,10 +125,11 @@ func (p *Phase) resolveClusterScoped(apiGroup, resource string) (clusterScoped, 
 	if p.RESTMapper == nil {
 		return false, false
 	}
-	gvk, err := p.RESTMapper.KindFor(schema.GroupVersionResource{Group: apiGroup, Resource: resource})
-	if err != nil {
+	gvks, err := p.RESTMapper.KindsFor(schema.GroupVersionResource{Group: apiGroup, Resource: resource})
+	if err != nil || len(gvks) == 0 {
 		return false, false
 	}
+	gvk := gvks[0]
 	mapping, err := p.RESTMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return false, false
@@ -143,7 +144,12 @@ func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
 	if ccrn.IsWildcard(k.APIGroup) {
 		return true
 	}
-	if k.Resource == "*" && k.SubResource != "" {
+	// A resource may be a bare "*" but not a partial glob like "deploy*".
+	if ccrn.IsWildcard(k.Resource) && k.Resource != "*" {
+		return true
+	}
+	// Subresources must name a concrete target: no wildcards, and none on "*".
+	if ccrn.IsWildcard(k.SubResource) || (k.Resource == "*" && k.SubResource != "") {
 		return true
 	}
 	switch strings.ToUpper(capability) {

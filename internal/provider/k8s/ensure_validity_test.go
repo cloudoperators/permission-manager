@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -213,10 +213,12 @@ func Test_EnsureASRValidity_CustomCCRNGroup(t *testing.T) {
 
 func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 	const (
-		apigroupWildcard  = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/deployments"
-		subresOnWildcard  = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/*:log"
-		wildcardNamespace = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/apps/deployments"
-		validResourceCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+		wildcardAPIGroup   = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/deployments"
+		subresOnWildcard   = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/*:log"
+		wildcardNamespace  = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/apps/deployments"
+		partialResWildcard = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments*"
+		subresWildcard     = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:*"
+		validResourceCCRN  = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
 	)
 	cases := []struct {
 		name              string
@@ -225,12 +227,22 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 	}{
 		{
 			name:              "wildcard apiGroup is invalid",
-			permissions:       []v1alpha1.Permission{{Resource: apigroupWildcard, Capability: "read"}},
+			permissions:       []v1alpha1.Permission{{Resource: wildcardAPIGroup, Capability: "read"}},
 			wantInvalidConfig: true,
 		},
 		{
 			name:              "subresource on wildcard resource is invalid",
 			permissions:       []v1alpha1.Permission{{Resource: subresOnWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "partial resource wildcard is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: partialResWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "subresource wildcard is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: subresWildcard, Capability: "read"}},
 			wantInvalidConfig: true,
 		},
 		{
@@ -278,6 +290,10 @@ func newTestRESTMapper() meta.RESTMapper {
 	m := meta.NewDefaultRESTMapper(nil)
 	m.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}, meta.RESTScopeRoot)
 	m.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	// A cluster-scoped kind served at two versions: KindFor would report an
+	// ambiguous match, so scope resolution must go through KindsFor.
+	m.Add(schema.GroupVersionKind{Group: "multi.io", Version: "v1", Kind: "Gadget"}, meta.RESTScopeRoot)
+	m.Add(schema.GroupVersionKind{Group: "multi.io", Version: "v2", Kind: "Gadget"}, meta.RESTScopeRoot)
 	return m
 }
 
@@ -286,6 +302,7 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 		nsResOnNode        = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/nodes"
 		nsResOnDeploy      = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/apps/deployments"
 		nsResOnCRD         = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/example.io/widgets"
+		nsResOnMultiVer    = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/multi.io/gadgets"
 		clusterWriteDeploy = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
 	)
 	cases := []struct {
@@ -307,6 +324,11 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 			name:        "unknown kind fails open without warning",
 			permissions: []v1alpha1.Permission{{Resource: nsResOnCRD, Capability: "read"}},
 			wantWarning: false,
+		},
+		{
+			name:        "namespace-resource on multi-version cluster-scoped kind warns",
+			permissions: []v1alpha1.Permission{{Resource: nsResOnMultiVer, Capability: "read"}},
+			wantWarning: true,
 		},
 		{
 			name:        "write without read warns",
