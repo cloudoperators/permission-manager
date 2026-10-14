@@ -12,6 +12,7 @@ import (
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 )
 
@@ -39,6 +40,8 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 			return p.failMissingCB(ctx, asr, msg)
 		}
 
+		resourceOnly := asrIsResourceOnly(p.CCRNParser, asr)
+
 		usable := 0
 		for _, cb := range p.cbs {
 			def, err := ParseConnectorDefinition(cb.Spec.Definition)
@@ -46,7 +49,7 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 				p.Log.Error(err, "skipping unparseable ConnectorBinding definition", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
-			if len(def.CapabilityMapping) == 0 {
+			if len(def.CapabilityMapping) == 0 && !resourceOnly {
 				p.Log.Info("ConnectorBinding has empty capabilityMapping", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
@@ -111,4 +114,25 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 	)
 
 	return lifecycle.Break(), errors.New(msg)
+}
+
+// asrIsResourceOnly reports whether every kubernetes permission on the ASR is a
+// resource-scoped CCRN. Such ASRs never consult the ConnectorBinding
+// capabilityMapping, so an empty mapping is acceptable. A permission that fails
+// to parse or is non-kubernetes makes it not resource-only, so the stricter gate
+// applies and the validator reports the parse failure.
+func asrIsResourceOnly(parser *ccrn.Parser, asr *v1alpha1.ApplicationSpecificRole) bool {
+	if parser == nil {
+		parser = ccrn.NewParser(nil)
+	}
+	if len(asr.Spec.Permissions) == 0 {
+		return false
+	}
+	for _, perm := range asr.Spec.Permissions {
+		parsed, err := parser.Parse(perm.Resource)
+		if err != nil || !parsed.IsKubernetes() || parsed.K8sResource == nil {
+			return false
+		}
+	}
+	return true
 }
