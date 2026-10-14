@@ -6,6 +6,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
@@ -40,6 +41,10 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
 				continue
 			}
+			if parsed.K8sResource != nil && resourceCCRNInvalid(parsed, perm.Capability) {
+				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
+				continue
+			}
 		}
 
 		if len(p.invalidCCRNs) > 0 {
@@ -59,5 +64,23 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 
 		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason)
 		return lifecycle.Continue(), nil
+	}
+}
+
+// resourceCCRNInvalid reports whether a parsed resource-scoped CCRN violates a
+// hard rule. Namespace-wildcard is handled by the shared check in the main loop.
+func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
+	k := parsed.K8sResource
+	if ccrn.IsWildcard(k.APIGroup) {
+		return true
+	}
+	if k.Resource == "*" && k.SubResource != "" {
+		return true
+	}
+	switch strings.ToUpper(capability) {
+	case "READ", "WRITE":
+		return false
+	default:
+		return true
 	}
 }
