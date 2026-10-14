@@ -77,9 +77,10 @@ verb sets:
 | Capability | Verbs |
 |---|---|
 | `READ` | `get`, `list`, `watch` |
-| `WRITE` | `create`, `update`, `patch`, `delete` |
+| `WRITE` | `create`, `update`, `patch`, `delete`, `deletecollection` |
 
-Any other capability value (including `*`) is rejected as `InvalidCCRN`.
+Any other capability value (including `*`) is rejected as `InvalidCCRN`. `deletecollection`
+mirrors the built-in `edit`/`admin` ClusterRoles and grants nothing a `delete` holder lacks.
 
 > Note: ADR-018 extends the resource CCRN vocabulary with a third capability, `MANAGE`
 > (the union of the READ and WRITE verb sets), as part of the closed per-scope vocabulary.
@@ -133,7 +134,8 @@ kind (e.g. `deployments`) produces a ClusterRoleBinding and grants access across
 cluster. Using `namespace-resource` for a cluster-scoped kind (e.g. `nodes`) produces a
 RoleBinding, which Kubernetes will silently ignore because cluster-scoped resources are not
 accessible via namespace-bound roles. Authors are responsible for matching the CCRN type to
-the Kubernetes scope of the resource; the controller does not validate this.
+the Kubernetes scope of the resource; the controller surfaces a non-fatal warning for this
+case (see Non-fatal warnings below) but does not reject it.
 
 ### Validation errors (reason `InvalidCCRN`)
 
@@ -144,6 +146,19 @@ The following are hard validation failures, consistent with the existing fail-cl
 - Subresource on a wildcard resource (e.g. `*:log`)
 - Empty `<apigroup>` or `<resource>` segment
 - Capability other than `READ` or `WRITE`
+
+A literal `/` inside the `<resource>` segment is rejected (it overflows the URN segment
+count); use `:` for subresources.
+
+### Non-fatal warnings
+
+The controller surfaces configuration warnings via an informational `ConfigWarning` status
+condition and a Kubernetes Warning Event, without failing the ASR:
+
+- **Kind-vs-scope:** a `namespace-resource` naming a cluster-scoped kind (resolved via the
+  management cluster's RESTMapper) can never be granted by a RoleBinding. Resources unknown
+  to the local mapper (e.g. CRDs installed only on target clusters) fail open — no warning.
+  The controller still does not hard-reject scope mismatches.
 
 ### Examples
 
