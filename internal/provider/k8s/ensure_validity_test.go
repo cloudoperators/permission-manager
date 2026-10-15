@@ -251,9 +251,14 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 			wantInvalidConfig: true,
 		},
 		{
-			name:              "capability other than read/write is invalid",
-			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			name:              "capability other than read/write/manage is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "operate"}},
 			wantInvalidConfig: true,
+		},
+		{
+			name:              "manage capability is valid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			wantInvalidConfig: false,
 		},
 		{
 			name:              "valid resource ccrn passes",

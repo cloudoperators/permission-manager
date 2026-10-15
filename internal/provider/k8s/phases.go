@@ -49,7 +49,6 @@ type Phase struct {
 	invalidCCRNs             []string
 	unmatchedClusterPatterns []string
 	notReadyClusters         []string
-	discoveryDegraded        []string
 
 	// resource CCRNs rejected only for a specific capability (e.g. an unsupported
 	// capability on an otherwise-valid resource). Tracked per (resource, capability)

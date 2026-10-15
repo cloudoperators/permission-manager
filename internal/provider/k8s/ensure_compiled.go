@@ -42,15 +42,14 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
 		notReadySeen := make(map[string]struct{})
-		degradedSeen := make(map[string]struct{})
 		parser := p.CCRNParser
 		if parser == nil {
 			parser = ccrn.NewParser(nil)
 		}
 
-		// per-reconcile discovery caches for deny-driven expansion: a cluster's
-		// discovery client is built at most once, and a cluster whose discovery
-		// failed is not retried within this reconcile.
+		// per-reconcile discovery caches for the scope-mismatch warning: a
+		// cluster's discovery client is built at most once, and a cluster whose
+		// discovery failed is not retried within this reconcile.
 		discoByCluster := make(map[string]discovery.DiscoveryInterface)
 		discoFailed := make(map[string]struct{})
 
@@ -101,7 +100,11 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 					continue
 				}
 			} else {
-				r, found := UnionRulesForCapability(p.cbs, perm.Capability)
+				scope := scopeNamespace
+				if parsed.Namespace == "" {
+					scope = scopeCluster
+				}
+				resolved, found := resolveCapability(p.cbs, scope, perm.Capability)
 				if !found {
 					capability := perm.Capability
 					if _, seen := unmappedSeen[capability]; !seen {
@@ -110,7 +113,9 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 					}
 					continue
 				}
-				rules = r
+				for _, rc := range resolved {
+					rules = append(rules, rc.entry.Rules...)
+				}
 			}
 
 			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
@@ -136,24 +141,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 				if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource != nil && parsed.K8sResource.Resource != "*" {
 					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed, gvResources)
 				}
-				effectiveRules := rules
-				if rulesNeedExpansion(rules) {
-					expanded, err := p.expandRulesForCluster(ctx, rules, clusterName, asr.Namespace, discoByCluster, discoFailed)
-					if err != nil {
-						p.Log.Error(err, "deny-driven expansion failed, skipping cluster",
-							"namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
-						if _, seen := degradedSeen[clusterName]; !seen {
-							degradedSeen[clusterName] = struct{}{}
-							p.discoveryDegraded = append(p.discoveryDegraded, clusterName)
-						}
-						continue
-					}
-					effectiveRules = expanded
-				}
 
 				s := ensureScope(clusterName)
 				if parsed.Namespace == "" {
-					for _, r := range effectiveRules {
+					for _, r := range rules {
 						s.clusterRules.add(r)
 					}
 				} else {
@@ -162,7 +153,7 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 						nsSet = newPolicyRuleSet()
 						s.namespaceRules[parsed.Namespace] = nsSet
 					}
-					for _, r := range effectiveRules {
+					for _, r := range rules {
 						nsSet.add(r)
 					}
 				}
@@ -220,22 +211,6 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			asr.ClearInvalidConfigIfReason(pmmeta.NoTargetsResolvedReason)
 		}
 
-		if len(p.discoveryDegraded) > 0 {
-			msg := fmt.Sprintf("discovery unavailable for cluster(s), deny rules cannot be safely expanded: %v", p.discoveryDegraded)
-			asr.SetCondition(pmmeta.TrueCondition(
-				pmmeta.InvalidConfigCondition,
-				pmmeta.DiscoveryUnavailableReason,
-				msg,
-			))
-			asr.SetCondition(pmmeta.FalseCondition(
-				pmmeta.ReadyCondition,
-				pmmeta.DiscoveryUnavailableReason,
-				msg,
-			))
-		} else {
-			asr.ClearInvalidConfigIfReason(pmmeta.DiscoveryUnavailableReason)
-		}
-
 		return lifecycle.Continue(), nil
 	}
 }
@@ -249,6 +224,8 @@ func resourceVerbsFor(capability string) []string {
 		return []string{"get", "list", "watch"}
 	case "WRITE":
 		return []string{"create", "update", "patch", "delete", "deletecollection"}
+	case "MANAGE":
+		return []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"}
 	default:
 		return nil
 	}
@@ -271,40 +248,6 @@ func resourceRulesFor(res *ccrn.K8sResource, capability string) []CapabilityRule
 		Resources: []string{resource},
 		Verbs:     verbs,
 	}}
-}
-
-// rulesNeedExpansion reports whether any rule is deny-driven (has
-// ExcludeResources) and therefore requires per-cluster discovery expansion.
-func rulesNeedExpansion(rules []CapabilityRule) bool {
-	for _, r := range rules {
-		if len(r.ExcludeResources) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// expandRulesForCluster resolves the cluster and its discovery client, then
-// expands every rule for that cluster. Returns an error (fail-closed) if the
-// cluster is missing from the store or discovery is unavailable.
-func (p *Phase) expandRulesForCluster(ctx context.Context, rules []CapabilityRule, clusterName, namespace string, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}) ([]CapabilityRule, error) {
-	cluster, ok := getClusterFromStore(p.ClusterStore, namespace, clusterName)
-	if !ok {
-		return nil, fmt.Errorf("cluster %q not found in store", clusterName)
-	}
-	disco, err := p.discoveryFor(ctx, clusterName, namespace, discoByCluster, discoFailed)
-	if err != nil {
-		return nil, err
-	}
-	var out []CapabilityRule
-	for _, r := range rules {
-		expanded, err := expandRuleForCluster(r, cluster, disco)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, expanded...)
-	}
-	return out, nil
 }
 
 // discoveryFor returns a discovery client for the cluster, building it at most
@@ -369,6 +312,15 @@ func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName,
 		Reason:  string(pmmeta.ScopeMismatchReason),
 		Message: fmt.Sprintf("namespace-resource CCRN %q names cluster-scoped resource %q; the RoleBinding cannot grant it", ccrnRaw, res.Resource),
 	})
+}
+
+// groupFromGV extracts the API group name from a "group/version" string as
+// stored in DiscoveryCache.Groups. "apps/v1" → "apps"; "v1" → "" (core group).
+func groupFromGV(gv string) string {
+	if i := strings.LastIndex(gv, "/"); i >= 0 {
+		return gv[:i]
+	}
+	return ""
 }
 
 // gvKey identifies a target cluster's group/version, used to cache a discovered

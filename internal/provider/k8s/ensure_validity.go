@@ -179,7 +179,7 @@ func resourceStructureInvalid(parsed *ccrn.ParsedCCRN) bool {
 // invalidates that one (resource, capability) permission.
 func resourceCapabilitySupported(capability string) bool {
 	switch strings.ToUpper(capability) {
-	case "READ", "WRITE":
+	case "READ", "WRITE", "MANAGE":
 		return true
 	default:
 		return false
