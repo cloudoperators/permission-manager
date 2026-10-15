@@ -310,8 +310,11 @@ The following code is removed entirely:
 - `ResourceSelector` type
 - `internal/provider/k8s/expand.go` and its test file
 - `ensure_compiled_exclude_test.go`
-- `rulesNeedExpansion`, `expandRulesForCluster`, `discoveryFor` functions in `ensure_compiled.go`
-- `RemoteDiscovery` factory field on `Phase`
+- `rulesNeedExpansion` and `expandRulesForCluster` functions in `ensure_compiled.go`
+
+The `discoveryFor` helper and the `RemoteDiscovery` factory field on `Phase` are
+retained: the kind-vs-scope warning (ADR-017) resolves a resource's scope on the
+target cluster via the same discovery client, so they outlive `excludeResources`.
 
 `CapabilityRule` in the new model only carries `apiGroups`, `resources`, and `verbs`.
 
