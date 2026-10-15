@@ -49,7 +49,7 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 				p.Log.Error(err, "skipping unparseable ConnectorBinding definition", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
-			if len(def.CapabilityMapping) == 0 && !resourceOnly {
+			if def.CapabilityMapping.empty() && !resourceOnly {
 				p.Log.Info("ConnectorBinding has empty capabilityMapping", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}

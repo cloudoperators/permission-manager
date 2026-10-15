@@ -129,7 +129,7 @@ func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
 		return true
 	}
 	switch strings.ToUpper(capability) {
-	case "READ", "WRITE":
+	case "READ", "WRITE", "MANAGE":
 		return false
 	default:
 		return true

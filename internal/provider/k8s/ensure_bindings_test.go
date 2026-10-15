@@ -58,7 +58,12 @@ func cbWithProvider(name, provider string, def []byte) *v1alpha1.ConnectorBindin
 func Test_EnsureConnectorBindings(t *testing.T) {
 	usableDef := mustMarshal(map[string]any{
 		"capabilityMapping": map[string]any{
-			"READ": []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+			"cluster": map[string]any{
+				"READ": map[string]any{
+					"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+					"rules":                []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+				},
+			},
 		},
 	})
 	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})

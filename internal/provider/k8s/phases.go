@@ -49,7 +49,6 @@ type Phase struct {
 	invalidCCRNs             []string
 	unmatchedClusterPatterns []string
 	notReadyClusters         []string
-	discoveryDegraded        []string
 
 	// non-fatal configuration warnings. The validator accumulates these and sets
 	// the ConfigWarning condition; the controller emits one Warning Event per

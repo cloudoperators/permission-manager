@@ -58,9 +58,19 @@ func newCluster(name string, ready bool) *greenhousev1alpha1.Cluster {
 
 func newCB(t *testing.T, name string, verbs ...string) *v1alpha1.ConnectorBinding {
 	t.Helper()
+	rule := map[string]any{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": verbs}
 	return newCBRaw(t, name, map[string]any{
-		testCapability: []map[string]any{
-			{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": verbs},
+		"cluster": map[string]any{
+			testCapability: map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+				"rules":                []map[string]any{rule},
+			},
+		},
+		"namespace": map[string]any{
+			testCapability: map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+				"rules":                []map[string]any{rule},
+			},
 		},
 	})
 }
@@ -368,17 +378,22 @@ func Test_EnsureRbacCompiled_Verb_Union(t *testing.T) {
 // mini-rules (e.g. sub-resource access) compiles to one PolicyRule per distinct
 // (apiGroups, resources) target, deterministically ordered.
 func Test_EnsureRbacCompiled_StructuredRules(t *testing.T) {
-	operate := newCBRaw(t, "cb-operate", map[string]any{
-		"OPERATE": []map[string]any{
-			{
-				"apiGroups": []string{""},
-				"resources": []string{"pods/exec", "pods/portforward", "pods/proxy"},
-				"verbs":     []string{"create"},
-			},
-			{
-				"apiGroups": []string{""},
-				"resources": []string{"pods/log"},
-				"verbs":     []string{"get"},
+	cb := newCBRaw(t, "cb-cluster", map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+				"rules": []map[string]any{
+					{
+						"apiGroups": []string{""},
+						"resources": []string{"pods/exec", "pods/portforward", "pods/proxy"},
+						"verbs":     []string{"create"},
+					},
+					{
+						"apiGroups": []string{""},
+						"resources": []string{"pods/log"},
+						"verbs":     []string{"get"},
+					},
+				},
 			},
 		},
 	})
@@ -388,7 +403,7 @@ func Test_EnsureRbacCompiled_StructuredRules(t *testing.T) {
 		Spec: v1alpha1.ApplicationSpecificRoleSpec{
 			Name: testSpecName,
 			Permissions: []v1alpha1.Permission{
-				{Resource: validClusterCCRN, Capability: "OPERATE"},
+				{Resource: validClusterCCRN, Capability: "READ"},
 			},
 		},
 	}
@@ -399,7 +414,7 @@ func Test_EnsureRbacCompiled_StructuredRules(t *testing.T) {
 		Log:          ctrl.Log.WithName("test"),
 		CCRNParser:   ccrn.NewParser(nil),
 	}
-	p.SetCBs([]*v1alpha1.ConnectorBinding{operate})
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
 
 	_, err := p.EnsureRbacCompiled(asr)(context.Background())
 	require.NoError(t, err)
@@ -426,16 +441,26 @@ func Test_EnsureRbacCompiled_StructuredRules(t *testing.T) {
 // union the distinct targets, with verbs merged per target.
 func Test_EnsureRbacCompiled_MergesRules(t *testing.T) {
 	read := newCBRaw(t, "cb-read", map[string]any{
-		"READ": []map[string]any{
-			{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get", "list", "watch"}},
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+				"rules": []map[string]any{
+					{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get", "list", "watch"}},
+				},
+			},
 		},
 	})
-	operate := newCBRaw(t, "cb-operate", map[string]any{
-		"OPERATE": []map[string]any{
-			{
-				"apiGroups": []string{""},
-				"resources": []string{"pods/exec"},
-				"verbs":     []string{"create"},
+	manage := newCBRaw(t, "cb-manage", map[string]any{
+		"cluster": map[string]any{
+			"MANAGE": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+				"rules": []map[string]any{
+					{
+						"apiGroups": []string{""},
+						"resources": []string{"pods/exec"},
+						"verbs":     []string{"create"},
+					},
+				},
 			},
 		},
 	})
@@ -446,7 +471,7 @@ func Test_EnsureRbacCompiled_MergesRules(t *testing.T) {
 			Name: testSpecName,
 			Permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: "READ"},
-				{Resource: validClusterCCRN, Capability: "OPERATE"},
+				{Resource: validClusterCCRN, Capability: "MANAGE"},
 			},
 		},
 	}
@@ -457,7 +482,7 @@ func Test_EnsureRbacCompiled_MergesRules(t *testing.T) {
 		Log:          ctrl.Log.WithName("test"),
 		CCRNParser:   ccrn.NewParser(nil),
 	}
-	p.SetCBs([]*v1alpha1.ConnectorBinding{read, operate})
+	p.SetCBs([]*v1alpha1.ConnectorBinding{read, manage})
 
 	_, err := p.EnsureRbacCompiled(asr)(context.Background())
 	require.NoError(t, err)
