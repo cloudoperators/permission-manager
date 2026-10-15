@@ -13,6 +13,7 @@ The Kubernetes RBAC model spans several coupled ADRs; see [Kubernetes RBAC Targe
 | [015](015-scope-separated-clusterroles.md) | Scope-Separated ClusterRoles for RBAC Generation | Pending review | 2026-06 |
 | [017](017-resource-ccrn-types.md) | Resource-Scoped CCRN Types for Fine-Grained Kubernetes RBAC | Draft | 2026-09 |
 | [018](018-capability-mapping-rework.md) | Scope-Aware Capability Mapping with Shared Aggregated ClusterRoles | Draft | 2026-09 |
+| [019](019-serviceidentity-rbac-subjects.md) | ServiceIdentity Grants via Service-Account Usernames on ASR Bindings | Draft | 2026-10 |
 
 ## Format
 
