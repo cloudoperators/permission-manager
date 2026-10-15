@@ -116,23 +116,28 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 	return lifecycle.Break(), errors.New(msg)
 }
 
-// asrIsResourceOnly reports whether every kubernetes permission on the ASR is a
-// resource-scoped CCRN. Such ASRs never consult the ConnectorBinding
-// capabilityMapping, so an empty mapping is acceptable. A permission that fails
-// to parse or is non-kubernetes makes it not resource-only, so the stricter gate
-// applies and the validator reports the parse failure.
+// asrIsResourceOnly reports whether the ASR's kubernetes permissions are served
+// entirely by resource-scoped CCRNs, which never consult the ConnectorBinding
+// capabilityMapping — so an empty mapping is acceptable. Non-kubernetes and
+// unparseable permissions are skipped: the former are served by other providers,
+// and the latter are reported by the validator. A coarse cluster.k8s/namespace.k8s
+// CCRN needs the mapping, so it makes the ASR not resource-only. At least one
+// resource CCRN must be present; an ASR with no kubernetes resource CCRNs has
+// nothing to relax the mapping requirement for.
 func asrIsResourceOnly(parser *ccrn.Parser, asr *v1alpha1.ApplicationSpecificRole) bool {
 	if parser == nil {
 		parser = ccrn.NewParser(nil)
 	}
-	if len(asr.Spec.Permissions) == 0 {
-		return false
-	}
+	sawResourceCCRN := false
 	for _, perm := range asr.Spec.Permissions {
 		parsed, err := parser.Parse(perm.Resource)
-		if err != nil || !parsed.IsKubernetes() || parsed.K8sResource == nil {
+		if err != nil || !parsed.IsKubernetes() {
+			continue
+		}
+		if parsed.K8sResource == nil {
 			return false
 		}
+		sawResourceCCRN = true
 	}
-	return true
+	return sawResourceCCRN
 }

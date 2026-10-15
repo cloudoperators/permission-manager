@@ -156,10 +156,11 @@ count); use `:` for subresources.
 The controller surfaces configuration warnings via an informational `ConfigWarning` status
 condition and a Kubernetes Warning Event, without failing the ASR:
 
-- **Kind-vs-scope:** a `namespace-resource` naming a cluster-scoped kind (resolved via the
-  management cluster's RESTMapper) can never be granted by a RoleBinding. Resources unknown
-  to the local mapper (e.g. CRDs installed only on target clusters) fail open — no warning.
-  The controller still does not hard-reject scope mismatches.
+- **Kind-vs-scope:** a `namespace-resource` naming a cluster-scoped resource can never be
+  granted by a RoleBinding. Scope is a target-cluster fact, resolved per matched cluster via
+  that cluster's discovery client. Resources whose scope cannot be resolved (group not
+  discovered, discovery unavailable, or resource unknown) fail open — no warning. The
+  controller still does not hard-reject scope mismatches.
 
 ### Examples
 
