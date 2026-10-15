@@ -257,6 +257,7 @@ func Test_EnsureConnectorBindings_Preserve_Unreachable(t *testing.T) {
 func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
 	const resourceCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
 	const coarseCCRN = "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/remote-cluster"
+	const githubCCRN = "urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/github.com/myorg"
 
 	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})
 
@@ -274,6 +275,11 @@ func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
 			name:        "mixed ASR still requires non-empty mapping",
 			permissions: []v1alpha1.Permission{{Resource: resourceCCRN, Capability: "read"}, {Resource: coarseCCRN, Capability: "read"}},
 			wantResult:  lifecycle.Break(),
+		},
+		{
+			name:        "github plus resource CCRN accepts empty-mapping CB",
+			permissions: []v1alpha1.Permission{{Resource: githubCCRN, Capability: "read"}, {Resource: resourceCCRN, Capability: "read"}},
+			wantResult:  lifecycle.Continue(),
 		},
 	}
 	for _, tc := range cases {

@@ -39,10 +39,10 @@ func (fakeCompileDiscovery) ServerResourcesForGroupVersion(gv string) (*metav1.A
 	}
 }
 
-func clusterStoreWithGroups(t *testing.T, name string, groups []string) cache.Store {
+func clusterStoreWithGroups(t *testing.T, groups []string) cache.Store {
 	t.Helper()
 	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
-	c := newCluster(name, true)
+	c := newCluster(testClusterName, true)
 	if groups != nil {
 		c.Status.DiscoveryCache = &greenhousev1alpha1.DiscoveryCache{Groups: groups}
 	}
@@ -74,7 +74,7 @@ func Test_EnsureRbacCompiled_ExcludeResources(t *testing.T) {
 	}
 
 	p := &pmk8s.Phase{
-		ClusterStore: clusterStoreWithGroups(t, testClusterName, []string{"v1", "apps/v1"}),
+		ClusterStore: clusterStoreWithGroups(t, []string{"v1", "apps/v1"}),
 		AuditLog:     audit.Disabled(),
 		Log:          ctrl.Log.WithName("test"),
 		CCRNParser:   ccrn.NewParser(nil),
@@ -119,7 +119,7 @@ func Test_EnsureRbacCompiled_ExcludeResources_FailClosed(t *testing.T) {
 
 	// Cluster has no discovery cache → deny rule cannot be safely expanded.
 	p := &pmk8s.Phase{
-		ClusterStore: clusterStoreWithGroups(t, testClusterName, nil),
+		ClusterStore: clusterStoreWithGroups(t, nil),
 		AuditLog:     audit.Disabled(),
 		Log:          ctrl.Log.WithName("test"),
 		CCRNParser:   ccrn.NewParser(nil),

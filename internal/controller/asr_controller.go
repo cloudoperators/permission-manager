@@ -236,7 +236,6 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 		Log:             r.Log,
 		ClusterStore:    r.k8sClusterStore,
 		CCRNParser:      r.K8sCCRNParser,
-		RESTMapper:      r.RESTMapper(),
 	}
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),

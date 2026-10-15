@@ -8,9 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
@@ -286,23 +284,8 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 	}
 }
 
-func newTestRESTMapper() meta.RESTMapper {
-	m := meta.NewDefaultRESTMapper(nil)
-	m.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}, meta.RESTScopeRoot)
-	m.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
-	// A cluster-scoped kind served at two versions: KindFor would report an
-	// ambiguous match, so scope resolution must go through KindsFor.
-	m.Add(schema.GroupVersionKind{Group: "multi.io", Version: "v1", Kind: "Gadget"}, meta.RESTScopeRoot)
-	m.Add(schema.GroupVersionKind{Group: "multi.io", Version: "v2", Kind: "Gadget"}, meta.RESTScopeRoot)
-	return m
-}
-
 func Test_EnsureASRValidity_Warnings(t *testing.T) {
 	const (
-		nsResOnNode        = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/nodes"
-		nsResOnDeploy      = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/apps/deployments"
-		nsResOnCRD         = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/example.io/widgets"
-		nsResOnMultiVer    = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/multi.io/gadgets"
 		clusterWriteDeploy = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
 	)
 	cases := []struct {
@@ -310,26 +293,6 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 		permissions []v1alpha1.Permission
 		wantWarning bool
 	}{
-		{
-			name:        "namespace-resource on cluster-scoped kind warns",
-			permissions: []v1alpha1.Permission{{Resource: nsResOnNode, Capability: "read"}},
-			wantWarning: true,
-		},
-		{
-			name:        "namespace-resource on namespaced kind does not warn",
-			permissions: []v1alpha1.Permission{{Resource: nsResOnDeploy, Capability: "read"}},
-			wantWarning: false,
-		},
-		{
-			name:        "unknown kind fails open without warning",
-			permissions: []v1alpha1.Permission{{Resource: nsResOnCRD, Capability: "read"}},
-			wantWarning: false,
-		},
-		{
-			name:        "namespace-resource on multi-version cluster-scoped kind warns",
-			permissions: []v1alpha1.Permission{{Resource: nsResOnMultiVer, Capability: "read"}},
-			wantWarning: true,
-		},
 		{
 			name:        "write without read warns",
 			permissions: []v1alpha1.Permission{{Resource: clusterWriteDeploy, Capability: "write"}},
@@ -354,7 +317,6 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 				AuditLog:   audit.Disabled(),
 				Log:        ctrl.Log.WithName("test"),
 				CCRNParser: ccrn.NewParser(nil),
-				RESTMapper: newTestRESTMapper(),
 			}
 			_, err := p.EnsureASRValidity(asr)(context.Background())
 			require.NoError(t, err)

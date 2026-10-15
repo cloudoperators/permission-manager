@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,10 +37,6 @@ type Phase struct {
 	Log             logr.Logger
 	ClusterStore    cache.Store
 	CCRNParser      *ccrn.Parser
-
-	// RESTMapper resolves apiGroup/resource to scope on the management cluster,
-	// used by EnsureASRValidity for the kind-vs-scope warning.
-	RESTMapper meta.RESTMapper
 
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding

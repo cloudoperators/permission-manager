@@ -71,6 +71,11 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			return s
 		}
 
+		// scope-mismatch detection: a resource's namespaced-ness is a target-cluster
+		// fact, resolved via the cluster's discovery client. Deduplicated per CCRN so
+		// READ+WRITE on one target, and matches across multiple clusters, warn once.
+		scopeWarned := make(map[string]struct{})
+
 		for _, perm := range asr.Spec.Permissions {
 			if _, bad := invalid[perm.Resource]; bad {
 				continue
@@ -119,6 +124,9 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			}
 
 			for _, clusterName := range matches.ready {
+				if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource != nil && parsed.K8sResource.Resource != "*" {
+					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed)
+				}
 				effectiveRules := rules
 				if rulesNeedExpansion(rules) {
 					expanded, err := p.expandRulesForCluster(ctx, rules, clusterName, asr.Namespace, discoByCluster, discoFailed)
@@ -219,6 +227,11 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			asr.ClearInvalidConfigIfReason(pmmeta.DiscoveryUnavailableReason)
 		}
 
+		// Re-stamp from the full warning set: scope-mismatch warnings are added
+		// here (they need target-cluster discovery), alongside any the validator
+		// accumulated earlier.
+		p.applyConfigWarningCondition(asr)
+
 		return lifecycle.Continue(), nil
 	}
 }
@@ -310,6 +323,70 @@ func (p *Phase) discoveryFor(ctx context.Context, clusterName, namespace string,
 	}
 	discoByCluster[clusterName] = d
 	return d, nil
+}
+
+// warnIfScopeMismatch appends a ScopeMismatch config warning when a
+// namespace-resource CCRN names a cluster-scoped resource on the target cluster,
+// which a RoleBinding can never grant. Resolution uses the cluster's cached
+// group/versions plus a discovery lookup; any inability to resolve (group not
+// cached, discovery unavailable, resource unknown to the target) fails open with
+// no warning. Deduplicated per CCRN via warned.
+func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName, ccrnRaw string, res *ccrn.K8sResource, warned map[string]struct{}, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}) {
+	if _, ok := warned[ccrnRaw]; ok {
+		return
+	}
+	cluster, ok := getClusterFromStore(p.ClusterStore, namespace, clusterName)
+	if !ok {
+		return
+	}
+	gv, ok := preferredGVForGroup(cluster, res.APIGroup)
+	if !ok {
+		return
+	}
+	disco, err := p.discoveryFor(ctx, clusterName, namespace, discoByCluster, discoFailed)
+	if err != nil {
+		return
+	}
+	namespaced, known := resourceNamespaced(disco, gv, res.Resource)
+	if !known || namespaced {
+		return
+	}
+	warned[ccrnRaw] = struct{}{}
+	p.configWarnings = append(p.configWarnings, ConfigWarning{
+		Reason:  string(pmmeta.ScopeMismatchReason),
+		Message: fmt.Sprintf("namespace-resource CCRN %q names cluster-scoped resource %q; the RoleBinding cannot grant it", ccrnRaw, res.Resource),
+	})
+}
+
+// preferredGVForGroup returns a cached group/version for apiGroup from the
+// cluster's discovery cache. ok is false when the group isn't cached, letting
+// the caller fail open before making a remote discovery call.
+func preferredGVForGroup(cluster *greenhousev1alpha1.Cluster, apiGroup string) (string, bool) {
+	if cluster.Status.DiscoveryCache == nil {
+		return "", false
+	}
+	for _, gv := range cluster.Status.DiscoveryCache.Groups {
+		if groupFromGV(gv) == apiGroup {
+			return gv, true
+		}
+	}
+	return "", false
+}
+
+// resourceNamespaced reports whether the named resource is namespaced in the
+// given group/version. known is false when the discovery lookup fails or the
+// resource is absent, so the caller fails open.
+func resourceNamespaced(disco discovery.DiscoveryInterface, gv, resource string) (namespaced, known bool) {
+	list, err := disco.ServerResourcesForGroupVersion(gv)
+	if err != nil || list == nil {
+		return false, false
+	}
+	for _, r := range list.APIResources {
+		if r.Name == resource {
+			return r.Namespaced, true
+		}
+	}
+	return false, false
 }
 
 // getClusterFromStore looks up a greenhouse Cluster object by "namespace/name".

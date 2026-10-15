@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/ccrn"
@@ -53,16 +50,6 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
 				continue
 			}
-			// A namespace-resource targeting a cluster-scoped kind can't bind
-			// namespaced RBAC; warn but don't block.
-			if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource.Resource != "*" {
-				if clusterScoped, known := p.resolveClusterScoped(parsed.K8sResource.APIGroup, parsed.K8sResource.Resource); known && clusterScoped {
-					p.configWarnings = append(p.configWarnings, ConfigWarning{
-						Reason:  string(pmmeta.ScopeMismatchReason),
-						Message: fmt.Sprintf("namespace-resource CCRN %q names cluster-scoped resource %q; the RoleBinding cannot grant it", perm.Resource, parsed.K8sResource.Resource),
-					})
-				}
-			}
 			if caps[perm.Resource] == nil {
 				caps[perm.Resource] = map[string]bool{}
 			}
@@ -84,19 +71,7 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			delete(caps, perm.Resource)
 		}
 
-		if len(p.configWarnings) > 0 {
-			msgs := make([]string, 0, len(p.configWarnings))
-			for _, w := range p.configWarnings {
-				msgs = append(msgs, w.Message)
-			}
-			asr.SetCondition(pmmeta.TrueCondition(
-				pmmeta.ConfigWarningCondition,
-				pmmeta.ConfigurationWarningReason,
-				strings.Join(msgs, "; "),
-			))
-		} else {
-			asr.RemoveCondition(pmmeta.ConfigWarningCondition)
-		}
+		p.applyConfigWarningCondition(asr)
 
 		if len(p.invalidCCRNs) > 0 {
 			msg := fmt.Sprintf("invalid CCRNs: %v", p.invalidCCRNs)
@@ -118,23 +93,24 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 	}
 }
 
-// resolveClusterScoped reports whether apiGroup/resource is cluster-scoped on
-// the management cluster. known is false when the mapper can't resolve the
-// resource, so callers fail open and skip the scope warning.
-func (p *Phase) resolveClusterScoped(apiGroup, resource string) (clusterScoped, known bool) {
-	if p.RESTMapper == nil {
-		return false, false
+// applyConfigWarningCondition stamps the informational ConfigWarning condition
+// from the warnings accumulated so far this reconcile, or clears it when none
+// remain. Shared by the validator and the compiler, since each contributes
+// warnings (write-without-read and scope-mismatch respectively).
+func (p *Phase) applyConfigWarningCondition(asr *v1alpha1.ApplicationSpecificRole) {
+	if len(p.configWarnings) == 0 {
+		asr.RemoveCondition(pmmeta.ConfigWarningCondition)
+		return
 	}
-	gvks, err := p.RESTMapper.KindsFor(schema.GroupVersionResource{Group: apiGroup, Resource: resource})
-	if err != nil || len(gvks) == 0 {
-		return false, false
+	msgs := make([]string, 0, len(p.configWarnings))
+	for _, w := range p.configWarnings {
+		msgs = append(msgs, w.Message)
 	}
-	gvk := gvks[0]
-	mapping, err := p.RESTMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return false, false
-	}
-	return mapping.Scope.Name() == meta.RESTScopeNameRoot, true
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.ConfigWarningCondition,
+		pmmeta.ConfigurationWarningReason,
+		strings.Join(msgs, "; "),
+	))
 }
 
 // resourceCCRNInvalid reports whether a parsed resource-scoped CCRN violates a
