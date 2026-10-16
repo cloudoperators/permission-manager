@@ -272,3 +272,80 @@ func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Clie
 		return fmt.Errorf("unknown RBAC kind %q", ref.Kind)
 	}
 }
+
+// EnsureSharedClusterRoleOrphansRemoved deletes shared ClusterRoles (labelled by
+// CB) on each target cluster whose capability no longer exists in that CB's
+// current capabilityMapping. This reclaims roles when a CB author drops a
+// capability. Runs after EnsureRbacApplied. Continue-only and per-cluster
+// non-fatal: a delete failure is logged and retried next reconcile.
+func (p *Phase) EnsureSharedClusterRoleOrphansRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
+	return func(ctx context.Context) (lifecycle.Result, error) {
+		if asr.HasInvalidConfig() {
+			return lifecycle.Continue(), nil
+		}
+		// desired[cb][sharedRoleName] holds every shared-role name each CB
+		// currently defines (both root and baseline child), so any labelled
+		// ClusterRole not in the set is an orphan.
+		desired := make(map[string]map[string]struct{})
+		for _, cb := range p.cbs {
+			def, err := ParseConnectorDefinition(cb.Spec.Definition)
+			if err != nil {
+				continue
+			}
+			names := make(map[string]struct{})
+			add := func(scope, capability string, entry CapabilityEntry) {
+				if entry.ClusterRoleName != "" {
+					return // direct binding: no shared role
+				}
+				names[sharedRoleName(cb.Spec.Name, scope, capability)] = struct{}{}
+				names[baselineChildName(cb.Spec.Name, scope, capability)] = struct{}{}
+			}
+			for capn, e := range def.CapabilityMapping.Cluster {
+				add(scopeCluster, strings.ToUpper(capn), e)
+			}
+			for capn, e := range def.CapabilityMapping.Namespace {
+				add(scopeNamespace, strings.ToUpper(capn), e)
+			}
+			desired[cb.Spec.Name] = names
+		}
+
+		for _, clusterName := range p.targetClusterNames() {
+			remoteClient, err := p.RemoteClient(ctx, p.Client, clusterName, asr.Namespace)
+			if err != nil {
+				p.Log.Error(err, "cluster unreachable for shared ClusterRole orphan cleanup, will retry",
+					"namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
+				continue
+			}
+			for cbName, keep := range desired {
+				var list rbacv1.ClusterRoleList
+				if err := remoteClient.List(ctx, &list, client.MatchingLabels{pmapis.LabelCB: cbName}); err != nil {
+					p.Log.Error(err, "failed to list shared ClusterRoles", "cluster", clusterName, "cb", cbName)
+					continue
+				}
+				for i := range list.Items {
+					name := list.Items[i].Name
+					if _, ok := keep[name]; ok {
+						continue
+					}
+					if err := p.deleteIfExists(ctx, remoteClient, &list.Items[i], asr.Name, clusterName, kindClusterRole); err != nil {
+						p.Log.Error(err, "failed to delete orphan shared ClusterRole", "cluster", clusterName, "role", name)
+					}
+				}
+			}
+		}
+		return lifecycle.Continue(), nil
+	}
+}
+
+// targetClusterNames returns the clusters this reconcile ensured shared roles
+// on, from p.compiled. A cluster the ASR no longer compiles to has all its
+// asr-labelled objects revoked by the cluster-level orphan path; shared roles
+// lingering there are reclaimed when another ASR referencing the same CB
+// reconciles against that cluster.
+func (p *Phase) targetClusterNames() []string {
+	set := make(map[string]struct{}, len(p.compiled))
+	for _, t := range p.compiled {
+		set[t.clusterName] = struct{}{}
+	}
+	return sortedKeys(set)
+}

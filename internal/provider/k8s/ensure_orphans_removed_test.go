@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
@@ -416,4 +417,67 @@ func Test_EnsureRbacRemoved_VanishedClusterSkipped(t *testing.T) {
 	require.Equal(t, lifecycle.Continue(), result)
 	_, has := asr.Status.Providers[pmmeta.ProviderKubernetes]
 	require.False(t, has, "provider status must clear once vanished clusters are skipped")
+}
+
+func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *testing.T) {
+	// Cluster already carries READ shared roles, but the CB now defines only
+	// MANAGE as a direct binding, so the READ shared roles are orphans.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+	).Build()
+
+	cb := newCBRaw(t, "cb", map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{ClusterName: testClusterName}})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Empty(t, list.Items, "dropped READ shared roles deleted")
+}
+
+func Test_EnsureSharedClusterRoleOrphansRemoved_KeepsCurrentCapability(t *testing.T) {
+	// The CB still defines READ, so its shared roles must survive.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+	).Build()
+
+	cb := newCB(t, "cb", "get")
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{ClusterName: testClusterName}})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Len(t, list.Items, 2, "current READ shared roles retained")
 }
