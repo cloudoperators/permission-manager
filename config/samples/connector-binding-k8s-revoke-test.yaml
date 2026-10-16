@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Dedicated ConnectorBinding for the CB-revoke audit scenario.
 # Paired with asr-k8s-revoke-test.yaml — deleting THIS CB triggers
 # active RBAC revoke on the paired ASR without disturbing the other
@@ -7,10 +10,12 @@ kind: ConnectorBinding
 metadata:
   name: k8s-connector-revoke-test
 spec:
-  name: Kubernetes Revoke Test
+  name: k8s-connector-revoke-test
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ:  [get, list, watch]
-      WRITE: [get, list, watch, create, update, patch, delete]
-      ADMIN: ["*"]
+      namespace:
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"

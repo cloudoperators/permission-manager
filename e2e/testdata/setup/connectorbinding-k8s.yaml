@@ -10,4 +10,17 @@ spec:
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ: ["get", "list", "watch"]
+      cluster:
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+      namespace:
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+        OPERATE:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-edit: "true"
