@@ -35,6 +35,23 @@ func Test_buildBaselineChild(t *testing.T) {
 	require.Equal(t, []string{"get", "list"}, child.Rules[0].Verbs)
 }
 
+// Test_buildBaselineChild_StructuredRules asserts that multiple mini-rules
+// compile to one PolicyRule per distinct (apiGroups, resources) target,
+// deterministically ordered by resources.
+func Test_buildBaselineChild_StructuredRules(t *testing.T) {
+	child := buildBaselineChild("cb", scopeCluster, "READ", []CapabilityRule{
+		{APIGroups: []string{""}, Resources: []string{"pods/exec", "pods/portforward", "pods/proxy"}, Verbs: []string{"create"}},
+		{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
+	})
+	require.Len(t, child.Rules, 2)
+
+	// Ordered by resources string: "pods/exec,..." before "pods/log".
+	require.Equal(t, []string{"pods/exec", "pods/portforward", "pods/proxy"}, child.Rules[0].Resources)
+	require.Equal(t, []string{"create"}, child.Rules[0].Verbs)
+	require.Equal(t, []string{"pods/log"}, child.Rules[1].Resources)
+	require.Equal(t, []string{"get"}, child.Rules[1].Verbs)
+}
+
 func Test_coarseBindingName(t *testing.T) {
 	require.Equal(t, "pm-my-asr-my-cb-cluster-read", coarseBindingName("my-asr", "my-cb", scopeCluster, "READ"))
 }

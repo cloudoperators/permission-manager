@@ -81,6 +81,39 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 		// records a failed or absent lookup so it is not retried.
 		gvResources := make(map[gvKey]*metav1.APIResourceList)
 
+		// per-cluster coarse bindings keyed by cluster name: references to shared
+		// or external ClusterRoles emitted without a paired per-ASR role.
+		type coarse struct {
+			crbs []rbacv1.ClusterRoleBinding
+			rbs  []rbacv1.RoleBinding
+		}
+		coarseByCluster := make(map[string]*coarse)
+		ensureCoarse := func(name string) *coarse {
+			c, ok := coarseByCluster[name]
+			if !ok {
+				c = &coarse{}
+				coarseByCluster[name] = c
+			}
+			return c
+		}
+
+		recordSkips := func(pattern string, m *clusterMatches) {
+			for _, name := range m.notReady {
+				if _, seen := notReadySeen[name]; !seen {
+					notReadySeen[name] = struct{}{}
+					p.notReadyClusters = append(p.notReadyClusters, name)
+				}
+			}
+			// A pattern that matched no existing cluster at all is unmatched; one
+			// that matched only not-ready clusters is already recorded above.
+			if len(m.ready) == 0 && len(m.notReady) == 0 {
+				if _, seen := unmatchedSeen[pattern]; !seen {
+					unmatchedSeen[pattern] = struct{}{}
+					p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, pattern)
+				}
+			}
+		}
+
 		for _, perm := range asr.Spec.Permissions {
 			if _, bad := invalid[perm.Resource]; bad {
 				continue
@@ -93,86 +126,106 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 				continue
 			}
 
-			var rules []CapabilityRule
 			if parsed.K8sResource != nil {
-				rules = resourceRulesFor(parsed.K8sResource, perm.Capability)
+				rules := resourceRulesFor(parsed.K8sResource, perm.Capability)
 				if len(rules) == 0 {
 					continue
 				}
-			} else {
-				scope := scopeNamespace
-				if parsed.Namespace == "" {
-					scope = scopeCluster
-				}
-				resolved, found := resolveCapability(p.cbs, scope, perm.Capability)
-				if !found {
-					capability := perm.Capability
-					if _, seen := unmappedSeen[capability]; !seen {
-						unmappedSeen[capability] = struct{}{}
-						p.unmappedCaps = append(p.unmappedCaps, capability)
-					}
+				matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
+				recordSkips(parsed.ClusterName, &matches)
+				if len(matches.ready) == 0 {
 					continue
 				}
-				for _, rc := range resolved {
-					rules = append(rules, rc.entry.Rules...)
-				}
-			}
-
-			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
-			for _, name := range matches.notReady {
-				if _, seen := notReadySeen[name]; !seen {
-					notReadySeen[name] = struct{}{}
-					p.notReadyClusters = append(p.notReadyClusters, name)
-				}
-			}
-			if len(matches.ready) == 0 {
-				// A pattern that matched no existing cluster at all is unmatched;
-				// one that matched only not-ready clusters is already recorded above.
-				if len(matches.notReady) == 0 {
-					if _, seen := unmatchedSeen[parsed.ClusterName]; !seen {
-						unmatchedSeen[parsed.ClusterName] = struct{}{}
-						p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, parsed.ClusterName)
+				for _, clusterName := range matches.ready {
+					if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource.Resource != "*" {
+						p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed, gvResources)
+					}
+					s := ensureScope(clusterName)
+					if parsed.Namespace == "" {
+						for _, r := range rules {
+							s.clusterRules.add(r)
+						}
+					} else {
+						nsSet, ok := s.namespaceRules[parsed.Namespace]
+						if !ok {
+							nsSet = newPolicyRuleSet()
+							s.namespaceRules[parsed.Namespace] = nsSet
+						}
+						for _, r := range rules {
+							nsSet.add(r)
+						}
 					}
 				}
 				continue
 			}
 
-			for _, clusterName := range matches.ready {
-				if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource != nil && parsed.K8sResource.Resource != "*" {
-					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed, gvResources)
+			// coarse cluster.k8s / namespace.k8s: resolve to shared or external
+			// ClusterRoles and emit bindings only.
+			scope := scopeNamespace
+			if parsed.Namespace == "" {
+				scope = scopeCluster
+			}
+			resolved, found := resolveCapability(p.cbs, scope, perm.Capability)
+			if !found {
+				if _, seen := unmappedSeen[perm.Capability]; !seen {
+					unmappedSeen[perm.Capability] = struct{}{}
+					p.unmappedCaps = append(p.unmappedCaps, perm.Capability)
 				}
-
-				s := ensureScope(clusterName)
-				if parsed.Namespace == "" {
-					for _, r := range rules {
-						s.clusterRules.add(r)
-					}
-				} else {
-					nsSet, ok := s.namespaceRules[parsed.Namespace]
-					if !ok {
-						nsSet = newPolicyRuleSet()
-						s.namespaceRules[parsed.Namespace] = nsSet
-					}
-					for _, r := range rules {
-						nsSet.add(r)
+				continue
+			}
+			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
+			recordSkips(parsed.ClusterName, &matches)
+			if len(matches.ready) == 0 {
+				continue
+			}
+			up := strings.ToUpper(perm.Capability)
+			for _, clusterName := range matches.ready {
+				c := ensureCoarse(clusterName)
+				for _, rc := range resolved {
+					if scope == scopeCluster {
+						roleName := rc.entry.ClusterRoleName
+						if roleName == "" {
+							roleName = sharedRoleName(rc.cbName, scope, up)
+						}
+						c.crbs = append(c.crbs, buildCoarseClusterRoleBinding(
+							asr.Name, asr.Spec.Name, coarseBindingName(asr.Name, rc.cbName, scope, up), roleName))
+					} else {
+						c.rbs = append(c.rbs, buildCoarseRoleBinding(
+							asr.Name, asr.Spec.Name, parsed.Namespace,
+							coarseBindingName(asr.Name, rc.cbName, scope, up),
+							sharedRoleName(rc.cbName, scope, up)))
 					}
 				}
 			}
 		}
 
-		// Flatten into p.compiled. Rule sets materialize to deterministically
-		// ordered PolicyRules.
-		for clusterName, s := range scopes {
+		// Flatten into p.compiled. A cluster may carry resource-CCRN scopes, coarse
+		// bindings, or both. Rule sets materialize to deterministically ordered
+		// PolicyRules.
+		clusterNames := make(map[string]struct{})
+		for name := range scopes {
+			clusterNames[name] = struct{}{}
+		}
+		for name := range coarseByCluster {
+			clusterNames[name] = struct{}{}
+		}
+		for _, clusterName := range sortedKeys(clusterNames) {
 			target := compiledTarget{clusterName: clusterName}
-			if !s.clusterRules.empty() {
-				cr, crb := buildClusterScopedRBAC(asr.Name, asr.Spec.Name, s.clusterRules)
-				target.clusterRoles = append(target.clusterRoles, *cr)
-				target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
+			if s, ok := scopes[clusterName]; ok {
+				if !s.clusterRules.empty() {
+					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Spec.Name, s.clusterRules)
+					target.clusterRoles = append(target.clusterRoles, *cr)
+					target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
+				}
+				for _, ns := range sortedKeys(s.namespaceRules) {
+					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Spec.Name, ns, s.namespaceRules[ns])
+					target.roles = append(target.roles, *role)
+					target.roleBindings = append(target.roleBindings, *rb)
+				}
 			}
-			for _, ns := range sortedKeys(s.namespaceRules) {
-				role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Spec.Name, ns, s.namespaceRules[ns])
-				target.roles = append(target.roles, *role)
-				target.roleBindings = append(target.roleBindings, *rb)
+			if c, ok := coarseByCluster[clusterName]; ok {
+				target.coarseClusterRoleBindings = c.crbs
+				target.coarseRoleBindings = c.rbs
 			}
 			p.compiled = append(p.compiled, target)
 		}

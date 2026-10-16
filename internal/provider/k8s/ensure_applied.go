@@ -61,6 +61,18 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 					clusterErrs = append(clusterErrs, err)
 				}
 			}
+			for i := range target.coarseClusterRoleBindings {
+				if err := p.applyCoarseClusterRoleBinding(ctx, remoteClient, &target.coarseClusterRoleBindings[i], asr.Name, target.clusterName); err != nil {
+					p.Log.Error(err, "failed to apply coarse ClusterRoleBinding", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName)
+					clusterErrs = append(clusterErrs, err)
+				}
+			}
+			for i := range target.coarseRoleBindings {
+				if err := p.applyRoleBinding(ctx, remoteClient, &target.coarseRoleBindings[i], asr.Name, target.clusterName); err != nil {
+					p.Log.Error(err, "failed to apply coarse RoleBinding", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName, "targetNamespace", target.coarseRoleBindings[i].Namespace)
+					clusterErrs = append(clusterErrs, err)
+				}
+			}
 
 			if len(clusterErrs) > 0 {
 				aggregated := utilerrors.NewAggregate(clusterErrs)
@@ -224,6 +236,52 @@ func (p *Phase) applyRoleBinding(ctx context.Context, remoteClient client.Client
 	return nil
 }
 
+// applyCoarseClusterRoleBinding create-or-patches a standalone ClusterRoleBinding
+// that references an externally-owned ClusterRole (a shared pm role or a built-in
+// such as cluster-admin). RoleRef is immutable, so a change to the referenced role
+// — only possible when a CB rewrites a cluster capability's clusterRoleName under a
+// stable binding name — forces delete+recreate.
+func (p *Phase) applyCoarseClusterRoleBinding(ctx context.Context, remoteClient client.Client, crb *rbacv1.ClusterRoleBinding, asrName, clusterName string) error {
+	existing := &rbacv1.ClusterRoleBinding{}
+	ref := audit.ResourceRef{Kind: kindClusterRoleBinding, Name: crb.Name, Cluster: clusterName}
+
+	err := remoteClient.Get(ctx, client.ObjectKeyFromObject(crb), existing)
+	if apierrors.IsNotFound(err) {
+		if err := remoteClient.Create(ctx, crb); err != nil {
+			p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeSuccess, asrName, ref, nil)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+	}
+
+	if existing.RoleRef != crb.RoleRef {
+		if err := remoteClient.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+			p.AuditLog.Log(ctx, audit.ActionDelete, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q (roleRef migration delete): %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		if err := remoteClient.Create(ctx, crb); err != nil {
+			p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q (roleRef migration create): %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeSuccess, asrName, ref, nil)
+		return nil
+	}
+
+	patch := client.MergeFrom(existing.DeepCopy())
+	existing.Labels = crb.Labels
+	existing.Subjects = crb.Subjects
+	if err := remoteClient.Patch(ctx, existing, patch); err != nil {
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, err)
+		return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+	}
+	p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, ref, nil)
+	return nil
+}
+
 // opToAction maps controllerutil.OperationResult to audit.Action.
 func opToAction(op controllerutil.OperationResult) audit.Action {
 	if op == controllerutil.OperationResultCreated {
@@ -245,6 +303,12 @@ func compiledTargetToRefs(t compiledTarget) []pmmeta.AppliedResourceRef {
 		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRole, Namespace: r.Namespace, Name: r.Name})
 	}
 	for _, rb := range t.roleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRoleBinding, Namespace: rb.Namespace, Name: rb.Name})
+	}
+	for _, crb := range t.coarseClusterRoleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindClusterRoleBinding, Name: crb.Name})
+	}
+	for _, rb := range t.coarseRoleBindings {
 		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRoleBinding, Namespace: rb.Namespace, Name: rb.Name})
 	}
 	return refs

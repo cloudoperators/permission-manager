@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -250,8 +251,8 @@ func appliedRefKey(r pmmeta.AppliedResourceRef) string {
 
 // deleteSpecificRBAC deletes a single RBAC resource identified by ref.
 func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Client, ref pmmeta.AppliedResourceRef, asrName, clusterName string) error {
-	if ref.Name != resourceNamePrefix+asrName {
-		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedName", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+	if !strings.HasPrefix(ref.Name, resourceNamePrefix+asrName) {
+		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedPrefix", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
 		return nil
 	}
 	switch ref.Kind {
