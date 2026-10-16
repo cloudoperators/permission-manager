@@ -12,6 +12,7 @@ import (
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 )
 
@@ -39,6 +40,8 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 			return p.failMissingCB(ctx, asr, msg)
 		}
 
+		resourceOnly := asrIsResourceOnly(p.CCRNParser, asr)
+
 		usable := 0
 		for _, cb := range p.cbs {
 			def, err := ParseConnectorDefinition(cb.Spec.Definition)
@@ -46,7 +49,7 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 				p.Log.Error(err, "skipping unparseable ConnectorBinding definition", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
-			if len(def.CapabilityMapping) == 0 {
+			if len(def.CapabilityMapping) == 0 && !resourceOnly {
 				p.Log.Info("ConnectorBinding has empty capabilityMapping", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
@@ -111,4 +114,30 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 	)
 
 	return lifecycle.Break(), errors.New(msg)
+}
+
+// asrIsResourceOnly reports whether the ASR's kubernetes permissions are served
+// entirely by resource-scoped CCRNs, which never consult the ConnectorBinding
+// capabilityMapping — so an empty mapping is acceptable. Non-kubernetes and
+// unparseable permissions are skipped: the former are served by other providers,
+// and the latter are reported by the validator. A coarse cluster.k8s/namespace.k8s
+// CCRN needs the mapping, so it makes the ASR not resource-only. At least one
+// resource CCRN must be present; an ASR with no kubernetes resource CCRNs has
+// nothing to relax the mapping requirement for.
+func asrIsResourceOnly(parser *ccrn.Parser, asr *v1alpha1.ApplicationSpecificRole) bool {
+	if parser == nil {
+		parser = ccrn.NewParser(nil)
+	}
+	sawResourceCCRN := false
+	for _, perm := range asr.Spec.Permissions {
+		parsed, err := parser.Parse(perm.Resource)
+		if err != nil || !parsed.IsKubernetes() {
+			continue
+		}
+		if parsed.K8sResource == nil {
+			return false
+		}
+		sawResourceCCRN = true
+	}
+	return sawResourceCCRN
 }

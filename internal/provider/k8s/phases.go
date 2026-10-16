@@ -51,6 +51,17 @@ type Phase struct {
 	notReadyClusters         []string
 	discoveryDegraded        []string
 
+	// resource CCRNs rejected only for a specific capability (e.g. an unsupported
+	// capability on an otherwise-valid resource). Tracked per (resource, capability)
+	// so a bad capability does not block a valid sibling capability on the same
+	// resource. invalidCCRNs, by contrast, holds resources bad for every capability.
+	invalidResourceCaps []resourceCap
+
+	// non-fatal configuration warnings. The validator accumulates these and sets
+	// the ConfigWarning condition; the controller emits one Warning Event per
+	// entry after the subroutine chain.
+	configWarnings []ConfigWarning
+
 	// per-cluster outcomes from EnsureRbacApplied / EnsureOrphansCleanedUp.
 	provisionStatuses []clusterStatus
 	orphanStatuses    []clusterStatus
@@ -89,3 +100,24 @@ const (
 	kindRole               = "Role"
 	kindRoleBinding        = "RoleBinding"
 )
+
+// ConfigWarning is one non-fatal configuration warning accumulated by the
+// validator, carrying the Event reason and human-readable message.
+type ConfigWarning struct {
+	Reason  string
+	Message string
+}
+
+// resourceCap identifies a single (resource CCRN, capability) permission that is
+// invalid only for that capability. Used as a map key, so both fields are the raw
+// permission strings.
+type resourceCap struct {
+	resource   string
+	capability string
+}
+
+// ConfigWarnings returns the warnings accumulated this reconcile, for the
+// controller to emit as Kubernetes Warning Events.
+func (p *Phase) ConfigWarnings() []ConfigWarning {
+	return p.configWarnings
+}
