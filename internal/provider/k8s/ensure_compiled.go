@@ -38,6 +38,7 @@ import (
 func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		invalid := stringSet(p.invalidCCRNs)
+		invalidCaps := resourceCapSet(p.invalidResourceCaps)
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
 		notReadySeen := make(map[string]struct{})
@@ -76,8 +77,16 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 		// READ+WRITE on one target, and matches across multiple clusters, warn once.
 		scopeWarned := make(map[string]struct{})
 
+		// per-reconcile cache of discovered resource lists keyed by (cluster, gv),
+		// so the scope check fetches each group/version at most once. A cached nil
+		// records a failed or absent lookup so it is not retried.
+		gvResources := make(map[gvKey]*metav1.APIResourceList)
+
 		for _, perm := range asr.Spec.Permissions {
 			if _, bad := invalid[perm.Resource]; bad {
+				continue
+			}
+			if _, bad := invalidCaps[resourceCap{resource: perm.Resource, capability: perm.Capability}]; bad {
 				continue
 			}
 			parsed, err := parser.Parse(perm.Resource)
@@ -125,7 +134,7 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 
 			for _, clusterName := range matches.ready {
 				if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource != nil && parsed.K8sResource.Resource != "*" {
-					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed)
+					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed, gvResources)
 				}
 				effectiveRules := rules
 				if rulesNeedExpansion(rules) {
@@ -227,11 +236,6 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			asr.ClearInvalidConfigIfReason(pmmeta.DiscoveryUnavailableReason)
 		}
 
-		// Re-stamp from the full warning set: scope-mismatch warnings are added
-		// here (they need target-cluster discovery), alongside any the validator
-		// accumulated earlier.
-		p.applyConfigWarningCondition(asr)
-
 		return lifecycle.Continue(), nil
 	}
 }
@@ -331,7 +335,7 @@ func (p *Phase) discoveryFor(ctx context.Context, clusterName, namespace string,
 // group/versions plus a discovery lookup; any inability to resolve (group not
 // cached, discovery unavailable, resource unknown to the target) fails open with
 // no warning. Deduplicated per CCRN via warned.
-func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName, ccrnRaw string, res *ccrn.K8sResource, warned map[string]struct{}, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}) {
+func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName, ccrnRaw string, res *ccrn.K8sResource, warned map[string]struct{}, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}, gvResources map[gvKey]*metav1.APIResourceList) {
 	if _, ok := warned[ccrnRaw]; ok {
 		return
 	}
@@ -339,15 +343,24 @@ func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName,
 	if !ok {
 		return
 	}
-	gv, ok := preferredGVForGroup(cluster, res.APIGroup)
-	if !ok {
+	gvs := cachedGVsForGroup(cluster, res.APIGroup)
+	if len(gvs) == 0 {
 		return
 	}
 	disco, err := p.discoveryFor(ctx, clusterName, namespace, discoByCluster, discoFailed)
 	if err != nil {
 		return
 	}
-	namespaced, known := resourceNamespaced(disco, gv, res.Resource)
+	// A resource may be served by any cached version of its group; take the first
+	// version that actually knows the resource and only fail open once all are
+	// exhausted.
+	var namespaced, known bool
+	for _, gv := range gvs {
+		namespaced, known = resourceNamespaced(disco, clusterName, gv, res.Resource, gvResources)
+		if known {
+			break
+		}
+	}
 	if !known || namespaced {
 		return
 	}
@@ -358,27 +371,45 @@ func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName,
 	})
 }
 
-// preferredGVForGroup returns a cached group/version for apiGroup from the
-// cluster's discovery cache. ok is false when the group isn't cached, letting
-// the caller fail open before making a remote discovery call.
-func preferredGVForGroup(cluster *greenhousev1alpha1.Cluster, apiGroup string) (string, bool) {
+// gvKey identifies a target cluster's group/version, used to cache a discovered
+// resource list per reconcile so each group/version is fetched at most once.
+type gvKey struct {
+	cluster string
+	gv      string
+}
+
+// cachedGVsForGroup returns every cached group/version for apiGroup from the
+// cluster's discovery cache. An empty result means the group isn't cached,
+// letting the caller fail open before making a remote discovery call.
+func cachedGVsForGroup(cluster *greenhousev1alpha1.Cluster, apiGroup string) []string {
 	if cluster.Status.DiscoveryCache == nil {
-		return "", false
+		return nil
 	}
+	var gvs []string
 	for _, gv := range cluster.Status.DiscoveryCache.Groups {
 		if groupFromGV(gv) == apiGroup {
-			return gv, true
+			gvs = append(gvs, gv)
 		}
 	}
-	return "", false
+	return gvs
 }
 
 // resourceNamespaced reports whether the named resource is namespaced in the
-// given group/version. known is false when the discovery lookup fails or the
-// resource is absent, so the caller fails open.
-func resourceNamespaced(disco discovery.DiscoveryInterface, gv, resource string) (namespaced, known bool) {
-	list, err := disco.ServerResourcesForGroupVersion(gv)
-	if err != nil || list == nil {
+// given group/version, consulting (and populating) the per-reconcile gvResources
+// cache so each (cluster, gv) is fetched once. known is false when the discovery
+// lookup fails or the resource is absent, so the caller fails open.
+func resourceNamespaced(disco discovery.DiscoveryInterface, clusterName, gv, resource string, gvResources map[gvKey]*metav1.APIResourceList) (namespaced, known bool) {
+	key := gvKey{cluster: clusterName, gv: gv}
+	list, cached := gvResources[key]
+	if !cached {
+		l, err := disco.ServerResourcesForGroupVersion(gv)
+		if err != nil {
+			l = nil
+		}
+		gvResources[key] = l
+		list = l
+	}
+	if list == nil {
 		return false, false
 	}
 	for _, r := range list.APIResources {
@@ -618,6 +649,15 @@ func stringSet(ss []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(ss))
 	for _, s := range ss {
 		out[s] = struct{}{}
+	}
+	return out
+}
+
+// resourceCapSet builds a set of (resource, capability) pairs for membership tests.
+func resourceCapSet(rcs []resourceCap) map[resourceCap]struct{} {
+	out := make(map[resourceCap]struct{}, len(rcs))
+	for _, rc := range rcs {
+		out[rc] = struct{}{}
 	}
 	return out
 }
