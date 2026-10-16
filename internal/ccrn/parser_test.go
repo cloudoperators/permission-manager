@@ -670,6 +670,21 @@ func TestParse_ResourceScopedCCRNs(t *testing.T) {
 			input:   "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:log:extra",
 			wantErr: true,
 		},
+		{
+			name:    "comma in resource is an error",
+			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/v1/pods,secrets",
+			wantErr: true,
+		},
+		{
+			name:    "comma in apigroup is an error",
+			input:   "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps,extensions/deployments",
+			wantErr: true,
+		},
+		{
+			name:    "comma in subresource is an error",
+			input:   "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:log,status",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
