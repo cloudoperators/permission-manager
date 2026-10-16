@@ -5,6 +5,8 @@ package k8s_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -321,8 +323,14 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 			_, err := p.EnsureASRValidity(asr)(context.Background())
 			require.NoError(t, err)
 
+			// The validator does not stamp InvalidConfig/Ready for warning-only input.
 			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
 			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ReadyCondition))
+			// ConfigWarning is stamped by the terminal status subroutine.
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ConfigWarningCondition))
+
+			_, err = p.EnsureProviderStatus(asr)(context.Background())
+			require.NoError(t, err)
 
 			warn := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ConfigWarningCondition)
 			if tc.wantWarning {
@@ -333,4 +341,34 @@ func Test_EnsureASRValidity_Warnings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_EnsureASRValidity_BoundsInvalidConfigMessage(t *testing.T) {
+	// Enough invalid CCRNs that the joined message would overrun the CRD's
+	// condition-message limit if left unbounded.
+	perms := make([]v1alpha1.Permission, 0, 2000)
+	for i := range 2000 {
+		perms = append(perms, v1alpha1.Permission{
+			Resource:   fmt.Sprintf("not-a-urn-%06d-padding-padding-padding-padding", i),
+			Capability: "read",
+		})
+	}
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: perms},
+	}
+	p := &pmk8s.Phase{
+		AuditLog:   audit.Disabled(),
+		Log:        ctrl.Log.WithName("test"),
+		CCRNParser: ccrn.NewParser(nil),
+	}
+
+	_, err := p.EnsureASRValidity(asr)(context.Background())
+	require.NoError(t, err)
+
+	invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	require.NotNil(t, invalid)
+	require.LessOrEqual(t, len(invalid.Message), 32000)
+	require.True(t, strings.HasSuffix(invalid.Message, "… (truncated)"),
+		"bounded message must end with the truncation marker")
 }

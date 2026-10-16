@@ -22,6 +22,11 @@ import (
 func (p *Phase) EnsureProviderStatus(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(_ context.Context) (lifecycle.Result, error) {
 		p.writeProviderStatus(asr)
+		// Stamp the informational ConfigWarning condition exactly once, after the
+		// full subroutine chain has accumulated every warning (write-without-read
+		// and scope-mismatch). Stamping it earlier, per-subroutine, churned its
+		// LastTransitionTime each reconcile and could sustain a reconcile loop.
+		p.applyConfigWarningCondition(asr)
 		asr.CalculateReady()
 
 		if err := utilerrors.NewAggregate(append(p.provisionErrs, p.orphanErrs...)); err != nil {
