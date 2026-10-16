@@ -7,11 +7,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
+	"github.com/cloudoperators/permission-manager/internal/audit"
 	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 )
@@ -49,7 +55,7 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 				p.Log.Error(err, "skipping unparseable ConnectorBinding definition", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
-			if len(def.CapabilityMapping) == 0 && !resourceOnly {
+			if def.CapabilityMapping.empty() && !resourceOnly {
 				p.Log.Info("ConnectorBinding has empty capabilityMapping", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
 				continue
 			}
@@ -140,4 +146,105 @@ func asrIsResourceOnly(parser *ccrn.Parser, asr *v1alpha1.ApplicationSpecificRol
 		sawResourceCCRN = true
 	}
 	return sawResourceCCRN
+}
+
+// EnsureSharedClusterRoles creates or patches, on every Ready target cluster the
+// ASR's coarse CCRNs resolve to, the aggregated root and baseline child
+// ClusterRoles for each capability the referenced CBs define. The cluster MANAGE
+// direct-binding capability has no shared role and is skipped. Per-cluster
+// failures are logged and recorded but never fatal: a missing shared role surfaces
+// later as a binding to a non-existent role, not a reconcile stall.
+//
+// Runs before EnsureRbacCompiled so compiled bindings reference roles that exist.
+func (p *Phase) EnsureSharedClusterRoles(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
+	return func(ctx context.Context) (lifecycle.Result, error) {
+		if asr.HasInvalidConfig() {
+			return lifecycle.Continue(), nil
+		}
+		parser := p.CCRNParser
+		if parser == nil {
+			parser = ccrn.NewParser(nil)
+		}
+
+		// cluster name -> remote client, built at most once per reconcile.
+		clients := make(map[string]client.Client)
+		remoteFor := func(clusterName string) (client.Client, bool) {
+			if c, ok := clients[clusterName]; ok {
+				return c, c != nil
+			}
+			c, err := p.RemoteClient(ctx, p.Client, clusterName, asr.Namespace)
+			if err != nil {
+				p.Log.Error(err, "cluster unreachable for shared ClusterRole ensure, skipping",
+					"namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
+				clients[clusterName] = nil
+				return nil, false
+			}
+			clients[clusterName] = c
+			return c, true
+		}
+
+		// dedupe (cluster, roleName) so one role is ensured once even when many
+		// permissions resolve to it.
+		ensured := make(map[string]struct{})
+
+		for _, perm := range asr.Spec.Permissions {
+			parsed, err := parser.Parse(perm.Resource)
+			if err != nil || !parsed.IsKubernetes() || parsed.K8sResource != nil {
+				continue
+			}
+			scope := scopeNamespace
+			if parsed.Namespace == "" {
+				scope = scopeCluster
+			}
+			resolved, found := resolveCapability(p.cbs, scope, perm.Capability)
+			if !found {
+				continue
+			}
+			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
+			for _, clusterName := range matches.ready {
+				remoteClient, ok := remoteFor(clusterName)
+				if !ok {
+					continue
+				}
+				for _, rc := range resolved {
+					if rc.entry.ClusterRoleName != "" {
+						continue // direct binding: no shared role
+					}
+					key := clusterName + "/" + sharedRoleName(rc.cbName, scope, strings.ToUpper(perm.Capability))
+					if _, done := ensured[key]; done {
+						continue
+					}
+					ensured[key] = struct{}{}
+					p.ensureSharedPair(ctx, remoteClient, rc, scope, strings.ToUpper(perm.Capability), asr.Name, clusterName)
+				}
+			}
+		}
+		return lifecycle.Continue(), nil
+	}
+}
+
+// ensureSharedPair create-or-patches the aggregated root and baseline child for
+// one capability on one cluster. Failures are logged, not returned.
+func (p *Phase) ensureSharedPair(ctx context.Context, remoteClient client.Client, rc resolvedCapability, scope, capability, asrName, clusterName string) {
+	root := buildAggregatedRoot(rc.cbName, scope, capability, rc.entry.ClusterRoleSelectors)
+	child := buildBaselineChild(rc.cbName, scope, capability, rc.entry.Rules)
+	for _, desired := range []*rbacv1.ClusterRole{child, root} {
+		existing := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
+		op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
+			existing.Labels = desired.Labels
+			existing.Rules = desired.Rules
+			existing.AggregationRule = desired.AggregationRule
+			return nil
+		})
+		ref := audit.ResourceRef{Kind: kindClusterRole, Name: desired.Name, Cluster: clusterName}
+		if err != nil {
+			p.Log.Error(err, "failed to ensure shared ClusterRole",
+				"name", asrName, "cluster", clusterName, "role", desired.Name)
+			p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, err)
+			continue
+		}
+		if op != controllerutil.OperationResultNone {
+			p.AuditLog.Log(ctx, opToAction(op), audit.OutcomeSuccess, asrName, ref, nil)
+		}
+	}
 }

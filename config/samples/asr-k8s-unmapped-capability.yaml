@@ -1,5 +1,6 @@
-# Scenario: capability not present in the ConnectorBinding's capabilityMapping
-# (the CB only defines READ / WRITE / ADMIN — OPERATE is unmapped).
+# Scenario: capability not present in the ConnectorBinding's capabilityMapping.
+# k8s-connector maps cluster {MANAGE, READ} and namespace {MANAGE, READ}, so the
+# namespace OPERATE requested here is a valid vocabulary name the CB does not map.
 # Expected: EnsureRbacCompiled records "OPERATE" in p.unmappedCaps; status goes
 # Degraded with the unmapped capability named. No RBAC provisioned.
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1

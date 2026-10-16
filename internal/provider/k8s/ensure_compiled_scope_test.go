@@ -7,9 +7,11 @@ import (
 	"context"
 	"testing"
 
+	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -19,6 +21,19 @@ import (
 	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
 )
+
+// clusterStoreWithGroups returns a cluster store holding a single Ready test
+// cluster whose discovery cache advertises the given group/version strings.
+func clusterStoreWithGroups(t *testing.T, groups []string) cache.Store {
+	t.Helper()
+	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	c := newCluster(testClusterName, true)
+	if groups != nil {
+		c.Status.DiscoveryCache = &greenhousev1alpha1.DiscoveryCache{Groups: groups}
+	}
+	require.NoError(t, store.Add(c))
+	return store
+}
 
 // fakeScopeDiscovery reports resource scope (Namespaced) per group/version, so
 // the compile-phase kind-vs-scope check can be exercised against a target

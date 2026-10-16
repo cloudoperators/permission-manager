@@ -4,55 +4,52 @@
 # Example: ConnectorBinding for Kubernetes provider
 # Links ASRs to the Kubernetes RBAC provider with capability mapping.
 #
-# The capabilityMapping is operator-curated vocabulary read at reconcile time:
-# each capability name (READ/WRITE/ADMIN/OPERATE) maps to a list of rules
-# mirroring the native Kubernetes PolicyRule structure
-# (apiGroups + resources + verbs). All three fields are required. WRITE
-# explicitly repeats READ verbs because the controller does not inject them —
-# "trust the CB".
+# capabilityMapping is nested by scope (cluster vs namespace). Each scope maps a
+# closed set of capability names to the RBAC the controller provisions:
+#   cluster:   MANAGE, READ
+#   namespace: MANAGE, OPERATE, READ
+# A capability name outside its scope's set is rejected (InvalidCCRN).
+#
+# Each entry takes one of two mutually exclusive shapes:
+#   - clusterRoleName: bind directly to a named ClusterRole. Valid only for
+#     cluster MANAGE (cluster-admin).
+#   - clusterRoleSelectors (+ optional rules): the controller builds an
+#     aggregated root ClusterRole from the selectors and a baseline child
+#     ClusterRole from the rules.
+# OPERATE is intentionally left unmapped here so asr-k8s-unmapped-capability.yaml
+# can demonstrate the unmapped-capability path.
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ConnectorBinding
 metadata:
   name: k8s-connector
 spec:
-  name: Kubernetes Production
+  name: k8s-connector
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ:
-        - apiGroups: ["", "apps", "batch"]
-          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs"]
-          verbs: [get, list, watch]
-      WRITE:
-        - apiGroups: ["", "apps", "batch"]
-          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs"]
-          verbs: [get, list, watch, create, update, patch, delete]
-      ADMIN:
-        - apiGroups: ["", "apps", "batch", "rbac.authorization.k8s.io", "networking.k8s.io"]
-          resources: ["pods", "services", "configmaps", "deployments", "replicasets", "statefulsets", "jobs", "cronjobs", "roles", "rolebindings", "networkpolicies"]
-          verbs: [get, list, watch, create, update, patch, delete]
-      # Sub-resource access: pod exec/attach/portforward/proxy are `create`,
-      # while pod logs are read with `get`.
-      OPERATE:
-        - apiGroups: [""]
-          resources: ["pods/exec", "pods/attach", "pods/portforward", "pods/proxy"]
-          verbs: ["create"]
-        - apiGroups: [""]
-          resources: ["pods/log"]
-          verbs: ["get"]
-      # Deny-driven grant: "read everything except secrets". Instead of
-      # hand-enumerating every apiGroup/resource, declare excludeResources and
-      # the controller composes the grant per target cluster from its discovered
-      # API groups, subtracting only the named resources. Requires
-      # resources: ["*"]; verbs are copied onto every emitted rule. Fails closed
-      # (InvalidConfig=True, nothing applied) if the cluster's discovery is
-      # unavailable, so a denied resource can never leak.
-      READ_EXCEPT_SECRETS:
-        - apiGroups: ["*"]
-          resources: ["*"]
-          excludeResources:
+      cluster:
+        MANAGE:
+          clusterRoleName: cluster-admin
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+          # Cluster-scoped resources only; namespaced resources are covered by
+          # the aggregated view role. Secrets intentionally omitted.
+          rules:
             - apiGroups: [""]
-              resources: [secrets]
-            - apiGroups: ["core.gardener.cloud"]
-              resources: [internalsecrets]
-          verbs: [get, list, watch]
+              resources: ["nodes", "namespaces", "persistentvolumes"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["storage.k8s.io"]
+              resources: ["storageclasses", "volumeattachments"]
+              verbs: ["get", "list", "watch"]
+      namespace:
+        MANAGE:
+          # admin grants Secret access - intentional for namespace administrators.
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-admin: "true"
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -58,7 +59,12 @@ func cbWithProvider(name, provider string, def []byte) *v1alpha1.ConnectorBindin
 func Test_EnsureConnectorBindings(t *testing.T) {
 	usableDef := mustMarshal(map[string]any{
 		"capabilityMapping": map[string]any{
-			"READ": []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+			"cluster": map[string]any{
+				"READ": map[string]any{
+					"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+					"rules":                []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+				},
+			},
 		},
 	})
 	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})
@@ -309,4 +315,52 @@ func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
 			require.Equal(t, tc.wantResult, result)
 		})
 	}
+}
+
+func Test_EnsureSharedClusterRoles_CreatesRootAndChild(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+			"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"},
+		},
+	})
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name: testSpecName,
+			Permissions: []v1alpha1.Permission{
+				{Resource: validClusterCCRN, Capability: "READ"},
+				{Resource: validClusterCCRN, Capability: "MANAGE"},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	names := map[string]bool{}
+	for _, cr := range list.Items {
+		names[cr.Name] = true
+	}
+	require.True(t, names["pm-cb-cluster-read"], "root created")
+	require.True(t, names["pm-cb-cluster-read-baseline"], "child created")
+	require.False(t, names["pm-cb-cluster-manage"], "MANAGE direct binding creates no shared role")
 }
