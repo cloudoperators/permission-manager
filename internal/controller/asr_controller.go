@@ -240,9 +240,11 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),
 		p.EnsureConnectorBindings(asr),
+		p.EnsureSharedClusterRoles(asr),
 		p.EnsureRbacCompiled(asr),
 		p.EnsureOrphansCleanedUp(asr),
 		p.EnsureRbacApplied(asr),
+		p.EnsureSharedClusterRoleOrphansRemoved(asr),
 		p.EnsureProviderStatus(asr),
 	}
 	res, reconcileResult, err := lifecycle.ExecuteSubRoutine(ctx, routines)
