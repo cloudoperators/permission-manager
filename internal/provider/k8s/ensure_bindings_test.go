@@ -320,7 +320,7 @@ func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
 func Test_EnsureSharedClusterRoles_CreatesRootAndChild(t *testing.T) {
 	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
 
-	cb := newCBRaw(t, "cb", map[string]any{
+	cb := newCBRaw(t, map[string]any{
 		"cluster": map[string]any{
 			"READ": map[string]any{
 				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},

@@ -27,6 +27,7 @@ import (
 const (
 	testSpecName    = "test-group"
 	testCapability  = "READ"
+	testCBName      = "cb"
 	wildcardCluster = "remote-*"
 )
 
@@ -56,10 +57,10 @@ func newCluster(name string, ready bool) *greenhousev1alpha1.Cluster {
 	return c
 }
 
-func newCB(t *testing.T, name string, verbs ...string) *v1alpha1.ConnectorBinding {
+func newCB(t *testing.T, verbs ...string) *v1alpha1.ConnectorBinding {
 	t.Helper()
 	rule := map[string]any{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": verbs}
-	return newCBRaw(t, name, map[string]any{
+	return newCBRaw(t, map[string]any{
 		"cluster": map[string]any{
 			testCapability: map[string]any{
 				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
@@ -77,15 +78,15 @@ func newCB(t *testing.T, name string, verbs ...string) *v1alpha1.ConnectorBindin
 
 // newCBRaw builds a kubernetes ConnectorBinding from a raw capabilityMapping,
 // so tests can supply the structured (apiGroups/resources/verbs) rule form.
-func newCBRaw(t *testing.T, name string, capabilityMapping map[string]any) *v1alpha1.ConnectorBinding {
+func newCBRaw(t *testing.T, capabilityMapping map[string]any) *v1alpha1.ConnectorBinding {
 	t.Helper()
 	def := map[string]any{"capabilityMapping": capabilityMapping}
 	rawBytes, err := json.Marshal(def)
 	require.NoError(t, err)
 	return &v1alpha1.ConnectorBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: testCBName, Namespace: testNamespace},
 		Spec: v1alpha1.ConnectorBindingSpec{
-			Name:       name,
+			Name:       testCBName,
 			Provider:   "kubernetes",
 			Definition: &runtime.RawExtension{Raw: rawBytes},
 		},
@@ -111,7 +112,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
-			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get", "list")},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "get", "list")},
 			clusters:    []string{testClusterName},
 			wantTargets: 1,
 			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
@@ -127,7 +128,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			permissions: []v1alpha1.Permission{
 				{Resource: validNamespaceCCRN, Capability: testCapability},
 			},
-			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			clusters:    []string{testClusterName},
 			wantTargets: 1,
 			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
@@ -145,7 +146,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				{Resource: validClusterCCRN, Capability: testCapability},
 				{Resource: validNamespaceCCRN, Capability: testCapability},
 			},
-			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			clusters:    []string{testClusterName},
 			wantTargets: 1,
 			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
@@ -173,7 +174,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			permissions: []v1alpha1.Permission{
 				{Resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/" + wildcardCluster, Capability: testCapability},
 			},
-			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			clusters:    []string{testClusterNameA, testClusterNameB, "other"},
 			wantTargets: 2,
 			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
@@ -187,7 +188,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				{Resource: malformedCCRN, Capability: testCapability},
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
-			cbs:          []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:          []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			invalidCCRNs: []string{malformedCCRN},
 			clusters:     []string{testClusterName},
 			wantTargets:  1,
@@ -200,7 +201,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: "WRITE"},
 			},
-			cbs:            []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:            []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			clusters:       []string{testClusterName},
 			wantTargets:    0,
 			wantUnknownCap: true,
@@ -210,7 +211,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
-			cbs:           []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			cbs:           []*v1alpha1.ConnectorBinding{newCB(t, "get")},
 			clusters:      []string{"other"},
 			wantTargets:   0,
 			wantNoTargets: true,
@@ -348,7 +349,7 @@ func Test_EnsureRbacCompiled_PartialSuccess(t *testing.T) {
 				Log:          ctrl.Log.WithName("test"),
 				CCRNParser:   ccrn.NewParser(nil),
 			}
-			p.SetCBs([]*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")})
+			p.SetCBs([]*v1alpha1.ConnectorBinding{newCB(t, "get")})
 
 			_, err := p.EnsureRbacCompiled(asr)(context.Background())
 			require.NoError(t, err)

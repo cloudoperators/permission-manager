@@ -427,7 +427,7 @@ func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *test
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
 	).Build()
 
-	cb := newCBRaw(t, "cb", map[string]any{
+	cb := newCBRaw(t, map[string]any{
 		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
 	})
 	asr := &v1alpha1.ApplicationSpecificRole{
@@ -459,7 +459,7 @@ func Test_EnsureSharedClusterRoleOrphansRemoved_KeepsCurrentCapability(t *testin
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
 	).Build()
 
-	cb := newCB(t, "cb", "get")
+	cb := newCB(t, "get")
 	asr := &v1alpha1.ApplicationSpecificRole{
 		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
 		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},

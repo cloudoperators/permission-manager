@@ -4,12 +4,16 @@ Smoke tests: apply an ApplicationSpecificRole, expect the downstream resources
 to show up. One spec file per provider under `e2e/`:
 
 - `k8s_test.go`:
-  - a cluster CCRN creates a ClusterRole and ClusterRoleBinding on the remote
-    cluster
-  - a namespace CCRN creates a Role and RoleBinding
-  - deleting the ASR removes the remote RBAC through the finalizer
+  - a cluster CCRN binds to the shared aggregated ClusterRole
+    (`pm-<cb>-cluster-read`) through a per-ASR ClusterRoleBinding
+    (`pm-<asr>-<cb>-cluster-read`)
+  - a namespace CCRN binds to the shared ClusterRole
+    (`pm-<cb>-namespace-read`) through a per-ASR namespaced RoleBinding; no
+    per-ASR Role is created
+  - deleting the ASR removes the per-ASR binding through the finalizer while the
+    ConnectorBinding-owned shared ClusterRole stays
   - narrowing a cluster CCRN to a namespace CCRN cleans up the orphaned
-    cluster-scoped RBAC
+    cluster-scoped binding
 - `github_test.go`:
   - a github connector creates the GithubTeam and GithubTeamRepository CRs in
     the org namespace
