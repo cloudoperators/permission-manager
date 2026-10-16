@@ -316,10 +316,15 @@ func parseK8sNamespaceResource(urn string, parts []string) (*ParsedCCRN, error) 
 
 // parseResourceSegment splits "<apigroup>" + "<resource>[:<subresource>]" into a
 // K8sResource. The core-group token "v1" maps to "". A literal "/" in the
-// resource cannot reach here; it overflows the segment count upstream.
+// resource cannot reach here; it overflows the segment count upstream. Commas
+// are rejected: they are never valid in Kubernetes group/resource names and
+// would collide with the comma-joined RBAC rule merge key downstream.
 func parseResourceSegment(apiGroup, segment string) (*K8sResource, error) {
 	if apiGroup == "" {
 		return nil, errors.New("apiGroup must not be empty")
+	}
+	if strings.Contains(apiGroup, ",") {
+		return nil, errors.New("apiGroup must not contain a comma")
 	}
 	group := apiGroup
 	if group == coreGroupToken {
@@ -329,12 +334,18 @@ func parseResourceSegment(apiGroup, segment string) (*K8sResource, error) {
 	if resource == "" {
 		return nil, errors.New("resource must not be empty")
 	}
+	if strings.Contains(resource, ",") {
+		return nil, errors.New("resource must not contain a comma")
+	}
 	if hasSub {
 		if sub == "" {
 			return nil, errors.New("subresource must not be empty")
 		}
 		if strings.Contains(sub, ":") {
 			return nil, errors.New("resource must not contain more than one ':' subresource delimiter")
+		}
+		if strings.Contains(sub, ",") {
+			return nil, errors.New("subresource must not contain a comma")
 		}
 	}
 	return &K8sResource{APIGroup: group, Resource: resource, SubResource: sub}, nil

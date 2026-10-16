@@ -149,7 +149,9 @@ The following are hard validation failures, consistent with the existing fail-cl
 - Capability other than `READ` or `WRITE`
 
 A literal `/` inside the `<resource>` segment is rejected (it overflows the URN segment
-count); use `:` for subresources.
+count); use `:` for subresources. A literal `,` in the `<apigroup>`, `<resource>`, or
+`<subresource>` token is rejected: commas are never valid in Kubernetes group/resource names
+and would collide with the comma-joined RBAC rule merge key.
 
 ### Non-fatal warnings
 
