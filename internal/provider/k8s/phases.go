@@ -51,6 +51,12 @@ type Phase struct {
 	notReadyClusters         []string
 	discoveryDegraded        []string
 
+	// resource CCRNs rejected only for a specific capability (e.g. an unsupported
+	// capability on an otherwise-valid resource). Tracked per (resource, capability)
+	// so a bad capability does not block a valid sibling capability on the same
+	// resource. invalidCCRNs, by contrast, holds resources bad for every capability.
+	invalidResourceCaps []resourceCap
+
 	// non-fatal configuration warnings. The validator accumulates these and sets
 	// the ConfigWarning condition; the controller emits one Warning Event per
 	// entry after the subroutine chain.
@@ -100,6 +106,14 @@ const (
 type ConfigWarning struct {
 	Reason  string
 	Message string
+}
+
+// resourceCap identifies a single (resource CCRN, capability) permission that is
+// invalid only for that capability. Used as a map key, so both fields are the raw
+// permission strings.
+type resourceCap struct {
+	resource   string
+	capability string
 }
 
 // ConfigWarnings returns the warnings accumulated this reconcile, for the

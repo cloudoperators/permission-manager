@@ -46,8 +46,17 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			if parsed.K8sResource == nil {
 				continue
 			}
-			if resourceCCRNInvalid(parsed, perm.Capability) {
+			if resourceStructureInvalid(parsed) {
 				p.invalidCCRNs = append(p.invalidCCRNs, perm.Resource)
+				continue
+			}
+			if !resourceCapabilitySupported(perm.Capability) {
+				// Only this (resource, capability) permission is invalid; a valid
+				// sibling capability on the same resource must still compile.
+				p.invalidResourceCaps = append(p.invalidResourceCaps, resourceCap{
+					resource:   perm.Resource,
+					capability: perm.Capability,
+				})
 				continue
 			}
 			if caps[perm.Resource] == nil {
@@ -71,10 +80,11 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			delete(caps, perm.Resource)
 		}
 
-		p.applyConfigWarningCondition(asr)
+		// The ConfigWarning condition is stamped once by EnsureProviderStatus,
+		// after every subroutine has contributed its warnings.
 
-		if len(p.invalidCCRNs) > 0 {
-			msg := fmt.Sprintf("invalid CCRNs: %v", p.invalidCCRNs)
+		if len(p.invalidCCRNs) > 0 || len(p.invalidResourceCaps) > 0 {
+			msg := boundMessage(p.invalidConfigMessage())
 			asr.SetCondition(pmmeta.TrueCondition(
 				pmmeta.InvalidConfigCondition,
 				pmmeta.InvalidCCRNReason,
@@ -93,6 +103,38 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 	}
 }
 
+// invalidConfigMessage renders the InvalidCCRN condition message from both the
+// all-capability invalid CCRNs and the capability-specific invalid permissions.
+func (p *Phase) invalidConfigMessage() string {
+	parts := make([]string, 0, 2)
+	if len(p.invalidCCRNs) > 0 {
+		parts = append(parts, fmt.Sprintf("invalid CCRNs: %v", p.invalidCCRNs))
+	}
+	if len(p.invalidResourceCaps) > 0 {
+		pairs := make([]string, 0, len(p.invalidResourceCaps))
+		for _, rc := range p.invalidResourceCaps {
+			pairs = append(pairs, fmt.Sprintf("%s[%s]", rc.resource, rc.capability))
+		}
+		parts = append(parts, fmt.Sprintf("unsupported capabilities: %v", pairs))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// maxConditionMessage bounds status-condition messages well under the CRD's
+// 32768-char limit, so a large warning or invalid-CCRN set can never make the
+// status patch fail. The complete record stays in the per-warning Events.
+const maxConditionMessage = 32000
+
+// boundMessage truncates msg to maxConditionMessage, appending a marker so the
+// truncation is visible rather than silent.
+func boundMessage(msg string) string {
+	if len(msg) <= maxConditionMessage {
+		return msg
+	}
+	const marker = "… (truncated)"
+	return msg[:maxConditionMessage-len(marker)] + marker
+}
+
 // applyConfigWarningCondition stamps the informational ConfigWarning condition
 // from the warnings accumulated so far this reconcile, or clears it when none
 // remain. Shared by the validator and the compiler, since each contributes
@@ -109,13 +151,14 @@ func (p *Phase) applyConfigWarningCondition(asr *v1alpha1.ApplicationSpecificRol
 	asr.SetCondition(pmmeta.TrueCondition(
 		pmmeta.ConfigWarningCondition,
 		pmmeta.ConfigurationWarningReason,
-		strings.Join(msgs, "; "),
+		boundMessage(strings.Join(msgs, "; ")),
 	))
 }
 
-// resourceCCRNInvalid reports whether a parsed resource-scoped CCRN violates a
-// hard rule. Namespace-wildcard is handled by the shared check in the main loop.
-func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
+// resourceStructureInvalid reports whether a parsed resource-scoped CCRN violates
+// a hard rule that makes it invalid for every capability. Namespace-wildcard is
+// handled by the shared check in the main loop.
+func resourceStructureInvalid(parsed *ccrn.ParsedCCRN) bool {
 	k := parsed.K8sResource
 	if ccrn.IsWildcard(k.APIGroup) {
 		return true
@@ -128,10 +171,17 @@ func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
 	if ccrn.IsWildcard(k.SubResource) || (k.Resource == "*" && k.SubResource != "") {
 		return true
 	}
+	return false
+}
+
+// resourceCapabilitySupported reports whether a resource-scoped CCRN supports the
+// given capability. Unlike structural problems, an unsupported capability only
+// invalidates that one (resource, capability) permission.
+func resourceCapabilitySupported(capability string) bool {
 	switch strings.ToUpper(capability) {
 	case "READ", "WRITE":
-		return false
-	default:
 		return true
+	default:
+		return false
 	}
 }
