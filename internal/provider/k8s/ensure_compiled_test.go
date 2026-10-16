@@ -333,6 +333,50 @@ func Test_EnsureRbacCompiled_PartialSuccess(t *testing.T) {
 	}
 }
 
+// Test_EnsureRbacCompiled_InvalidCapabilityKeepsSibling asserts that an
+// unsupported capability on a resource CCRN invalidates only that permission:
+// a valid READ on the same resource string still compiles, while the ASR is
+// still flagged InvalidConfig for the rejected capability.
+func Test_EnsureRbacCompiled_InvalidCapabilityKeepsSibling(t *testing.T) {
+	const resourceCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name: testSpecName,
+			Permissions: []v1alpha1.Permission{
+				{Resource: resourceCCRN, Capability: "READ"},
+				{Resource: resourceCCRN, Capability: "MANAGE"},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		ClusterStore: newClusterStore(t, testClusterName),
+		CCRNParser:   ccrn.NewParser(nil),
+	}
+
+	// The validator flags the unsupported capability without poisoning the resource.
+	_, err := p.EnsureASRValidity(asr)(context.Background())
+	require.NoError(t, err)
+	invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	require.NotNil(t, invalid)
+	require.Equal(t, string(pmmeta.InvalidCCRNReason), invalid.Reason)
+
+	// The compiler still produces the valid READ grant; MANAGE contributes nothing.
+	_, err = p.EnsureRbacCompiled(asr)(context.Background())
+	require.NoError(t, err)
+	compiled := p.Compiled()
+	require.Len(t, compiled, 1)
+	require.Len(t, compiled[0].ClusterRoles, 1)
+	rules := compiled[0].ClusterRoles[0].Rules
+	require.Len(t, rules, 1)
+	require.Equal(t, []string{"apps"}, rules[0].APIGroups)
+	require.Equal(t, []string{"deployments"}, rules[0].Resources)
+	require.Equal(t, []string{"get", "list", "watch"}, rules[0].Verbs)
+}
+
 func Test_EnsureRbacCompiled_Verb_Union(t *testing.T) {
 	asr := &v1alpha1.ApplicationSpecificRole{
 		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
@@ -563,5 +607,37 @@ func Test_EnsureRbacCompiled_ResourceCCRNs(t *testing.T) {
 		require.Len(t, rules, 1)
 		require.Equal(t, []string{""}, rules[0].APIGroups)
 		require.Equal(t, []string{"pods/log"}, rules[0].Resources)
+	})
+
+	t.Run("comma resource CCRN is dropped without colliding with a sibling READ", func(t *testing.T) {
+		// A comma in a resource token is rejected at parse; it must not reach the
+		// comma-joined rule merge key and leak verbs onto the real resources.
+		const commaCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/v1/pods,secrets"
+		asr := &v1alpha1.ApplicationSpecificRole{
+			ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+			Spec: v1alpha1.ApplicationSpecificRoleSpec{
+				Name: testSpecName,
+				Permissions: []v1alpha1.Permission{
+					{Resource: commaCCRN, Capability: "READ"},
+					{Resource: clusterResourceRead, Capability: "READ"},
+				},
+			},
+		}
+		p := &pmk8s.Phase{
+			AuditLog:     audit.Disabled(),
+			Log:          ctrl.Log.WithName("test"),
+			ClusterStore: newClusterStore(t, testClusterName),
+			CCRNParser:   ccrn.NewParser(nil),
+		}
+		_, err := p.EnsureRbacCompiled(asr)(context.Background())
+		require.NoError(t, err)
+		compiled := p.Compiled()
+		require.Len(t, compiled, 1)
+		require.Len(t, compiled[0].ClusterRoles, 1)
+		rules := compiled[0].ClusterRoles[0].Rules
+		require.Len(t, rules, 1)
+		require.Equal(t, []string{"apps"}, rules[0].APIGroups)
+		require.Equal(t, []string{"deployments"}, rules[0].Resources)
+		require.Equal(t, []string{"get", "list", "watch"}, rules[0].Verbs)
 	})
 }
