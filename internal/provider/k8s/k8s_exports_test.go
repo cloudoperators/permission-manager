@@ -14,11 +14,13 @@ func (p *Phase) SetCompiled(targets []ExportCompiledTarget) {
 	out := make([]compiledTarget, 0, len(targets))
 	for _, t := range targets {
 		out = append(out, compiledTarget{
-			clusterName:         t.ClusterName,
-			clusterRoles:        t.ClusterRoles,
-			clusterRoleBindings: t.ClusterRoleBindings,
-			roles:               t.Roles,
-			roleBindings:        t.RoleBindings,
+			clusterName:               t.ClusterName,
+			clusterRoles:              t.ClusterRoles,
+			clusterRoleBindings:       t.ClusterRoleBindings,
+			roles:                     t.Roles,
+			roleBindings:              t.RoleBindings,
+			coarseClusterRoleBindings: t.CoarseClusterRoleBindings,
+			coarseRoleBindings:        t.CoarseRoleBindings,
 		})
 	}
 	p.compiled = out
@@ -78,20 +80,24 @@ func (p *Phase) Compiled() []ExportCompiledTarget {
 	out := make([]ExportCompiledTarget, 0, len(p.compiled))
 	for _, t := range p.compiled {
 		out = append(out, ExportCompiledTarget{
-			ClusterName:         t.clusterName,
-			ClusterRoles:        t.clusterRoles,
-			ClusterRoleBindings: t.clusterRoleBindings,
-			Roles:               t.roles,
-			RoleBindings:        t.roleBindings,
+			ClusterName:               t.clusterName,
+			ClusterRoles:              t.clusterRoles,
+			ClusterRoleBindings:       t.clusterRoleBindings,
+			Roles:                     t.roles,
+			RoleBindings:              t.roleBindings,
+			CoarseClusterRoleBindings: t.coarseClusterRoleBindings,
+			CoarseRoleBindings:        t.coarseRoleBindings,
 		})
 	}
 	return out
 }
 
 type ExportCompiledTarget struct {
-	ClusterName         string
-	ClusterRoles        []rbacv1.ClusterRole
-	ClusterRoleBindings []rbacv1.ClusterRoleBinding
-	Roles               []rbacv1.Role
-	RoleBindings        []rbacv1.RoleBinding
+	ClusterName               string
+	ClusterRoles              []rbacv1.ClusterRole
+	ClusterRoleBindings       []rbacv1.ClusterRoleBinding
+	Roles                     []rbacv1.Role
+	RoleBindings              []rbacv1.RoleBinding
+	CoarseClusterRoleBindings []rbacv1.ClusterRoleBinding
+	CoarseRoleBindings        []rbacv1.RoleBinding
 }

@@ -75,6 +75,11 @@ type compiledTarget struct {
 	clusterRoleBindings []rbacv1.ClusterRoleBinding
 	roles               []rbacv1.Role
 	roleBindings        []rbacv1.RoleBinding
+
+	// bindings for coarse cluster.k8s / namespace.k8s CCRNs: references to shared
+	// or external ClusterRoles, applied without a paired per-ASR role.
+	coarseClusterRoleBindings []rbacv1.ClusterRoleBinding
+	coarseRoleBindings        []rbacv1.RoleBinding
 }
 
 // clusterStatus tracks the provisioning outcome for a single cluster.

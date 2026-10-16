@@ -93,74 +93,110 @@ func newCBRaw(t *testing.T, name string, capabilityMapping map[string]any) *v1al
 }
 
 func Test_EnsureRbacCompiled(t *testing.T) {
+	const clusterResourceRead = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+
 	cases := []struct {
-		name             string
-		permissions      []v1alpha1.Permission
-		cbs              []*v1alpha1.ConnectorBinding
-		invalidCCRNs     []string
-		clusters         []string
-		wantTargets      int
-		wantClusterRoles map[string]int
-		wantRoles        map[string]int
-		wantUnknownCap   bool
-		wantNoTargets    bool
+		name           string
+		permissions    []v1alpha1.Permission
+		cbs            []*v1alpha1.ConnectorBinding
+		invalidCCRNs   []string
+		clusters       []string
+		wantTargets    int
+		wantUnknownCap bool
+		wantNoTargets  bool
+		assert         func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget)
 	}{
 		{
-			name: "should compile a cluster-scoped pair for a cluster ccrn",
+			name: "cluster ccrn compiles to a coarse ClusterRoleBinding",
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
-			cbs:              []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get", "list")},
-			clusters:         []string{testClusterName},
-			wantTargets:      1,
-			wantClusterRoles: map[string]int{testClusterName: 1},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get", "list")},
+			clusters:    []string{testClusterName},
+			wantTargets: 1,
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				c := byCluster[testClusterName]
+				require.Empty(t, c.ClusterRoles)
+				require.Len(t, c.CoarseClusterRoleBindings, 1)
+				require.Equal(t, "pm-test-asr-cb-cluster-read", c.CoarseClusterRoleBindings[0].Name)
+				require.Equal(t, "pm-cb-cluster-read", c.CoarseClusterRoleBindings[0].RoleRef.Name)
+			},
 		},
 		{
-			name: "should compile a namespace-scoped pair for a namespace ccrn",
+			name: "namespace ccrn compiles to a coarse RoleBinding to a ClusterRole",
 			permissions: []v1alpha1.Permission{
 				{Resource: validNamespaceCCRN, Capability: testCapability},
 			},
 			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
 			clusters:    []string{testClusterName},
 			wantTargets: 1,
-			wantRoles:   map[string]int{testClusterName: 1},
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				c := byCluster[testClusterName]
+				require.Empty(t, c.Roles)
+				require.Len(t, c.CoarseRoleBindings, 1)
+				require.Equal(t, "demo", c.CoarseRoleBindings[0].Namespace)
+				require.Equal(t, "ClusterRole", c.CoarseRoleBindings[0].RoleRef.Kind)
+				require.Equal(t, "pm-cb-namespace-read", c.CoarseRoleBindings[0].RoleRef.Name)
+			},
 		},
 		{
-			name: "should compile cluster and namespace pairs on the same target",
+			name: "cluster and namespace coarse bindings on the same target",
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: testCapability},
 				{Resource: validNamespaceCCRN, Capability: testCapability},
 			},
-			cbs:              []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
-			clusters:         []string{testClusterName},
-			wantTargets:      1,
-			wantClusterRoles: map[string]int{testClusterName: 1},
-			wantRoles:        map[string]int{testClusterName: 1},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			clusters:    []string{testClusterName},
+			wantTargets: 1,
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				c := byCluster[testClusterName]
+				require.Len(t, c.CoarseClusterRoleBindings, 1)
+				require.Len(t, c.CoarseRoleBindings, 1)
+			},
 		},
 		{
-			name: "should fan out a wildcard cluster pattern across matching clusters",
+			name: "resource ccrn compiles a per-ASR ClusterRole",
+			permissions: []v1alpha1.Permission{
+				{Resource: clusterResourceRead, Capability: "READ"},
+			},
+			clusters:    []string{testClusterName},
+			wantTargets: 1,
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				c := byCluster[testClusterName]
+				require.Len(t, c.ClusterRoles, 1)
+				require.Equal(t, "pm-test-asr", c.ClusterRoles[0].Name)
+				require.Empty(t, c.CoarseClusterRoleBindings)
+			},
+		},
+		{
+			name: "fans out a wildcard cluster pattern across matching clusters",
 			permissions: []v1alpha1.Permission{
 				{Resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/" + wildcardCluster, Capability: testCapability},
 			},
-			cbs:              []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
-			clusters:         []string{testClusterNameA, testClusterNameB, "other"},
-			wantTargets:      2,
-			wantClusterRoles: map[string]int{testClusterNameA: 1, testClusterNameB: 1},
+			cbs:         []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			clusters:    []string{testClusterNameA, testClusterNameB, "other"},
+			wantTargets: 2,
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				require.Len(t, byCluster[testClusterNameA].CoarseClusterRoleBindings, 1)
+				require.Len(t, byCluster[testClusterNameB].CoarseClusterRoleBindings, 1)
+			},
 		},
 		{
-			name: "should skip ccrns already marked invalid",
+			name: "skips ccrns already marked invalid",
 			permissions: []v1alpha1.Permission{
 				{Resource: malformedCCRN, Capability: testCapability},
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
-			cbs:              []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
-			invalidCCRNs:     []string{malformedCCRN},
-			clusters:         []string{testClusterName},
-			wantTargets:      1,
-			wantClusterRoles: map[string]int{testClusterName: 1},
+			cbs:          []*v1alpha1.ConnectorBinding{newCB(t, "cb", "get")},
+			invalidCCRNs: []string{malformedCCRN},
+			clusters:     []string{testClusterName},
+			wantTargets:  1,
+			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
+				require.Len(t, byCluster[testClusterName].CoarseClusterRoleBindings, 1)
+			},
 		},
 		{
-			name: "should mark invalid when a capability has no connector mapping",
+			name: "marks invalid when a capability has no connector mapping",
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: "WRITE"},
 			},
@@ -170,7 +206,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			wantUnknownCap: true,
 		},
 		{
-			name: "should mark invalid when a cluster pattern matches nothing",
+			name: "marks invalid when a cluster pattern matches nothing",
 			permissions: []v1alpha1.Permission{
 				{Resource: validClusterCCRN, Capability: testCapability},
 			},
@@ -180,7 +216,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			wantNoTargets: true,
 		},
 		{
-			name:        "should produce no targets when permissions are empty",
+			name:        "produces no targets when permissions are empty",
 			permissions: nil,
 			cbs:         nil,
 			clusters:    []string{testClusterName},
@@ -218,17 +254,8 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			for _, ct := range compiled {
 				byCluster[ct.ClusterName] = ct
 			}
-			for cluster, want := range tc.wantClusterRoles {
-				got, ok := byCluster[cluster]
-				require.True(t, ok)
-				require.Len(t, got.ClusterRoles, want)
-				require.Len(t, got.ClusterRoleBindings, want)
-			}
-			for cluster, want := range tc.wantRoles {
-				got, ok := byCluster[cluster]
-				require.True(t, ok)
-				require.Len(t, got.Roles, want)
-				require.Len(t, got.RoleBindings, want)
+			if tc.assert != nil {
+				tc.assert(t, byCluster)
 			}
 
 			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
@@ -341,165 +368,6 @@ func Test_EnsureRbacCompiled_PartialSuccess(t *testing.T) {
 			}
 		})
 	}
-}
-
-func Test_EnsureRbacCompiled_Verb_Union(t *testing.T) {
-	asr := &v1alpha1.ApplicationSpecificRole{
-		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name: testSpecName,
-			Permissions: []v1alpha1.Permission{
-				{Resource: validClusterCCRN, Capability: testCapability},
-			},
-		},
-	}
-
-	p := &pmk8s.Phase{
-		ClusterStore: newClusterStore(t, testClusterName),
-		AuditLog:     audit.Disabled(),
-		Log:          ctrl.Log.WithName("test"),
-		CCRNParser:   ccrn.NewParser(nil),
-	}
-	p.SetCBs([]*v1alpha1.ConnectorBinding{
-		newCB(t, "cb-a", "get", "list"),
-		newCB(t, "cb-b", "list", "watch"),
-	})
-
-	_, err := p.EnsureRbacCompiled(asr)(context.Background())
-	require.NoError(t, err)
-
-	compiled := p.Compiled()
-	require.Len(t, compiled, 1)
-	require.Len(t, compiled[0].ClusterRoles, 1)
-	require.Equal(t, []string{"get", "list", "watch"}, compiled[0].ClusterRoles[0].Rules[0].Verbs)
-}
-
-// Test_EnsureRbacCompiled_StructuredRules asserts a capability made of multiple
-// mini-rules (e.g. sub-resource access) compiles to one PolicyRule per distinct
-// (apiGroups, resources) target, deterministically ordered.
-func Test_EnsureRbacCompiled_StructuredRules(t *testing.T) {
-	cb := newCBRaw(t, "cb-cluster", map[string]any{
-		"cluster": map[string]any{
-			"READ": map[string]any{
-				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
-				"rules": []map[string]any{
-					{
-						"apiGroups": []string{""},
-						"resources": []string{"pods/exec", "pods/portforward", "pods/proxy"},
-						"verbs":     []string{"create"},
-					},
-					{
-						"apiGroups": []string{""},
-						"resources": []string{"pods/log"},
-						"verbs":     []string{"get"},
-					},
-				},
-			},
-		},
-	})
-
-	asr := &v1alpha1.ApplicationSpecificRole{
-		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name: testSpecName,
-			Permissions: []v1alpha1.Permission{
-				{Resource: validClusterCCRN, Capability: "READ"},
-			},
-		},
-	}
-
-	p := &pmk8s.Phase{
-		ClusterStore: newClusterStore(t, testClusterName),
-		AuditLog:     audit.Disabled(),
-		Log:          ctrl.Log.WithName("test"),
-		CCRNParser:   ccrn.NewParser(nil),
-	}
-	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
-
-	_, err := p.EnsureRbacCompiled(asr)(context.Background())
-	require.NoError(t, err)
-
-	compiled := p.Compiled()
-	require.Len(t, compiled, 1)
-	require.Len(t, compiled[0].ClusterRoles, 1)
-
-	rules := compiled[0].ClusterRoles[0].Rules
-	require.Len(t, rules, 2)
-
-	// Ordered by resources string: "pods/exec,..." before "pods/log".
-	require.Equal(t, []string{""}, rules[0].APIGroups)
-	require.Equal(t, []string{"pods/exec", "pods/portforward", "pods/proxy"}, rules[0].Resources)
-	require.Equal(t, []string{"create"}, rules[0].Verbs)
-
-	require.Equal(t, []string{""}, rules[1].APIGroups)
-	require.Equal(t, []string{"pods/log"}, rules[1].Resources)
-	require.Equal(t, []string{"get"}, rules[1].Verbs)
-}
-
-// Test_EnsureRbacCompiled_MergesRules asserts that referencing two structured
-// capabilities on the same cluster produces a single ClusterRole whose rules
-// union the distinct targets, with verbs merged per target.
-func Test_EnsureRbacCompiled_MergesRules(t *testing.T) {
-	read := newCBRaw(t, "cb-read", map[string]any{
-		"cluster": map[string]any{
-			"READ": map[string]any{
-				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
-				"rules": []map[string]any{
-					{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get", "list", "watch"}},
-				},
-			},
-		},
-	})
-	manage := newCBRaw(t, "cb-manage", map[string]any{
-		"cluster": map[string]any{
-			"MANAGE": map[string]any{
-				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
-				"rules": []map[string]any{
-					{
-						"apiGroups": []string{""},
-						"resources": []string{"pods/exec"},
-						"verbs":     []string{"create"},
-					},
-				},
-			},
-		},
-	})
-
-	asr := &v1alpha1.ApplicationSpecificRole{
-		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
-		Spec: v1alpha1.ApplicationSpecificRoleSpec{
-			Name: testSpecName,
-			Permissions: []v1alpha1.Permission{
-				{Resource: validClusterCCRN, Capability: "READ"},
-				{Resource: validClusterCCRN, Capability: "MANAGE"},
-			},
-		},
-	}
-
-	p := &pmk8s.Phase{
-		ClusterStore: newClusterStore(t, testClusterName),
-		AuditLog:     audit.Disabled(),
-		Log:          ctrl.Log.WithName("test"),
-		CCRNParser:   ccrn.NewParser(nil),
-	}
-	p.SetCBs([]*v1alpha1.ConnectorBinding{read, manage})
-
-	_, err := p.EnsureRbacCompiled(asr)(context.Background())
-	require.NoError(t, err)
-
-	compiled := p.Compiled()
-	require.Len(t, compiled, 1)
-	require.Len(t, compiled[0].ClusterRoles, 1)
-
-	rules := compiled[0].ClusterRoles[0].Rules
-	require.Len(t, rules, 2)
-
-	// "*" sorts before "pods/exec".
-	require.Equal(t, []string{"*"}, rules[0].Resources)
-	require.Equal(t, []string{"get", "list", "watch"}, rules[0].Verbs)
-
-	require.Equal(t, []string{"pods/exec"}, rules[1].Resources)
-	require.Equal(t, []string{"create"}, rules[1].Verbs)
 }
 
 func Test_EnsureRbacCompiled_ResourceCCRNs(t *testing.T) {
