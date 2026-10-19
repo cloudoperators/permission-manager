@@ -107,13 +107,13 @@ func (e CapabilityEntry) validate(scope, capability string) error {
 
 // validate checks every capability in both scope sections.
 func (m ScopedCapabilityMapping) validate() error {
-	for cap, entry := range m.Cluster {
-		if err := entry.validate(scopeCluster, cap); err != nil {
+	for capability, entry := range m.Cluster {
+		if err := entry.validate(scopeCluster, capability); err != nil {
 			return err
 		}
 	}
-	for cap, entry := range m.Namespace {
-		if err := entry.validate(scopeNamespace, cap); err != nil {
+	for capability, entry := range m.Namespace {
+		if err := entry.validate(scopeNamespace, capability); err != nil {
 			return err
 		}
 	}
