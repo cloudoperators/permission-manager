@@ -16,6 +16,10 @@ spec:
             - matchLabels:
                 rbac.authorization.k8s.io/aggregate-to-view: "true"
       namespace:
+        MANAGE:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-admin: "true"
         READ:
           clusterRoleSelectors:
             - matchLabels:
@@ -23,4 +27,14 @@ spec:
         OPERATE:
           clusterRoleSelectors:
             - matchLabels:
-                rbac.authorization.k8s.io/aggregate-to-edit: "true"
+                permission-manager.cloudoperators.dev/aggregate-to-namespace-operate: "true"
+          rules:
+            - apiGroups: ["apps"]
+              resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["batch"]
+              resources: ["jobs", "cronjobs"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: [""]
+              resources: ["pods", "services", "configmaps", "serviceaccounts"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

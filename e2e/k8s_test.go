@@ -10,6 +10,8 @@ import (
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
+
+	authorizationv1 "k8s.io/api/authorization/v1"
 )
 
 var _ = Describe("ASR provisioning: kubernetes", func() {
@@ -43,7 +45,7 @@ var _ = Describe("ASR provisioning: kubernetes", func() {
 
 		assertSharedRootClusterRole(ctx, sharedRole)
 		assertRoleBindingExists(ctx, remoteTestNamespace, binding, sharedRole, asrName)
-		assertRoleAbsent(ctx, remoteTestNamespace, "pm-"+asrName)
+		assertRoleAbsent(ctx, remoteTestNamespace, perASRRoleName(asrName))
 	})
 
 	It("removes the per-ASR binding when the ASR is deleted", func() {
@@ -89,5 +91,63 @@ var _ = Describe("ASR provisioning: kubernetes", func() {
 
 		assertRoleBindingExists(ctx, remoteTestNamespace, nsBinding, nsRole, asrName)
 		assertClusterRoleBindingGone(ctx, clusterBinding, resourcePropagationTimeout)
+	})
+})
+
+var _ = Describe("ASR effective permissions: kubernetes", func() {
+	nsResource := func() string {
+		return fmt.Sprintf("urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/%s/%s", remoteClusterName, remoteTestNamespace)
+	}
+
+	It("grants cluster READ effective get on pods but not secrets", func() {
+		ctx := context.Background()
+		const asrName = "effective-cluster-reader"
+		resource := "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/" + remoteClusterName
+
+		createASR(asrName, []string{connectorName}, []map[string]string{
+			{"resource": resource, "capability": "READ"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Verb: "get", Resource: "pods"}, true)
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Verb: "get", Resource: "secrets"}, false)
+	})
+
+	It("grants namespace READ effective get on pods but not secrets", func() {
+		ctx := context.Background()
+		const asrName = "effective-ns-reader"
+
+		createASR(asrName, []string{connectorName}, []map[string]string{
+			{"resource": nsResource(), "capability": "READ"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Namespace: remoteTestNamespace, Verb: "get", Resource: "pods"}, true)
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Namespace: remoteTestNamespace, Verb: "get", Resource: "secrets"}, false)
+	})
+
+	It("grants namespace OPERATE effective create on deployments but not get on secrets", func() {
+		ctx := context.Background()
+		const asrName = "effective-ns-operator"
+
+		createASR(asrName, []string{connectorName}, []map[string]string{
+			{"resource": nsResource(), "capability": "OPERATE"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Namespace: remoteTestNamespace, Group: "apps", Verb: "create", Resource: "deployments"}, true)
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Namespace: remoteTestNamespace, Verb: "get", Resource: "secrets"}, false)
+	})
+
+	It("grants namespace MANAGE effective get on secrets", func() {
+		ctx := context.Background()
+		const asrName = "effective-ns-manager"
+
+		createASR(asrName, []string{connectorName}, []map[string]string{
+			{"resource": nsResource(), "capability": "MANAGE"},
+		})
+		DeferCleanup(func() { deleteASR(asrName) })
+
+		assertAccessEventually(ctx, asrName, authorizationv1.ResourceAttributes{Namespace: remoteTestNamespace, Verb: "get", Resource: "secrets"}, true)
 	})
 })

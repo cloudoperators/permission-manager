@@ -12,9 +12,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/cloudoperators/permission-manager/internal/naming"
 )
 
 // connectorName is the ConnectorBinding spec.name from
@@ -28,15 +31,26 @@ const (
 )
 
 // sharedClusterRoleName returns the aggregated root ClusterRole a coarse READ
-// capability binds to, e.g. "pm-e2e-k8s-cluster-read".
+// capability binds to, e.g. "pm-s-e2e-k8s-cluster-read".
 func sharedClusterRoleName(scope string) string {
-	return "pm-" + connectorName + "-" + scope + "-read"
+	return "pm-s-" + connectorName + "-" + scope + "-read"
 }
 
 // coarseBindingName returns the per-ASR binding emitted for a coarse READ
-// capability, e.g. "pm-provision-reader-e2e-k8s-cluster-read".
+// capability, e.g. "pm-a-provision-reader-e2e-k8s-cluster-read-<hash>". The
+// ShortHash suffix mirrors the controller's coarseBindingName over the full
+// (ASR namespace, ASR name, CB, scope, capability) identity.
 func coarseBindingName(asrName, scope string) string {
-	return "pm-" + asrName + "-" + connectorName + "-" + scope + "-read"
+	const capability = "read"
+	h := naming.ShortHash(orgNamespace, asrName, connectorName, scope, capability)
+	name := "pm-a-" + asrName + "-" + connectorName + "-" + scope + "-" + capability + "-" + h
+	return naming.TruncateWithHash(name, naming.MaxK8sNameLength)
+}
+
+// perASRRoleName returns the per-ASR ClusterRole/Role name the controller emits
+// for resource CCRNs, e.g. "pm-a-provision-ns-reader".
+func perASRRoleName(asrName string) string {
+	return "pm-a-" + asrName
 }
 
 // assertSharedRootClusterRole waits for the aggregated root ClusterRole to
@@ -104,4 +118,25 @@ func assertRoleAbsent(ctx context.Context, namespace, name string) {
 		err := remoteClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &rbacv1.Role{})
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "unexpected per-ASR Role %q in namespace %q on %s", name, namespace, remoteContext)
 	}).WithTimeout(5 * time.Second).WithPolling(assertPollInterval).Should(Succeed())
+}
+
+// assertAccessEventually posts a SubjectAccessReview to the remote cluster for
+// the subject group and verifies the effective decision matches allowed. This
+// checks what RBAC actually grants, not just that objects exist: aggregation and
+// baseline rules both feed into the authorizer's answer. The group is the ASR's
+// spec.name, the subject the controller binds.
+func assertAccessEventually(ctx context.Context, group string, attrs authorizationv1.ResourceAttributes, allowed bool) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		sar := &authorizationv1.SubjectAccessReview{
+			Spec: authorizationv1.SubjectAccessReviewSpec{
+				Groups:             []string{group},
+				ResourceAttributes: &attrs,
+			},
+		}
+		g.Expect(remoteClient.Create(ctx, sar)).To(Succeed())
+		g.Expect(sar.Status.Allowed).To(Equal(allowed),
+			"SubjectAccessReview for group %q on %s/%s (verb %q): allowed=%t, want %t (reason: %s)",
+			group, attrs.Resource, attrs.Subresource, attrs.Verb, sar.Status.Allowed, allowed, sar.Status.Reason)
+	}).WithTimeout(resourcePropagationTimeout).WithPolling(pollInterval).Should(Succeed())
 }
