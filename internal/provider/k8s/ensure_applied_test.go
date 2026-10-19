@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
@@ -375,4 +376,60 @@ func Test_EnsureRbacApplied_ClearsStrayAggregation(t *testing.T) {
 	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: testResource}, &got))
 	require.Nil(t, got.AggregationRule, "per-ASR ClusterRole must not aggregate")
 	require.Equal(t, []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"get"}}}, got.Rules)
+}
+
+// Test_EnsureRbacApplied_OwnershipConflict asserts an apply refuses to overwrite
+// a coarse binding owned by a different ASR: the existing object is left intact
+// and the cluster is reported failed.
+func Test_EnsureRbacApplied_OwnershipConflict(t *testing.T) {
+	const conflictName = "pm-a-conflict"
+	seeded := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: conflictName,
+			Labels: map[string]string{
+				pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+				pmapis.LabelASR:             pmk8s.ASRLabelValue("other-asr"),
+				pmapis.LabelSourceNamespace: "other-ns",
+			},
+		},
+		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects: []rbacv1.Subject{{Kind: "Group", Name: "other-group", APIGroup: "rbac.authorization.k8s.io"}},
+	}
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(seeded).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+	p := &pmk8s.Phase{
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{
+		ClusterName: testClusterName,
+		CoarseClusterRoleBindings: []rbacv1.ClusterRoleBinding{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: conflictName,
+				Labels: map[string]string{
+					pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+					pmapis.LabelASR:             pmk8s.ASRLabelValue(testASRName),
+					pmapis.LabelSourceNamespace: testNamespace,
+				},
+			},
+			RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "cluster-admin"},
+			Subjects: []rbacv1.Subject{{Kind: "Group", Name: testSpecName, APIGroup: "rbac.authorization.k8s.io"}},
+		}},
+	}})
+
+	_, err := p.EnsureRbacApplied(asr)(context.Background())
+	require.NoError(t, err)
+
+	provisioned := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ProvisionedCondition)
+	require.NotNil(t, provisioned)
+	require.Equal(t, metav1.ConditionFalse, provisioned.Status, "ownership conflict fails provisioning")
+
+	var got rbacv1.ClusterRoleBinding
+	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: conflictName}, &got))
+	require.Equal(t, "other-group", got.Subjects[0].Name, "another ASR's binding must not be overwritten")
 }

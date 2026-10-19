@@ -188,11 +188,11 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 							roleName = sharedRoleName(rc.cbName, scope, up)
 						}
 						c.crbs = append(c.crbs, buildCoarseClusterRoleBinding(
-							asr.Name, asr.Namespace, asr.Spec.Name, coarseBindingName(asr.Name, rc.cbName, scope, up), roleName))
+							asr.Name, asr.Namespace, asr.Spec.Name, coarseBindingName(asr.Namespace, asr.Name, rc.cbName, scope, up), roleName))
 					} else {
 						c.rbs = append(c.rbs, buildCoarseRoleBinding(
 							asr.Name, asr.Namespace, asr.Spec.Name, parsed.Namespace,
-							coarseBindingName(asr.Name, rc.cbName, scope, up),
+							coarseBindingName(asr.Namespace, asr.Name, rc.cbName, scope, up),
 							sharedRoleName(rc.cbName, scope, up)))
 					}
 				}

@@ -85,7 +85,19 @@ func Test_buildBaselineChild_StructuredRules(t *testing.T) {
 }
 
 func Test_coarseBindingName(t *testing.T) {
-	require.Equal(t, "pm-a-my-asr-my-cb-cluster-read", coarseBindingName("my-asr", "my-cb", scopeCluster, "READ"))
+	name := coarseBindingName("my-ns", "my-asr", "my-cb", scopeCluster, "READ")
+	require.True(t, strings.HasPrefix(name, "pm-a-my-asr-my-cb-cluster-read-"),
+		"readable prefix preserved, got %q", name)
+}
+
+// Test_coarseBindingName_FieldBoundary asserts the ShortHash suffix keeps two
+// coarse bindings distinct when their readable parts collide but the ASR/CB
+// field boundary differs, so one ASR's binding cannot silently overwrite
+// another's.
+func Test_coarseBindingName_FieldBoundary(t *testing.T) {
+	require.NotEqual(t,
+		coarseBindingName("ns", "a-b", "c", scopeCluster, "READ"),
+		coarseBindingName("ns", "a", "b-c", scopeCluster, "READ"))
 }
 
 // Test_NamePrefixesDisjoint asserts shared and per-ASR names carry disjoint

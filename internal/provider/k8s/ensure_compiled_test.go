@@ -6,6 +6,7 @@ package k8s_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	greenhousemetav1alpha1 "github.com/cloudoperators/greenhouse/api/meta/v1alpha1"
@@ -119,7 +120,8 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				c := byCluster[testClusterName]
 				require.Empty(t, c.ClusterRoles)
 				require.Len(t, c.CoarseClusterRoleBindings, 1)
-				require.Equal(t, "pm-a-test-asr-cb-cluster-read", c.CoarseClusterRoleBindings[0].Name)
+				require.True(t, strings.HasPrefix(c.CoarseClusterRoleBindings[0].Name, "pm-a-test-asr-cb-cluster-read-"),
+					"got %q", c.CoarseClusterRoleBindings[0].Name)
 				require.Equal(t, "pm-s-cb-cluster-read", c.CoarseClusterRoleBindings[0].RoleRef.Name)
 			},
 		},

@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
+	"github.com/cloudoperators/permission-manager/internal/naming"
 )
 
 // sharedRoleLabels are the ownership labels on every shared ClusterRole,
@@ -62,11 +63,16 @@ func buildBaselineChild(cbName, scope, capability string, rules []CapabilityRule
 	}
 }
 
-// coarseBindingName returns a per-ASR binding name unique per CB/scope/capability
-// so one ASR can hold several coarse bindings on one cluster without collision,
-// e.g. "pm-a-my-asr-my-cb-cluster-read".
-func coarseBindingName(asrName, cbName, scope, capability string) string {
-	return perASRNamePrefix + asrName + "-" + cbName + "-" + scope + "-" + strings.ToLower(capability)
+// coarseBindingName returns a per-ASR binding name unique per CB/scope/capability.
+// The readable prefix stays human-legible while a ShortHash over the full
+// identity (ASR namespace+name, CB, scope, capability) disambiguates names whose
+// readable parts would otherwise collide, e.g.
+// "pm-a-my-asr-my-cb-cluster-read-1a2b3c4d".
+func coarseBindingName(asrNamespace, asrName, cbName, scope, capability string) string {
+	c := strings.ToLower(capability)
+	h := naming.ShortHash(asrNamespace, asrName, cbName, scope, c)
+	name := perASRNamePrefix + asrName + "-" + cbName + "-" + scope + "-" + c + "-" + h
+	return naming.TruncateWithHash(name, naming.MaxK8sNameLength)
 }
 
 // buildCoarseClusterRoleBinding binds the ASR's subject group to a ClusterRole
