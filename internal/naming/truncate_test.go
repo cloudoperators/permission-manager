@@ -124,6 +124,34 @@ func TestTruncateWithHash_Deterministic(t *testing.T) {
 	}
 }
 
+func TestShortHash(t *testing.T) {
+	// Always 8 lowercase hex chars.
+	got := ShortHash("a", "b", "c")
+	if len(got) != 8 {
+		t.Errorf("ShortHash length = %d, want 8 (%q)", len(got), got)
+	}
+	for _, c := range got {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			t.Errorf("ShortHash contains non-hex char %q in %q", string(c), got)
+		}
+	}
+
+	// Deterministic.
+	if first, second := ShortHash("x", "y"), ShortHash("x", "y"); first != second {
+		t.Errorf("ShortHash is not deterministic: %q != %q", first, second)
+	}
+
+	// Field boundaries matter: ("a","bc") must differ from ("ab","c").
+	if ShortHash("a", "bc") == ShortHash("ab", "c") {
+		t.Errorf("ShortHash must distinguish field boundaries")
+	}
+
+	// Different content differs.
+	if ShortHash("a", "b") == ShortHash("a", "c") {
+		t.Errorf("ShortHash must distinguish different parts")
+	}
+}
+
 func TestTruncateWithHash_K8sMaxDefault(t *testing.T) {
 	// Ensure the function works correctly for the standard K8s max of 253
 	longName := "asr-" + strings.Repeat("very-long-name-segment-", 20)
