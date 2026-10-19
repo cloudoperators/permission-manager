@@ -66,6 +66,12 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			}
 
 			var clusterErrs []error
+			if sharedErr := p.sharedRoleErrByCluster[target.clusterName]; sharedErr != nil {
+				// A binding to a shared ClusterRole that failed to create grants
+				// nothing, so the cluster fails even if its own objects apply.
+				clusterErrs = append(clusterErrs, sharedErr)
+				delete(p.sharedRoleErrByCluster, target.clusterName)
+			}
 			for i := range target.clusterRoles {
 				if err := p.applyClusterScopedRBAC(ctx, remoteClient, &target.clusterRoles[i], &target.clusterRoleBindings[i], asr.Name, asr.Namespace, target.clusterName); err != nil {
 					p.Log.Error(err, "failed to apply cluster-scoped RBAC", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName)
@@ -103,8 +109,22 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			})
 		}
 
-		total := len(p.compiled)
-		failed := len(p.provisionErrs)
+		// Shared-role failures on clusters that produced no compiled target (e.g.
+		// a cluster whose only capability failed to resolve to any binding) still
+		// fail provisioning for that cluster.
+		for clusterName, sharedErr := range p.sharedRoleErrByCluster {
+			p.provisionStatuses = append(p.provisionStatuses, clusterStatus{name: clusterName, err: sharedErr})
+			p.provisionErrs = append(p.provisionErrs, sharedErr)
+		}
+		p.sharedRoleErrByCluster = nil
+
+		total := len(p.provisionStatuses)
+		failed := 0
+		for _, s := range p.provisionStatuses {
+			if s.err != nil {
+				failed++
+			}
+		}
 		applied := total - failed
 		skippedCount := len(p.unmatchedClusterPatterns) + len(p.notReadyClusters)
 		skipped := skippedSummary(p.unmatchedClusterPatterns, p.notReadyClusters)

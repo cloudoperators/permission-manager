@@ -433,3 +433,76 @@ func Test_EnsureRbacApplied_OwnershipConflict(t *testing.T) {
 	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: conflictName}, &got))
 	require.Equal(t, "other-group", got.Subjects[0].Name, "another ASR's binding must not be overwritten")
 }
+
+// Test_EnsureRbacApplied_SharedRoleFailure asserts that a shared ClusterRole
+// that failed to ensure fails the cluster that binds to it, even when the
+// cluster's own bindings apply cleanly, and is counted exactly once. A second
+// cluster with no shared-role failure still provisions successfully.
+func Test_EnsureRbacApplied_SharedRoleFailure(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+	p := &pmk8s.Phase{
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{
+		clusterScopedTarget(testClusterNameA),
+		clusterScopedTarget(testClusterNameB),
+	})
+	p.SetSharedRoleErrByCluster(map[string]error{
+		testClusterNameA: errors.New("shared role create failed"),
+	})
+
+	_, err := p.EnsureRbacApplied(asr)(context.Background())
+	require.NoError(t, err)
+
+	provisioned := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ProvisionedCondition)
+	require.NotNil(t, provisioned)
+	require.Equal(t, metav1.ConditionFalse, provisioned.Status, "a shared-role failure fails the cluster that binds to it")
+	require.Equal(t, string(pmmeta.PartialProvisioningReason), provisioned.Reason)
+
+	byCluster := make(map[string]error, 2)
+	for _, s := range p.ProvisionStatuses() {
+		byCluster[s.Name] = s.Err
+	}
+	require.Error(t, byCluster[testClusterNameA], "cluster A binds to a shared role that failed")
+	require.NoError(t, byCluster[testClusterNameB], "cluster B has no shared-role failure")
+	require.Len(t, p.ProvisionErrs(), 1, "the shared-role failure is counted exactly once")
+}
+
+// Test_EnsureRbacApplied_SharedRoleFailureUncompiledCluster asserts that a
+// shared-role failure for a cluster that produced no compiled target still
+// surfaces as a provisioning failure, drained after the compiled loop.
+func Test_EnsureRbacApplied_SharedRoleFailureUncompiledCluster(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+	p := &pmk8s.Phase{
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterNameA)})
+	p.SetSharedRoleErrByCluster(map[string]error{
+		testClusterNameB: errors.New("shared role create failed"),
+	})
+
+	_, err := p.EnsureRbacApplied(asr)(context.Background())
+	require.NoError(t, err)
+
+	byCluster := make(map[string]error, 2)
+	for _, s := range p.ProvisionStatuses() {
+		byCluster[s.Name] = s.Err
+	}
+	require.NoError(t, byCluster[testClusterNameA], "cluster A applied cleanly")
+	require.Error(t, byCluster[testClusterNameB], "cluster B's shared-role failure is drained into its own status")
+	require.Len(t, p.ProvisionErrs(), 1)
+}

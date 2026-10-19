@@ -72,6 +72,11 @@ type Phase struct {
 	// errors collected from each phase; aggregated by EnsureProviderStatus.
 	provisionErrs []error
 	orphanErrs    []error
+
+	// shared ClusterRole ensure failures keyed by cluster. EnsureRbacApplied
+	// folds each cluster's entry into that cluster's provisioning outcome so a
+	// binding to a shared role that failed to create still fails the cluster.
+	sharedRoleErrByCluster map[string]error
 }
 
 // compiledTarget is one cluster's fully-built RBAC objects, ready to apply.

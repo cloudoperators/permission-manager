@@ -224,7 +224,16 @@ func (p *Phase) EnsureSharedClusterRoles(asr *v1alpha1.ApplicationSpecificRole) 
 						continue
 					}
 					ensured[key] = struct{}{}
-					p.ensureSharedPair(ctx, remoteClient, rc, scope, strings.ToUpper(perm.Capability), asr.Name, clusterName)
+					if err := p.ensureSharedPair(ctx, remoteClient, rc, scope, strings.ToUpper(perm.Capability), asr.Name, clusterName); err != nil {
+						if p.sharedRoleErrByCluster == nil {
+							p.sharedRoleErrByCluster = make(map[string]error)
+						}
+						if prev := p.sharedRoleErrByCluster[clusterName]; prev != nil {
+							p.sharedRoleErrByCluster[clusterName] = errors.Join(prev, err)
+						} else {
+							p.sharedRoleErrByCluster[clusterName] = err
+						}
+					}
 				}
 			}
 		}
@@ -233,10 +242,12 @@ func (p *Phase) EnsureSharedClusterRoles(asr *v1alpha1.ApplicationSpecificRole) 
 }
 
 // ensureSharedPair create-or-patches the aggregated root and baseline child for
-// one capability on one cluster. Failures are logged, not returned.
-func (p *Phase) ensureSharedPair(ctx context.Context, remoteClient client.Client, rc resolvedCapability, scope, capability, asrName, clusterName string) {
+// one capability on one cluster. Failures are logged and audited, and returned
+// aggregated so the caller can fail the cluster that binds to these roles.
+func (p *Phase) ensureSharedPair(ctx context.Context, remoteClient client.Client, rc resolvedCapability, scope, capability, asrName, clusterName string) error {
 	root := buildAggregatedRoot(rc.cbName, scope, capability, rc.entry.ClusterRoleSelectors)
 	child := buildBaselineChild(rc.cbName, scope, capability, rc.entry.Rules)
+	var errs []error
 	for _, desired := range []*rbacv1.ClusterRole{child, root} {
 		existing := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
 		op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
@@ -257,10 +268,12 @@ func (p *Phase) ensureSharedPair(ctx context.Context, remoteClient client.Client
 			p.Log.Error(err, "failed to ensure shared ClusterRole",
 				"name", asrName, "cluster", clusterName, "role", desired.Name)
 			p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, err)
+			errs = append(errs, fmt.Errorf("%s %q: %w", kindClusterRole, desired.Name, err))
 			continue
 		}
 		if op != controllerutil.OperationResultNone {
 			p.AuditLog.Log(ctx, opToAction(op), audit.OutcomeSuccess, asrName, ref, nil)
 		}
 	}
+	return errors.Join(errs...)
 }

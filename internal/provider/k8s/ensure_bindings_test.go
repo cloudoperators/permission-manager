@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
@@ -449,4 +450,47 @@ func Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules(t *testing.T) {
 	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: "pm-s-cb-cluster-read"}, &got))
 	require.Equal(t, aggregated, got.Rules, "aggregated root rules must survive the reconcile")
 	require.NotNil(t, got.AggregationRule, "root keeps its aggregationRule")
+}
+
+// Test_EnsureSharedClusterRoles_RecordsCreateFailure asserts that a shared
+// ClusterRole that fails to create is recorded per cluster so EnsureRbacApplied
+// can fail the cluster that binds to it, rather than being silently swallowed.
+func Test_EnsureSharedClusterRoles_RecordsCreateFailure(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+				return errors.New("create denied")
+			},
+		}).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+		},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name:        testSpecName,
+			Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "READ"}},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err, "shared-role failures are recorded, not returned as a reconcile error")
+
+	require.Error(t, p.SharedRoleErrByCluster()[testClusterName], "the create failure is recorded for the binding cluster")
 }

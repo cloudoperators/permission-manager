@@ -71,6 +71,26 @@ func (p *Phase) SetProvisionErrs(errs []error) {
 	p.provisionErrs = errs
 }
 
+func (p *Phase) SetSharedRoleErrByCluster(m map[string]error) {
+	p.sharedRoleErrByCluster = m
+}
+
+func (p *Phase) ProvisionErrs() []error {
+	return p.provisionErrs
+}
+
+func (p *Phase) SharedRoleErrByCluster() map[string]error {
+	return p.sharedRoleErrByCluster
+}
+
+func (p *Phase) ProvisionStatuses() []ExportClusterStatus {
+	out := make([]ExportClusterStatus, 0, len(p.provisionStatuses))
+	for _, s := range p.provisionStatuses {
+		out = append(out, ExportClusterStatus{Name: s.name, Err: s.err, AppliedResources: s.appliedResources})
+	}
+	return out
+}
+
 func (p *Phase) SetOrphanErrs(errs []error) {
 	p.orphanErrs = errs
 }
