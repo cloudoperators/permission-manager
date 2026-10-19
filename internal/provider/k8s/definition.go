@@ -118,10 +118,10 @@ func ParseConnectorDefinition(raw *runtime.RawExtension) (*ConnectorDefinition, 
 	if err := json.Unmarshal(raw.Raw, &def); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ConnectorBinding definition: %w", err)
 	}
-	for cap, rules := range def.CapabilityMapping {
+	for capability, rules := range def.CapabilityMapping {
 		for i, r := range rules {
 			if err := r.validate(); err != nil {
-				return nil, fmt.Errorf("capability %q rule %d: %w", cap, i, err)
+				return nil, fmt.Errorf("capability %q rule %d: %w", capability, i, err)
 			}
 		}
 	}
