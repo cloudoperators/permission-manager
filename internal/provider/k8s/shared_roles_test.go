@@ -20,7 +20,7 @@ func Test_buildAggregatedRoot(t *testing.T) {
 	require.Equal(t, "pm-s-cb-cluster-read", root.Name)
 	require.Nil(t, root.Rules)
 	require.NotNil(t, root.AggregationRule)
-	require.Len(t, root.AggregationRule.ClusterRoleSelectors, 2)
+	require.Len(t, root.AggregationRule.ClusterRoleSelectors, 3)
 	require.Equal(t, "cb", root.Labels[pmapis.LabelCB])
 	require.Equal(t, "true",
 		root.AggregationRule.ClusterRoleSelectors[1].MatchLabels["permission-manager.cloudoperators.dev/aggregate-to-cluster-read"])
@@ -31,9 +31,40 @@ func Test_buildBaselineChild(t *testing.T) {
 		{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"get", "list"}},
 	})
 	require.Equal(t, "pm-s-cb-namespace-operate-baseline", child.Name)
-	require.Equal(t, "true", child.Labels["permission-manager.cloudoperators.dev/aggregate-to-namespace-operate"])
+	require.Equal(t, "true", child.Labels[cbAggregateToLabel("cb", scopeNamespace, "OPERATE")])
 	require.Len(t, child.Rules, 1)
 	require.Equal(t, []string{"get", "list"}, child.Rules[0].Verbs)
+}
+
+// Test_CBPrivateAggregation asserts that two CBs defining the same scope/cap do
+// not cross-pollinate: each baseline carries only its own CB-private label, and
+// a CB's root selects the shared label plus its own private label, never the
+// other CB's private label.
+func Test_CBPrivateAggregation(t *testing.T) {
+	const scope, capability = scopeCluster, "READ"
+	shared := aggregateToLabel(scope, capability)
+	labelA := cbAggregateToLabel("cb-a", scope, capability)
+	labelB := cbAggregateToLabel("cb-b", scope, capability)
+	require.NotEqual(t, labelA, labelB, "CB-private labels must differ per CB")
+
+	childA := buildBaselineChild("cb-a", scope, capability, nil)
+	require.Equal(t, "true", childA.Labels[labelA], "baseline carries its own CB-private label")
+	require.NotContains(t, childA.Labels, shared, "baseline must not carry the shared team-extension label")
+	require.NotContains(t, childA.Labels, labelB, "baseline must not carry another CB's label")
+
+	rootA := buildAggregatedRoot("cb-a", scope, capability, []metav1.LabelSelector{
+		{MatchLabels: map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}},
+	})
+	selected := map[string]bool{}
+	for _, sel := range rootA.AggregationRule.ClusterRoleSelectors {
+		for k := range sel.MatchLabels {
+			selected[k] = true
+		}
+	}
+	require.True(t, selected[shared], "root selects the shared team-extension label")
+	require.True(t, selected[labelA], "root selects its own CB-private label")
+	require.True(t, selected["rbac.authorization.k8s.io/aggregate-to-view"], "root keeps the CB selectors")
+	require.False(t, selected[labelB], "root must never select another CB's label")
 }
 
 // Test_buildBaselineChild_StructuredRules asserts that multiple mini-rules

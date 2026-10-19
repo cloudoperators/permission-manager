@@ -52,6 +52,15 @@ func aggregateToLabel(scope, capability string) string {
 	return pmapis.LabelDomain + "aggregate-to-" + scope + "-" + strings.ToLower(capability)
 }
 
+// cbAggregateToLabel returns a CB-private aggregation label key. The root
+// selects it alongside the shared aggregateToLabel, but only this CB's baseline
+// child carries it, so a root never aggregates another CB's baseline for the
+// same scope/capability. The CB name is hashed to keep the key label-safe and
+// bounded regardless of the (already validated) CB name.
+func cbAggregateToLabel(cbName, scope, capability string) string {
+	return pmapis.LabelDomain + "aggregate-to-" + naming.ShortHash(cbName) + "-" + scope + "-" + strings.ToLower(capability)
+}
+
 // asrLabelValue renders an ASR name for use as a Kubernetes label value. Label
 // values are capped at 63 characters, so a longer name is truncated with a
 // stable hash suffix. The orphan-cleanup selector applies the identical

@@ -22,14 +22,17 @@ func sharedRoleLabels(cbName string) map[string]string {
 }
 
 // buildAggregatedRoot returns the root ClusterRole for a capability. It carries
-// only an AggregationRule: the CB selectors plus the auto-derived aggregation
-// label that selects the baseline child. Its Rules are owned by the Kubernetes
+// only an AggregationRule: the CB selectors, the shared team-extension label,
+// and the CB-private baseline label. Its Rules are owned by the Kubernetes
 // aggregation controller and must stay empty.
 func buildAggregatedRoot(cbName, scope, capability string, selectors []metav1.LabelSelector) *rbacv1.ClusterRole {
-	rules := make([]metav1.LabelSelector, 0, len(selectors)+1)
+	rules := make([]metav1.LabelSelector, 0, len(selectors)+2)
 	rules = append(rules, selectors...)
 	rules = append(rules, metav1.LabelSelector{
 		MatchLabels: map[string]string{aggregateToLabel(scope, capability): "true"},
+	})
+	rules = append(rules, metav1.LabelSelector{
+		MatchLabels: map[string]string{cbAggregateToLabel(cbName, scope, capability): "true"},
 	})
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
@@ -41,10 +44,11 @@ func buildAggregatedRoot(cbName, scope, capability string, selectors []metav1.La
 }
 
 // buildBaselineChild returns the baseline child ClusterRole carrying the
-// CB-defined rules and the auto-derived aggregation label so the root selects it.
+// CB-defined rules and the CB-private aggregation label so only this CB's root
+// selects it.
 func buildBaselineChild(cbName, scope, capability string, rules []CapabilityRule) *rbacv1.ClusterRole {
 	labels := sharedRoleLabels(cbName)
-	labels[aggregateToLabel(scope, capability)] = "true"
+	labels[cbAggregateToLabel(cbName, scope, capability)] = "true"
 	set := newPolicyRuleSet()
 	for _, r := range rules {
 		set.add(r)
