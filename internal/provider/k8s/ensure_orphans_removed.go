@@ -283,11 +283,14 @@ func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Clie
 // current capabilityMapping. This reclaims roles when a CB author drops a
 // capability. Runs after EnsureRbacApplied. Continue-only and per-cluster
 // non-fatal: a delete failure is logged and retried next reconcile.
+//
+// Runs even under InvalidConfig: a dropped capability sets
+// InvalidConfig/UnknownCapability yet still carries a trustworthy per-CB keep
+// set, so the stale shared roles must still be reclaimed. The unsafe reason,
+// MissingConnectorBinding, never reaches here because EnsureConnectorBindings
+// breaks the chain first.
 func (p *Phase) EnsureSharedClusterRoleOrphansRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
-		if asr.HasInvalidConfig() {
-			return lifecycle.Continue(), nil
-		}
 		// desired[cb][sharedRoleName] holds every shared-role name each CB
 		// currently defines (both root and baseline child), so any labelled
 		// ClusterRole not in the set is an orphan.
@@ -314,7 +317,7 @@ func (p *Phase) EnsureSharedClusterRoleOrphansRemoved(asr *v1alpha1.ApplicationS
 			desired[cb.Spec.Name] = names
 		}
 
-		for _, clusterName := range p.targetClusterNames() {
+		for _, clusterName := range p.sharedOrphanClusters(asr) {
 			remoteClient, err := p.RemoteClient(ctx, p.Client, clusterName, asr.Namespace)
 			if err != nil {
 				p.Log.Error(err, "cluster unreachable for shared ClusterRole orphan cleanup, will retry",
@@ -342,15 +345,19 @@ func (p *Phase) EnsureSharedClusterRoleOrphansRemoved(asr *v1alpha1.ApplicationS
 	}
 }
 
-// targetClusterNames returns the clusters this reconcile ensured shared roles
-// on, from p.compiled. A cluster the ASR no longer compiles to has all its
-// asr-labelled objects revoked by the cluster-level orphan path; shared roles
-// lingering there are reclaimed when another ASR referencing the same CB
-// reconciles against that cluster.
-func (p *Phase) targetClusterNames() []string {
+// sharedOrphanClusters returns the clusters to sweep for orphaned shared
+// ClusterRoles: the de-duplicated union of the clusters this reconcile compiled
+// to and the clusters previously targeted. Including prior targets lets a
+// dropped capability be reclaimed even when the ASR compiles to nothing this
+// reconcile (e.g. it has gone InvalidConfig). Unreachable clusters are handled
+// by the RemoteClient error path at the call site.
+func (p *Phase) sharedOrphanClusters(asr *v1alpha1.ApplicationSpecificRole) []string {
 	set := make(map[string]struct{}, len(p.compiled))
 	for _, t := range p.compiled {
 		set[t.clusterName] = struct{}{}
+	}
+	for _, name := range previouslyTargetedClusters(asr) {
+		set[name] = struct{}{}
 	}
 	return sortedKeys(set)
 }

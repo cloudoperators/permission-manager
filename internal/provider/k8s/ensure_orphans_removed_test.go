@@ -530,3 +530,99 @@ func Test_EnsureSharedClusterRoleOrphansRemoved_KeepsCurrentCapability(t *testin
 	require.NoError(t, remote.List(context.Background(), &list))
 	require.Len(t, list.Items, 2, "current READ shared roles retained")
 }
+
+// Test_EnsureSharedClusterRoleOrphansRemoved_ReclaimsUnderInvalidConfig asserts
+// that a dropped capability's shared roles are reclaimed even when the ASR is
+// InvalidConfig and compiles to no targets this reconcile: the previously
+// targeted cluster still carries the orphaned roles and must be cleaned up.
+func Test_EnsureSharedClusterRoleOrphansRemoved_ReclaimsUnderInvalidConfig(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+	).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.InvalidConfigCondition,
+		pmmeta.UnknownCapabilityReason,
+		"capability no longer mapped",
+	))
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	// No compiled targets this reconcile: the cluster is reached via the prior target.
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Empty(t, list.Items, "dropped READ shared roles reclaimed despite InvalidConfig")
+}
+
+// Test_EnsureSharedClusterRoleOrphansRemoved_UnreachablePriorNoDeletion asserts
+// that when the only prior target is unreachable, nothing is deleted: cleanup is
+// retried next reconcile rather than guessed at.
+func Test_EnsureSharedClusterRoleOrphansRemoved_UnreachablePriorNoDeletion(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+	).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testUnreachableClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.InvalidConfigCondition,
+		pmmeta.NoTargetsResolvedReason,
+		"no targets resolved",
+	))
+
+	p := &pmk8s.Phase{
+		Client:   remote,
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, clusterName, _ string) (client.Client, error) {
+			if clusterName == testUnreachableClusterName {
+				return nil, errors.New("unreachable")
+			}
+			return remote, nil
+		},
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Len(t, list.Items, 1, "unreachable prior target is retried, not revoked")
+}
