@@ -14,8 +14,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
@@ -338,4 +340,39 @@ func Test_EnsureRbacApplied_AppliedResources(t *testing.T) {
 		require.Equal(t, pmmeta.TargetStatusError, target.Status)
 		require.Equal(t, priorRefs, target.AppliedResources, "prior applied resources must be preserved on error")
 	})
+}
+
+// Test_EnsureRbacApplied_ClearsStrayAggregation asserts a per-ASR ClusterRole
+// never aggregates: a name once used by a shared role may carry a leftover
+// AggregationRule whose controller-populated Rules would otherwise shadow the
+// per-ASR Rules. The apply must clear the AggregationRule and own the Rules.
+func Test_EnsureRbacApplied_ClearsStrayAggregation(t *testing.T) {
+	seeded := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testResource},
+		AggregationRule: &rbacv1.AggregationRule{ClusterRoleSelectors: []metav1.LabelSelector{
+			{MatchLabels: map[string]string{"stray": "true"}},
+		}},
+		// Populated by the aggregation controller in a real cluster.
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"*"}}},
+	}
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(seeded).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+	p := &pmk8s.Phase{
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{clusterScopedTarget(testClusterName)})
+
+	_, err := p.EnsureRbacApplied(asr)(context.Background())
+	require.NoError(t, err)
+
+	var got rbacv1.ClusterRole
+	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: testResource}, &got))
+	require.Nil(t, got.AggregationRule, "per-ASR ClusterRole must not aggregate")
+	require.Equal(t, []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"get"}}}, got.Rules)
 }

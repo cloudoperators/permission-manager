@@ -60,9 +60,9 @@ func buildBaselineChild(cbName, scope, capability string, rules []CapabilityRule
 
 // coarseBindingName returns a per-ASR binding name unique per CB/scope/capability
 // so one ASR can hold several coarse bindings on one cluster without collision,
-// e.g. "pm-my-asr-my-cb-cluster-read".
+// e.g. "pm-a-my-asr-my-cb-cluster-read".
 func coarseBindingName(asrName, cbName, scope, capability string) string {
-	return resourceNamePrefix + asrName + "-" + cbName + "-" + scope + "-" + strings.ToLower(capability)
+	return perASRNamePrefix + asrName + "-" + cbName + "-" + scope + "-" + strings.ToLower(capability)
 }
 
 // buildCoarseClusterRoleBinding binds the ASR's subject group to a ClusterRole

@@ -385,9 +385,9 @@ func Test_EnsureSharedClusterRoles_CreatesRootAndChild(t *testing.T) {
 	for _, cr := range list.Items {
 		names[cr.Name] = true
 	}
-	require.True(t, names["pm-cb-cluster-read"], "root created")
-	require.True(t, names["pm-cb-cluster-read-baseline"], "child created")
-	require.False(t, names["pm-cb-cluster-manage"], "MANAGE direct binding creates no shared role")
+	require.True(t, names["pm-s-cb-cluster-read"], "root created")
+	require.True(t, names["pm-s-cb-cluster-read-baseline"], "child created")
+	require.False(t, names["pm-s-cb-cluster-manage"], "MANAGE direct binding creates no shared role")
 }
 
 // Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules asserts the
@@ -402,7 +402,7 @@ func Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules(t *testing.T) {
 	}}
 	root := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "pm-cb-cluster-read",
+			Name: "pm-s-cb-cluster-read",
 			Labels: map[string]string{
 				pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
 				pmapis.LabelCB:           testCBName,
@@ -446,7 +446,7 @@ func Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules(t *testing.T) {
 	require.NoError(t, err)
 
 	var got rbacv1.ClusterRole
-	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: "pm-cb-cluster-read"}, &got))
+	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: "pm-s-cb-cluster-read"}, &got))
 	require.Equal(t, aggregated, got.Rules, "aggregated root rules must survive the reconcile")
 	require.NotNil(t, got.AggregationRule, "root keeps its aggregationRule")
 }

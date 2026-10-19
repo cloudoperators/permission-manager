@@ -34,13 +34,13 @@ var (
 )
 
 // sharedRoleName returns the aggregated root ClusterRole name for a capability
-// on a ConnectorBinding, e.g. "pm-my-cb-cluster-read".
+// on a ConnectorBinding, e.g. "pm-s-my-cb-cluster-read".
 func sharedRoleName(cbName, scope, capability string) string {
-	return resourceNamePrefix + cbName + "-" + scope + "-" + strings.ToLower(capability)
+	return sharedNamePrefix + cbName + "-" + scope + "-" + strings.ToLower(capability)
 }
 
 // baselineChildName returns the baseline child ClusterRole name for a
-// capability, e.g. "pm-my-cb-cluster-read-baseline".
+// capability, e.g. "pm-s-my-cb-cluster-read-baseline".
 func baselineChildName(cbName, scope, capability string) string {
 	return sharedRoleName(cbName, scope, capability) + "-baseline"
 }

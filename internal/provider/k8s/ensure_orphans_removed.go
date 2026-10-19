@@ -256,8 +256,8 @@ func appliedRefKey(r pmmeta.AppliedResourceRef) string {
 
 // deleteSpecificRBAC deletes a single RBAC resource identified by ref.
 func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Client, ref pmmeta.AppliedResourceRef, asrName, clusterName string) error {
-	if !strings.HasPrefix(ref.Name, resourceNamePrefix+asrName) {
-		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedPrefix", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+	if !strings.HasPrefix(ref.Name, perASRNamePrefix+asrName) {
+		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedPrefix", perASRNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
 		return nil
 	}
 	switch ref.Kind {

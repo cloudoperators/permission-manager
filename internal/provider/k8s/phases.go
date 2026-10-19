@@ -97,7 +97,11 @@ type clusterStatus struct {
 
 // RBAC resource naming + kind constants.
 const (
-	resourceNamePrefix = "pm-"
+	// perASRNamePrefix and sharedNamePrefix are disjoint so a per-ASR object and a
+	// shared aggregated object can never collide on name, regardless of how an ASR
+	// or ConnectorBinding is named.
+	perASRNamePrefix = "pm-a-"
+	sharedNamePrefix = "pm-s-"
 
 	kindClusterRole        = "ClusterRole"
 	kindClusterRoleBinding = "ClusterRoleBinding"

@@ -119,8 +119,8 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				c := byCluster[testClusterName]
 				require.Empty(t, c.ClusterRoles)
 				require.Len(t, c.CoarseClusterRoleBindings, 1)
-				require.Equal(t, "pm-test-asr-cb-cluster-read", c.CoarseClusterRoleBindings[0].Name)
-				require.Equal(t, "pm-cb-cluster-read", c.CoarseClusterRoleBindings[0].RoleRef.Name)
+				require.Equal(t, "pm-a-test-asr-cb-cluster-read", c.CoarseClusterRoleBindings[0].Name)
+				require.Equal(t, "pm-s-cb-cluster-read", c.CoarseClusterRoleBindings[0].RoleRef.Name)
 			},
 		},
 		{
@@ -137,7 +137,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 				require.Len(t, c.CoarseRoleBindings, 1)
 				require.Equal(t, "demo", c.CoarseRoleBindings[0].Namespace)
 				require.Equal(t, "ClusterRole", c.CoarseRoleBindings[0].RoleRef.Kind)
-				require.Equal(t, "pm-cb-namespace-read", c.CoarseRoleBindings[0].RoleRef.Name)
+				require.Equal(t, "pm-s-cb-namespace-read", c.CoarseRoleBindings[0].RoleRef.Name)
 			},
 		},
 		{
@@ -165,7 +165,7 @@ func Test_EnsureRbacCompiled(t *testing.T) {
 			assert: func(t *testing.T, byCluster map[string]pmk8s.ExportCompiledTarget) {
 				c := byCluster[testClusterName]
 				require.Len(t, c.ClusterRoles, 1)
-				require.Equal(t, "pm-test-asr", c.ClusterRoles[0].Name)
+				require.Equal(t, "pm-a-test-asr", c.ClusterRoles[0].Name)
 				require.Empty(t, c.CoarseClusterRoleBindings)
 			},
 		},

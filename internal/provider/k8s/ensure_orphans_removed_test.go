@@ -35,7 +35,7 @@ const (
 	testClusterNameA           = "remote-cluster-a"
 	testClusterNameB           = "remote-cluster-b"
 	testUnreachableClusterName = "unreachable-cluster"
-	testResource               = "pm-test-asr"
+	testResource               = "pm-a-test-asr"
 )
 
 func Test_EnsureRbacRemoved(t *testing.T) {
@@ -472,8 +472,8 @@ func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *test
 	// Cluster already carries READ shared roles, but the CB now defines only
 	// MANAGE as a direct binding, so the READ shared roles are orphans.
 	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
 	).Build()
 
 	cb := newCBRaw(t, map[string]any{
@@ -504,8 +504,8 @@ func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *test
 func Test_EnsureSharedClusterRoleOrphansRemoved_KeepsCurrentCapability(t *testing.T) {
 	// The CB still defines READ, so its shared roles must survive.
 	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb"}}},
 	).Build()
 
 	cb := newCB(t, "get")

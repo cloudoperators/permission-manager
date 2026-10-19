@@ -143,6 +143,10 @@ func (p *Phase) applyClusterScopedRBAC(ctx context.Context, remoteClient client.
 	op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
 		existing.Labels = cr.Labels
 		existing.Rules = cr.Rules
+		// A per-ASR ClusterRole owns its Rules directly and must never aggregate;
+		// clear any AggregationRule left behind (e.g. a name once used by a shared
+		// role) so the aggregation controller does not overwrite these Rules.
+		existing.AggregationRule = nil
 		return nil
 	})
 	ref := audit.ResourceRef{Kind: kindClusterRole, Name: cr.Name, Cluster: clusterName}

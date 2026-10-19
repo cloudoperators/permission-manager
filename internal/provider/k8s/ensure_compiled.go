@@ -437,7 +437,7 @@ func getClusterFromStore(store cache.Store, namespace, name string) (*greenhouse
 
 // buildClusterScopedRBAC materializes a cluster-wide ClusterRole + ClusterRoleBinding.
 func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
-	resourceName := resourceNamePrefix + asrName
+	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
 		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
 		pmapis.LabelASR:             asrLabelValue(asrName),
@@ -465,7 +465,7 @@ func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *polic
 
 // buildNamespaceScopedRBAC materializes a namespace-scoped Role + RoleBinding.
 func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
-	resourceName := resourceNamePrefix + asrName
+	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
 		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
 		pmapis.LabelASR:             asrLabelValue(asrName),
