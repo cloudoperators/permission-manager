@@ -38,6 +38,7 @@ import (
 func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
 		invalid := stringSet(p.invalidCCRNs)
+		invalidCaps := resourceCapSet(p.invalidResourceCaps)
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
 		notReadySeen := make(map[string]struct{})
@@ -71,8 +72,21 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			return s
 		}
 
+		// scope-mismatch detection: a resource's namespaced-ness is a target-cluster
+		// fact, resolved via the cluster's discovery client. Deduplicated per CCRN so
+		// READ+WRITE on one target, and matches across multiple clusters, warn once.
+		scopeWarned := make(map[string]struct{})
+
+		// per-reconcile cache of discovered resource lists keyed by (cluster, gv),
+		// so the scope check fetches each group/version at most once. A cached nil
+		// records a failed or absent lookup so it is not retried.
+		gvResources := make(map[gvKey]*metav1.APIResourceList)
+
 		for _, perm := range asr.Spec.Permissions {
 			if _, bad := invalid[perm.Resource]; bad {
+				continue
+			}
+			if _, bad := invalidCaps[resourceCap{resource: perm.Resource, capability: perm.Capability}]; bad {
 				continue
 			}
 			parsed, err := parser.Parse(perm.Resource)
@@ -80,14 +94,23 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 				continue
 			}
 
-			rules, found := UnionRulesForCapability(p.cbs, perm.Capability)
-			if !found {
-				capability := perm.Capability
-				if _, seen := unmappedSeen[capability]; !seen {
-					unmappedSeen[capability] = struct{}{}
-					p.unmappedCaps = append(p.unmappedCaps, capability)
+			var rules []CapabilityRule
+			if parsed.K8sResource != nil {
+				rules = resourceRulesFor(parsed.K8sResource, perm.Capability)
+				if len(rules) == 0 {
+					continue
 				}
-				continue
+			} else {
+				r, found := UnionRulesForCapability(p.cbs, perm.Capability)
+				if !found {
+					capability := perm.Capability
+					if _, seen := unmappedSeen[capability]; !seen {
+						unmappedSeen[capability] = struct{}{}
+						p.unmappedCaps = append(p.unmappedCaps, capability)
+					}
+					continue
+				}
+				rules = r
 			}
 
 			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
@@ -110,6 +133,9 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			}
 
 			for _, clusterName := range matches.ready {
+				if parsed.Type == ccrn.ResourceTypeNamespaceResource && parsed.K8sResource != nil && parsed.K8sResource.Resource != "*" {
+					p.warnIfScopeMismatch(ctx, asr.Namespace, clusterName, perm.Resource, parsed.K8sResource, scopeWarned, discoByCluster, discoFailed, gvResources)
+				}
 				effectiveRules := rules
 				if rulesNeedExpansion(rules) {
 					expanded, err := p.expandRulesForCluster(ctx, rules, clusterName, asr.Namespace, discoByCluster, discoFailed)
@@ -214,6 +240,39 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 	}
 }
 
+// resourceVerbsFor returns the hardcoded verb set for a resource-scoped CCRN
+// capability. The capabilityMapping is intentionally not consulted. WRITE
+// includes deletecollection for parity with the built-in edit/admin roles.
+func resourceVerbsFor(capability string) []string {
+	switch strings.ToUpper(capability) {
+	case "READ":
+		return []string{"get", "list", "watch"}
+	case "WRITE":
+		return []string{"create", "update", "patch", "delete", "deletecollection"}
+	default:
+		return nil
+	}
+}
+
+// resourceRulesFor builds the single CapabilityRule a resource CCRN grants: its
+// apiGroup/resource[/subresource] target with the hardcoded verb set. Returns
+// nil for an unknown capability (the validator rejects those as InvalidCCRN).
+func resourceRulesFor(res *ccrn.K8sResource, capability string) []CapabilityRule {
+	verbs := resourceVerbsFor(capability)
+	if len(verbs) == 0 {
+		return nil
+	}
+	resource := res.Resource
+	if res.SubResource != "" {
+		resource = res.Resource + "/" + res.SubResource
+	}
+	return []CapabilityRule{{
+		APIGroups: []string{res.APIGroup},
+		Resources: []string{resource},
+		Verbs:     verbs,
+	}}
+}
+
 // rulesNeedExpansion reports whether any rule is deny-driven (has
 // ExcludeResources) and therefore requires per-cluster discovery expansion.
 func rulesNeedExpansion(rules []CapabilityRule) bool {
@@ -268,6 +327,97 @@ func (p *Phase) discoveryFor(ctx context.Context, clusterName, namespace string,
 	}
 	discoByCluster[clusterName] = d
 	return d, nil
+}
+
+// warnIfScopeMismatch appends a ScopeMismatch config warning when a
+// namespace-resource CCRN names a cluster-scoped resource on the target cluster,
+// which a RoleBinding can never grant. Resolution uses the cluster's cached
+// group/versions plus a discovery lookup; any inability to resolve (group not
+// cached, discovery unavailable, resource unknown to the target) fails open with
+// no warning. Deduplicated per CCRN via warned.
+func (p *Phase) warnIfScopeMismatch(ctx context.Context, namespace, clusterName, ccrnRaw string, res *ccrn.K8sResource, warned map[string]struct{}, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}, gvResources map[gvKey]*metav1.APIResourceList) {
+	if _, ok := warned[ccrnRaw]; ok {
+		return
+	}
+	cluster, ok := getClusterFromStore(p.ClusterStore, namespace, clusterName)
+	if !ok {
+		return
+	}
+	gvs := cachedGVsForGroup(cluster, res.APIGroup)
+	if len(gvs) == 0 {
+		return
+	}
+	disco, err := p.discoveryFor(ctx, clusterName, namespace, discoByCluster, discoFailed)
+	if err != nil {
+		return
+	}
+	// A resource may be served by any cached version of its group; take the first
+	// version that actually knows the resource and only fail open once all are
+	// exhausted.
+	var namespaced, known bool
+	for _, gv := range gvs {
+		namespaced, known = resourceNamespaced(disco, clusterName, gv, res.Resource, gvResources)
+		if known {
+			break
+		}
+	}
+	if !known || namespaced {
+		return
+	}
+	warned[ccrnRaw] = struct{}{}
+	p.configWarnings = append(p.configWarnings, ConfigWarning{
+		Reason:  string(pmmeta.ScopeMismatchReason),
+		Message: fmt.Sprintf("namespace-resource CCRN %q names cluster-scoped resource %q; the RoleBinding cannot grant it", ccrnRaw, res.Resource),
+	})
+}
+
+// gvKey identifies a target cluster's group/version, used to cache a discovered
+// resource list per reconcile so each group/version is fetched at most once.
+type gvKey struct {
+	cluster string
+	gv      string
+}
+
+// cachedGVsForGroup returns every cached group/version for apiGroup from the
+// cluster's discovery cache. An empty result means the group isn't cached,
+// letting the caller fail open before making a remote discovery call.
+func cachedGVsForGroup(cluster *greenhousev1alpha1.Cluster, apiGroup string) []string {
+	if cluster.Status.DiscoveryCache == nil {
+		return nil
+	}
+	var gvs []string
+	for _, gv := range cluster.Status.DiscoveryCache.Groups {
+		if groupFromGV(gv) == apiGroup {
+			gvs = append(gvs, gv)
+		}
+	}
+	return gvs
+}
+
+// resourceNamespaced reports whether the named resource is namespaced in the
+// given group/version, consulting (and populating) the per-reconcile gvResources
+// cache so each (cluster, gv) is fetched once. known is false when the discovery
+// lookup fails or the resource is absent, so the caller fails open.
+func resourceNamespaced(disco discovery.DiscoveryInterface, clusterName, gv, resource string, gvResources map[gvKey]*metav1.APIResourceList) (namespaced, known bool) {
+	key := gvKey{cluster: clusterName, gv: gv}
+	list, cached := gvResources[key]
+	if !cached {
+		l, err := disco.ServerResourcesForGroupVersion(gv)
+		if err != nil {
+			l = nil
+		}
+		gvResources[key] = l
+		list = l
+	}
+	if list == nil {
+		return false, false
+	}
+	for _, r := range list.APIResources {
+		if r.Name == resource {
+			return r.Namespaced, true
+		}
+	}
+	return false, false
 }
 
 // getClusterFromStore looks up a greenhouse Cluster object by "namespace/name".
@@ -499,6 +649,15 @@ func stringSet(ss []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(ss))
 	for _, s := range ss {
 		out[s] = struct{}{}
+	}
+	return out
+}
+
+// resourceCapSet builds a set of (resource, capability) pairs for membership tests.
+func resourceCapSet(rcs []resourceCap) map[resourceCap]struct{} {
+	out := make(map[resourceCap]struct{}, len(rcs))
+	for _, rc := range rcs {
+		out[rc] = struct{}{}
 	}
 	return out
 }

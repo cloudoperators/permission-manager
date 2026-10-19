@@ -5,6 +5,8 @@ package k8s_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -207,4 +209,166 @@ func Test_EnsureASRValidity_CustomCCRNGroup(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
+	const (
+		wildcardAPIGroup   = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/deployments"
+		subresOnWildcard   = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/*:log"
+		wildcardNamespace  = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/*/apps/deployments"
+		partialResWildcard = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments*"
+		subresWildcard     = "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/demo/v1/pods:*"
+		validResourceCCRN  = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	)
+	cases := []struct {
+		name              string
+		permissions       []v1alpha1.Permission
+		wantInvalidConfig bool
+	}{
+		{
+			name:              "wildcard apiGroup is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: wildcardAPIGroup, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "subresource on wildcard resource is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: subresOnWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "partial resource wildcard is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: partialResWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "subresource wildcard is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: subresWildcard, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "wildcard namespace is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: wildcardNamespace, Capability: "read"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "capability other than read/write is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			wantInvalidConfig: true,
+		},
+		{
+			name:              "valid resource ccrn passes",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "write"}},
+			wantInvalidConfig: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: tc.permissions},
+			}
+			p := &pmk8s.Phase{
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
+			}
+			_, err := p.EnsureASRValidity(asr)(context.Background())
+			require.NoError(t, err)
+			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+			if tc.wantInvalidConfig {
+				require.NotNil(t, invalid)
+				require.Equal(t, metav1.ConditionTrue, invalid.Status)
+				require.Equal(t, string(pmmeta.InvalidCCRNReason), invalid.Reason)
+			} else {
+				require.Nil(t, invalid)
+			}
+		})
+	}
+}
+
+func Test_EnsureASRValidity_Warnings(t *testing.T) {
+	const (
+		clusterWriteDeploy = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	)
+	cases := []struct {
+		name        string
+		permissions []v1alpha1.Permission
+		wantWarning bool
+	}{
+		{
+			name:        "write without read warns",
+			permissions: []v1alpha1.Permission{{Resource: clusterWriteDeploy, Capability: "write"}},
+			wantWarning: true,
+		},
+		{
+			name: "write with read does not warn",
+			permissions: []v1alpha1.Permission{
+				{Resource: clusterWriteDeploy, Capability: "read"},
+				{Resource: clusterWriteDeploy, Capability: "write"},
+			},
+			wantWarning: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: tc.permissions},
+			}
+			p := &pmk8s.Phase{
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
+			}
+			_, err := p.EnsureASRValidity(asr)(context.Background())
+			require.NoError(t, err)
+
+			// The validator does not stamp InvalidConfig/Ready for warning-only input.
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ReadyCondition))
+			// ConfigWarning is stamped by the terminal status subroutine.
+			require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ConfigWarningCondition))
+
+			_, err = p.EnsureProviderStatus(asr)(context.Background())
+			require.NoError(t, err)
+
+			warn := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.ConfigWarningCondition)
+			if tc.wantWarning {
+				require.NotNil(t, warn)
+				require.Equal(t, metav1.ConditionTrue, warn.Status)
+			} else {
+				require.Nil(t, warn)
+			}
+		})
+	}
+}
+
+func Test_EnsureASRValidity_BoundsInvalidConfigMessage(t *testing.T) {
+	// Enough invalid CCRNs that the joined message would overrun the CRD's
+	// condition-message limit if left unbounded.
+	perms := make([]v1alpha1.Permission, 0, 2000)
+	for i := range 2000 {
+		perms = append(perms, v1alpha1.Permission{
+			Resource:   fmt.Sprintf("not-a-urn-%06d-padding-padding-padding-padding", i),
+			Capability: "read",
+		})
+	}
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: perms},
+	}
+	p := &pmk8s.Phase{
+		AuditLog:   audit.Disabled(),
+		Log:        ctrl.Log.WithName("test"),
+		CCRNParser: ccrn.NewParser(nil),
+	}
+
+	_, err := p.EnsureASRValidity(asr)(context.Background())
+	require.NoError(t, err)
+
+	invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
+	require.NotNil(t, invalid)
+	require.LessOrEqual(t, len(invalid.Message), 32000)
+	require.True(t, strings.HasSuffix(invalid.Message, "… (truncated)"),
+		"bounded message must end with the truncation marker")
 }

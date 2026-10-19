@@ -77,9 +77,11 @@ verb sets:
 | Capability | Verbs |
 |---|---|
 | `READ` | `get`, `list`, `watch` |
-| `WRITE` | `create`, `update`, `patch`, `delete` |
+| `WRITE` | `create`, `update`, `patch`, `delete`, `deletecollection` |
 
-Any other capability value (including `*`) is rejected as `InvalidCCRN`.
+Any other capability value (including `*`) is rejected as `InvalidCCRN`. `deletecollection`
+is included in WRITE for parity with the built-in `edit`/`admin` ClusterRoles; it is a
+distinct RBAC verb that authorizes deleting a whole collection in one request.
 
 > Note: ADR-018 extends the resource CCRN vocabulary with a third capability, `MANAGE`
 > (the union of the READ and WRITE verb sets), as part of the closed per-scope vocabulary.
@@ -133,7 +135,8 @@ kind (e.g. `deployments`) produces a ClusterRoleBinding and grants access across
 cluster. Using `namespace-resource` for a cluster-scoped kind (e.g. `nodes`) produces a
 RoleBinding, which Kubernetes will silently ignore because cluster-scoped resources are not
 accessible via namespace-bound roles. Authors are responsible for matching the CCRN type to
-the Kubernetes scope of the resource; the controller does not validate this.
+the Kubernetes scope of the resource; the controller surfaces a non-fatal warning for this
+case (see Non-fatal warnings below) but does not reject it.
 
 ### Validation errors (reason `InvalidCCRN`)
 
@@ -144,6 +147,22 @@ The following are hard validation failures, consistent with the existing fail-cl
 - Subresource on a wildcard resource (e.g. `*:log`)
 - Empty `<apigroup>` or `<resource>` segment
 - Capability other than `READ` or `WRITE`
+
+A literal `/` inside the `<resource>` segment is rejected (it overflows the URN segment
+count); use `:` for subresources. A literal `,` in the `<apigroup>`, `<resource>`, or
+`<subresource>` token is rejected: commas are never valid in Kubernetes group/resource names
+and would collide with the comma-joined RBAC rule merge key.
+
+### Non-fatal warnings
+
+The controller surfaces configuration warnings via an informational `ConfigWarning` status
+condition and a Kubernetes Warning Event, without failing the ASR:
+
+- **Kind-vs-scope:** a `namespace-resource` naming a cluster-scoped resource can never be
+  granted by a RoleBinding. Scope is a target-cluster fact, resolved per matched cluster via
+  that cluster's discovery client. Resources whose scope cannot be resolved (group not
+  discovered, discovery unavailable, or resource unknown) fail open — no warning. The
+  controller still does not hard-reject scope mismatches.
 
 ### Examples
 
