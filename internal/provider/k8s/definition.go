@@ -76,8 +76,13 @@ func (e CapabilityEntry) validate(scope, capability string) error {
 	if scope == scopeCluster {
 		allowed = validClusterCapabilities
 	}
-	up := strings.ToUpper(capability)
-	if _, ok := allowed[up]; !ok {
+	// Mapping keys must be canonical uppercase: lookups (resolveCapability,
+	// shared-role naming) uppercase the requested capability, so a lowercase key
+	// would be accepted here yet never resolve.
+	if capability != strings.ToUpper(capability) {
+		return fmt.Errorf("%s capability %q must be uppercase", scope, capability)
+	}
+	if _, ok := allowed[capability]; !ok {
 		return fmt.Errorf("%s capability %q is not in the allowed set", scope, capability)
 	}
 
@@ -87,7 +92,7 @@ func (e CapabilityEntry) validate(scope, capability string) error {
 	case direct && shared:
 		return errors.New("clusterRoleName is mutually exclusive with clusterRoleSelectors/rules")
 	case direct:
-		if scope != scopeCluster || up != "MANAGE" {
+		if scope != scopeCluster || capability != "MANAGE" {
 			return errors.New("clusterRoleName is only valid for the cluster MANAGE capability")
 		}
 	case shared:

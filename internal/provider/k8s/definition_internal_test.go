@@ -52,6 +52,8 @@ func Test_ParseConnectorDefinition_ClosedVocabulary(t *testing.T) {
 		{"shared without selectors", map[string]any{"namespace": map[string]any{"READ": map[string]any{"rules": []map[string]any{{"apiGroups": []string{""}, "resources": []string{"pods"}, "verbs": []string{"get"}}}}}}},
 		{"empty entry", map[string]any{"namespace": map[string]any{"READ": map[string]any{}}}},
 		{"rule missing verbs", map[string]any{"namespace": map[string]any{"READ": map[string]any{"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"x": "y"}}}, "rules": []map[string]any{{"apiGroups": []string{""}, "resources": []string{"pods"}}}}}}},
+		{"non-canonical lowercase cluster key", map[string]any{"cluster": map[string]any{"read": map[string]any{"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"x": "y"}}}}}}},
+		{"non-canonical lowercase namespace key", map[string]any{"namespace": map[string]any{"operate": map[string]any{"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"x": "y"}}}}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
