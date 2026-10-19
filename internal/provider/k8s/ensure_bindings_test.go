@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
@@ -363,4 +364,65 @@ func Test_EnsureSharedClusterRoles_CreatesRootAndChild(t *testing.T) {
 	require.True(t, names["pm-cb-cluster-read"], "root created")
 	require.True(t, names["pm-cb-cluster-read-baseline"], "child created")
 	require.False(t, names["pm-cb-cluster-manage"], "MANAGE direct binding creates no shared role")
+}
+
+// Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules asserts the
+// reconcile never clears the aggregated root's Rules. The Kubernetes
+// aggregation controller owns that field; overwriting it with the root's empty
+// rules on every reconcile would flap access for every ASR using the root.
+func Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules(t *testing.T) {
+	aggregated := []rbacv1.PolicyRule{{
+		APIGroups: []string{""},
+		Resources: []string{"pods"},
+		Verbs:     []string{"get", "list", "watch"},
+	}}
+	root := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pm-cb-cluster-read",
+			Labels: map[string]string{
+				pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
+				pmapis.LabelCB:           testCBName,
+			},
+		},
+		AggregationRule: &rbacv1.AggregationRule{ClusterRoleSelectors: []metav1.LabelSelector{
+			{MatchLabels: map[string]string{pmapis.LabelDomain + "aggregate-to-cluster-read": "true"}},
+		}},
+		// Populated by the aggregation controller in a real cluster.
+		Rules: aggregated,
+	}
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(root).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+		},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name:        testSpecName,
+			Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "READ"}},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err)
+
+	var got rbacv1.ClusterRole
+	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: "pm-cb-cluster-read"}, &got))
+	require.Equal(t, aggregated, got.Rules, "aggregated root rules must survive the reconcile")
+	require.NotNil(t, got.AggregationRule, "root keeps its aggregationRule")
 }

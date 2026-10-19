@@ -232,8 +232,15 @@ func (p *Phase) ensureSharedPair(ctx context.Context, remoteClient client.Client
 		existing := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
 		op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
 			existing.Labels = desired.Labels
-			existing.Rules = desired.Rules
 			existing.AggregationRule = desired.AggregationRule
+			// The aggregated root carries only an AggregationRule; its Rules are
+			// owned and continuously repopulated by the Kubernetes aggregation
+			// controller, so writing the root's empty Rules here would revoke the
+			// aggregated access on every reconcile. Only the baseline child, which
+			// has no AggregationRule, owns its Rules.
+			if desired.AggregationRule == nil {
+				existing.Rules = desired.Rules
+			}
 			return nil
 		})
 		ref := audit.ResourceRef{Kind: kindClusterRole, Name: desired.Name, Cluster: clusterName}
