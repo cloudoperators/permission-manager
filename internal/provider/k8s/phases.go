@@ -49,7 +49,6 @@ type Phase struct {
 	invalidCCRNs             []string
 	unmatchedClusterPatterns []string
 	notReadyClusters         []string
-	discoveryDegraded        []string
 
 	// resource CCRNs rejected only for a specific capability (e.g. an unsupported
 	// capability on an otherwise-valid resource). Tracked per (resource, capability)
@@ -73,6 +72,11 @@ type Phase struct {
 	// errors collected from each phase; aggregated by EnsureProviderStatus.
 	provisionErrs []error
 	orphanErrs    []error
+
+	// shared ClusterRole ensure failures keyed by cluster. EnsureRbacApplied
+	// folds each cluster's entry into that cluster's provisioning outcome so a
+	// binding to a shared role that failed to create still fails the cluster.
+	sharedRoleErrByCluster map[string]error
 }
 
 // compiledTarget is one cluster's fully-built RBAC objects, ready to apply.
@@ -82,6 +86,11 @@ type compiledTarget struct {
 	clusterRoleBindings []rbacv1.ClusterRoleBinding
 	roles               []rbacv1.Role
 	roleBindings        []rbacv1.RoleBinding
+
+	// bindings for coarse cluster.k8s / namespace.k8s CCRNs: references to shared
+	// or external ClusterRoles, applied without a paired per-ASR role.
+	coarseClusterRoleBindings []rbacv1.ClusterRoleBinding
+	coarseRoleBindings        []rbacv1.RoleBinding
 }
 
 // clusterStatus tracks the provisioning outcome for a single cluster.
@@ -93,7 +102,11 @@ type clusterStatus struct {
 
 // RBAC resource naming + kind constants.
 const (
-	resourceNamePrefix = "pm-"
+	// perASRNamePrefix and sharedNamePrefix are disjoint so a per-ASR object and a
+	// shared aggregated object can never collide on name, regardless of how an ASR
+	// or ConnectorBinding is named.
+	perASRNamePrefix = "pm-a-"
+	sharedNamePrefix = "pm-s-"
 
 	kindClusterRole        = "ClusterRole"
 	kindClusterRoleBinding = "ClusterRoleBinding"

@@ -5,6 +5,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -14,11 +15,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 )
+
+// errOwnershipConflict marks an apply that would overwrite an object owned by a
+// different ASR. It fails the cluster rather than silently clobbering foreign RBAC.
+var errOwnershipConflict = errors.New("object owned by a different ASR")
+
+// ownershipConflict reports whether an existing object is owned by a different
+// ASR. An object with no ASR owner label is unowned and safe to adopt; an owned
+// object conflicts when either its ASR name or source namespace differs.
+func ownershipConflict(existingLabels map[string]string, asrName, asrNamespace string) bool {
+	owner, ok := existingLabels[pmapis.LabelASR]
+	if !ok {
+		return false
+	}
+	return owner != asrLabelValue(asrName) || existingLabels[pmapis.LabelSourceNamespace] != asrNamespace
+}
 
 // EnsureRbacApplied applies each cluster's compiled RBAC via the remote client.
 // Per-cluster failures are recorded on p.provisionStatuses / p.provisionErrs
@@ -49,15 +66,33 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			}
 
 			var clusterErrs []error
+			if sharedErr := p.sharedRoleErrByCluster[target.clusterName]; sharedErr != nil {
+				// A binding to a shared ClusterRole that failed to create grants
+				// nothing, so the cluster fails even if its own objects apply.
+				clusterErrs = append(clusterErrs, sharedErr)
+				delete(p.sharedRoleErrByCluster, target.clusterName)
+			}
 			for i := range target.clusterRoles {
-				if err := p.applyClusterScopedRBAC(ctx, remoteClient, &target.clusterRoles[i], &target.clusterRoleBindings[i], asr.Name, target.clusterName); err != nil {
+				if err := p.applyClusterScopedRBAC(ctx, remoteClient, &target.clusterRoles[i], &target.clusterRoleBindings[i], asr.Name, asr.Namespace, target.clusterName); err != nil {
 					p.Log.Error(err, "failed to apply cluster-scoped RBAC", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName)
 					clusterErrs = append(clusterErrs, err)
 				}
 			}
 			for i := range target.roles {
-				if err := p.applyNamespaceScopedRBAC(ctx, remoteClient, &target.roles[i], &target.roleBindings[i], asr.Name, target.clusterName); err != nil {
+				if err := p.applyNamespaceScopedRBAC(ctx, remoteClient, &target.roles[i], &target.roleBindings[i], asr.Name, asr.Namespace, target.clusterName); err != nil {
 					p.Log.Error(err, "failed to apply namespace-scoped RBAC", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName, "targetNamespace", target.roles[i].Namespace)
+					clusterErrs = append(clusterErrs, err)
+				}
+			}
+			for i := range target.coarseClusterRoleBindings {
+				if err := p.applyCoarseClusterRoleBinding(ctx, remoteClient, &target.coarseClusterRoleBindings[i], asr.Name, asr.Namespace, target.clusterName); err != nil {
+					p.Log.Error(err, "failed to apply coarse ClusterRoleBinding", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName)
+					clusterErrs = append(clusterErrs, err)
+				}
+			}
+			for i := range target.coarseRoleBindings {
+				if err := p.applyRoleBinding(ctx, remoteClient, &target.coarseRoleBindings[i], asr.Name, asr.Namespace, target.clusterName); err != nil {
+					p.Log.Error(err, "failed to apply coarse RoleBinding", "namespace", asr.Namespace, "name", asr.Name, "cluster", target.clusterName, "targetNamespace", target.coarseRoleBindings[i].Namespace)
 					clusterErrs = append(clusterErrs, err)
 				}
 			}
@@ -74,8 +109,22 @@ func (p *Phase) EnsureRbacApplied(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			})
 		}
 
-		total := len(p.compiled)
-		failed := len(p.provisionErrs)
+		// Shared-role failures on clusters that produced no compiled target (e.g.
+		// a cluster whose only capability failed to resolve to any binding) still
+		// fail provisioning for that cluster.
+		for clusterName, sharedErr := range p.sharedRoleErrByCluster {
+			p.provisionStatuses = append(p.provisionStatuses, clusterStatus{name: clusterName, err: sharedErr})
+			p.provisionErrs = append(p.provisionErrs, sharedErr)
+		}
+		p.sharedRoleErrByCluster = nil
+
+		total := len(p.provisionStatuses)
+		failed := 0
+		for _, s := range p.provisionStatuses {
+			if s.err != nil {
+				failed++
+			}
+		}
 		applied := total - failed
 		skippedCount := len(p.unmatchedClusterPatterns) + len(p.notReadyClusters)
 		skipped := skippedSummary(p.unmatchedClusterPatterns, p.notReadyClusters)
@@ -126,11 +175,18 @@ func partialMessage(applied, total int, provisionErrs []error, skipped string) s
 }
 
 // applyClusterScopedRBAC create-or-patches a ClusterRole and its ClusterRoleBinding.
-func (p *Phase) applyClusterScopedRBAC(ctx context.Context, remoteClient client.Client, cr *rbacv1.ClusterRole, crb *rbacv1.ClusterRoleBinding, asrName, clusterName string) error {
+func (p *Phase) applyClusterScopedRBAC(ctx context.Context, remoteClient client.Client, cr *rbacv1.ClusterRole, crb *rbacv1.ClusterRoleBinding, asrName, asrNamespace, clusterName string) error {
 	existing := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: cr.Name}}
 	op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
+		if ownershipConflict(existing.Labels, asrName, asrNamespace) {
+			return fmt.Errorf("%s %q: %w", kindClusterRole, cr.Name, errOwnershipConflict)
+		}
 		existing.Labels = cr.Labels
 		existing.Rules = cr.Rules
+		// A per-ASR ClusterRole owns its Rules directly and must never aggregate;
+		// clear any AggregationRule left behind (e.g. a name once used by a shared
+		// role) so the aggregation controller does not overwrite these Rules.
+		existing.AggregationRule = nil
 		return nil
 	})
 	ref := audit.ResourceRef{Kind: kindClusterRole, Name: cr.Name, Cluster: clusterName}
@@ -144,6 +200,9 @@ func (p *Phase) applyClusterScopedRBAC(ctx context.Context, remoteClient client.
 
 	existingCRB := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: crb.Name}}
 	op, err = controllerutil.CreateOrPatch(ctx, remoteClient, existingCRB, func() error {
+		if ownershipConflict(existingCRB.Labels, asrName, asrNamespace) {
+			return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, errOwnershipConflict)
+		}
 		existingCRB.Labels = crb.Labels
 		existingCRB.RoleRef = crb.RoleRef
 		existingCRB.Subjects = crb.Subjects
@@ -162,9 +221,12 @@ func (p *Phase) applyClusterScopedRBAC(ctx context.Context, remoteClient client.
 }
 
 // applyNamespaceScopedRBAC create-or-patches a Role and its RoleBinding.
-func (p *Phase) applyNamespaceScopedRBAC(ctx context.Context, remoteClient client.Client, role *rbacv1.Role, rb *rbacv1.RoleBinding, asrName, clusterName string) error {
+func (p *Phase) applyNamespaceScopedRBAC(ctx context.Context, remoteClient client.Client, role *rbacv1.Role, rb *rbacv1.RoleBinding, asrName, asrNamespace, clusterName string) error {
 	existing := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: role.Namespace}}
 	op, err := controllerutil.CreateOrPatch(ctx, remoteClient, existing, func() error {
+		if ownershipConflict(existing.Labels, asrName, asrNamespace) {
+			return fmt.Errorf("%s %q in %q: %w", kindRole, role.Name, role.Namespace, errOwnershipConflict)
+		}
 		existing.Labels = role.Labels
 		existing.Rules = role.Rules
 		return nil
@@ -178,12 +240,12 @@ func (p *Phase) applyNamespaceScopedRBAC(ctx context.Context, remoteClient clien
 		p.AuditLog.Log(ctx, opToAction(op), audit.OutcomeSuccess, asrName, ref, nil)
 	}
 
-	return p.applyRoleBinding(ctx, remoteClient, rb, asrName, clusterName)
+	return p.applyRoleBinding(ctx, remoteClient, rb, asrName, asrNamespace, clusterName)
 }
 
 // applyRoleBinding handles RoleBinding create/patch. RoleRef is immutable, so
 // a change forces delete+recreate.
-func (p *Phase) applyRoleBinding(ctx context.Context, remoteClient client.Client, desired *rbacv1.RoleBinding, asrName, clusterName string) error {
+func (p *Phase) applyRoleBinding(ctx context.Context, remoteClient client.Client, desired *rbacv1.RoleBinding, asrName, asrNamespace, clusterName string) error {
 	existing := &rbacv1.RoleBinding{}
 	ref := audit.ResourceRef{Kind: kindRoleBinding, Name: desired.Name, Namespace: desired.Namespace, Cluster: clusterName}
 
@@ -198,6 +260,11 @@ func (p *Phase) applyRoleBinding(ctx context.Context, remoteClient client.Client
 	}
 	if err != nil {
 		return fmt.Errorf("%s %q in %q: %w", kindRoleBinding, desired.Name, desired.Namespace, err)
+	}
+
+	if ownershipConflict(existing.Labels, asrName, asrNamespace) {
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, errOwnershipConflict)
+		return fmt.Errorf("%s %q in %q: %w", kindRoleBinding, desired.Name, desired.Namespace, errOwnershipConflict)
 	}
 
 	if existing.RoleRef != desired.RoleRef {
@@ -224,6 +291,57 @@ func (p *Phase) applyRoleBinding(ctx context.Context, remoteClient client.Client
 	return nil
 }
 
+// applyCoarseClusterRoleBinding create-or-patches a standalone ClusterRoleBinding
+// that references an externally-owned ClusterRole (a shared pm role or a built-in
+// such as cluster-admin). RoleRef is immutable, so a change to the referenced role
+// — only possible when a CB rewrites a cluster capability's clusterRoleName under a
+// stable binding name — forces delete+recreate.
+func (p *Phase) applyCoarseClusterRoleBinding(ctx context.Context, remoteClient client.Client, crb *rbacv1.ClusterRoleBinding, asrName, asrNamespace, clusterName string) error {
+	existing := &rbacv1.ClusterRoleBinding{}
+	ref := audit.ResourceRef{Kind: kindClusterRoleBinding, Name: crb.Name, Cluster: clusterName}
+
+	err := remoteClient.Get(ctx, client.ObjectKeyFromObject(crb), existing)
+	if apierrors.IsNotFound(err) {
+		if err := remoteClient.Create(ctx, crb); err != nil {
+			p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeSuccess, asrName, ref, nil)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+	}
+
+	if ownershipConflict(existing.Labels, asrName, asrNamespace) {
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, errOwnershipConflict)
+		return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, errOwnershipConflict)
+	}
+
+	if existing.RoleRef != crb.RoleRef {
+		if err := remoteClient.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+			p.AuditLog.Log(ctx, audit.ActionDelete, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q (roleRef migration delete): %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		if err := remoteClient.Create(ctx, crb); err != nil {
+			p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeFailure, asrName, ref, err)
+			return fmt.Errorf("%s %q (roleRef migration create): %w", kindClusterRoleBinding, crb.Name, err)
+		}
+		p.AuditLog.Log(ctx, audit.ActionCreate, audit.OutcomeSuccess, asrName, ref, nil)
+		return nil
+	}
+
+	patch := client.MergeFrom(existing.DeepCopy())
+	existing.Labels = crb.Labels
+	existing.Subjects = crb.Subjects
+	if err := remoteClient.Patch(ctx, existing, patch); err != nil {
+		p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeFailure, asrName, ref, err)
+		return fmt.Errorf("%s %q: %w", kindClusterRoleBinding, crb.Name, err)
+	}
+	p.AuditLog.Log(ctx, audit.ActionUpdate, audit.OutcomeSuccess, asrName, ref, nil)
+	return nil
+}
+
 // opToAction maps controllerutil.OperationResult to audit.Action.
 func opToAction(op controllerutil.OperationResult) audit.Action {
 	if op == controllerutil.OperationResultCreated {
@@ -245,6 +363,12 @@ func compiledTargetToRefs(t compiledTarget) []pmmeta.AppliedResourceRef {
 		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRole, Namespace: r.Namespace, Name: r.Name})
 	}
 	for _, rb := range t.roleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRoleBinding, Namespace: rb.Namespace, Name: rb.Name})
+	}
+	for _, crb := range t.coarseClusterRoleBindings {
+		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindClusterRoleBinding, Name: crb.Name})
+	}
+	for _, rb := range t.coarseRoleBindings {
 		refs = append(refs, pmmeta.AppliedResourceRef{Kind: kindRoleBinding, Namespace: rb.Namespace, Name: rb.Name})
 	}
 	return refs

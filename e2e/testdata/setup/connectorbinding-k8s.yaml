@@ -10,4 +10,31 @@ spec:
   provider: kubernetes
   definition:
     capabilityMapping:
-      READ: ["get", "list", "watch"]
+      cluster:
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+      namespace:
+        MANAGE:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-admin: "true"
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+        OPERATE:
+          clusterRoleSelectors:
+            - matchLabels:
+                permission-manager.cloudoperators.dev/aggregate-to-namespace-operate: "true"
+          rules:
+            - apiGroups: ["apps"]
+              resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["batch"]
+              resources: ["jobs", "cronjobs"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: [""]
+              resources: ["pods", "services", "configmaps", "serviceaccounts"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

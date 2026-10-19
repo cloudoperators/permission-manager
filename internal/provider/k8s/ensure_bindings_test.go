@@ -11,13 +11,16 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
@@ -58,7 +61,12 @@ func cbWithProvider(name, provider string, def []byte) *v1alpha1.ConnectorBindin
 func Test_EnsureConnectorBindings(t *testing.T) {
 	usableDef := mustMarshal(map[string]any{
 		"capabilityMapping": map[string]any{
-			"READ": []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+			"cluster": map[string]any{
+				"READ": map[string]any{
+					"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"k": "v"}}},
+					"rules":                []map[string]any{{"apiGroups": []string{"*"}, "resources": []string{"*"}, "verbs": []string{"get"}}},
+				},
+			},
 		},
 	})
 	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})
@@ -72,6 +80,7 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 		wantErr           bool
 		wantStashed       int
 		wantInvalidConfig bool
+		wantReason        pmmeta.ConditionReason
 	}{
 		{
 			name:          "should stash a single usable kubernetes connector binding",
@@ -139,6 +148,25 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 			wantStashed:       1,
 			wantInvalidConfig: true,
 		},
+		{
+			name:          "should break with InvalidConnectorBinding when every binding name is label-unsafe",
+			connectorRefs: []string{"cb-badname"},
+			seeded: []client.Object{
+				&v1alpha1.ConnectorBinding{
+					ObjectMeta: metav1.ObjectMeta{Name: "cb-badname", Namespace: testNamespace},
+					Spec: v1alpha1.ConnectorBindingSpec{
+						Name:       "Bad Name",
+						Provider:   string(pmmeta.ProviderKubernetes),
+						Definition: &runtime.RawExtension{Raw: usableDef},
+					},
+				},
+			},
+			wantResult:        lifecycle.Break(),
+			wantErr:           true,
+			wantStashed:       1,
+			wantInvalidConfig: true,
+			wantReason:        pmmeta.InvalidConnectorBindingReason,
+		},
 	}
 
 	for _, tc := range cases {
@@ -172,7 +200,11 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
 			if tc.wantInvalidConfig {
 				require.NotNil(t, invalid)
-				require.Equal(t, string(pmmeta.MissingConnectorBindingReason), invalid.Reason)
+				wantReason := tc.wantReason
+				if wantReason == "" {
+					wantReason = pmmeta.MissingConnectorBindingReason
+				}
+				require.Equal(t, string(wantReason), invalid.Reason)
 			} else {
 				require.Nil(t, invalid)
 			}
@@ -309,4 +341,156 @@ func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
 			require.Equal(t, tc.wantResult, result)
 		})
 	}
+}
+
+func Test_EnsureSharedClusterRoles_CreatesRootAndChild(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+			"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"},
+		},
+	})
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name: testSpecName,
+			Permissions: []v1alpha1.Permission{
+				{Resource: validClusterCCRN, Capability: "READ"},
+				{Resource: validClusterCCRN, Capability: "MANAGE"},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	names := map[string]bool{}
+	for _, cr := range list.Items {
+		names[cr.Name] = true
+	}
+	require.True(t, names["pm-s-cb-cluster-read"], "root created")
+	require.True(t, names["pm-s-cb-cluster-read-baseline"], "child created")
+	require.False(t, names["pm-s-cb-cluster-manage"], "MANAGE direct binding creates no shared role")
+}
+
+// Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules asserts the
+// reconcile never clears the aggregated root's Rules. The Kubernetes
+// aggregation controller owns that field; overwriting it with the root's empty
+// rules on every reconcile would flap access for every ASR using the root.
+func Test_EnsureSharedClusterRoles_PreservesAggregatedRootRules(t *testing.T) {
+	aggregated := []rbacv1.PolicyRule{{
+		APIGroups: []string{""},
+		Resources: []string{"pods"},
+		Verbs:     []string{"get", "list", "watch"},
+	}}
+	root := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pm-s-cb-cluster-read",
+			Labels: map[string]string{
+				pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
+				pmapis.LabelCB:           testCBName,
+			},
+		},
+		AggregationRule: &rbacv1.AggregationRule{ClusterRoleSelectors: []metav1.LabelSelector{
+			{MatchLabels: map[string]string{pmapis.LabelDomain + "aggregate-to-cluster-read": "true"}},
+		}},
+		// Populated by the aggregation controller in a real cluster.
+		Rules: aggregated,
+	}
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(root).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+		},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name:        testSpecName,
+			Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "READ"}},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err)
+
+	var got rbacv1.ClusterRole
+	require.NoError(t, remote.Get(context.Background(), client.ObjectKey{Name: "pm-s-cb-cluster-read"}, &got))
+	require.Equal(t, aggregated, got.Rules, "aggregated root rules must survive the reconcile")
+	require.NotNil(t, got.AggregationRule, "root keeps its aggregationRule")
+}
+
+// Test_EnsureSharedClusterRoles_RecordsCreateFailure asserts that a shared
+// ClusterRole that fails to create is recorded per cluster so EnsureRbacApplied
+// can fail the cluster that binds to it, rather than being silently swallowed.
+func Test_EnsureSharedClusterRoles_RecordsCreateFailure(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+				return errors.New("create denied")
+			},
+		}).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{
+			"READ": map[string]any{
+				"clusterRoleSelectors": []map[string]any{{"matchLabels": map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}}},
+				"rules":                []map[string]any{{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"get", "list", "watch"}}},
+			},
+		},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Name:        testSpecName,
+			Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "READ"}},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		ClusterStore: newClusterStore(t, testClusterName),
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		CCRNParser:   ccrn.NewParser(nil),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoles(asr)(context.Background())
+	require.NoError(t, err, "shared-role failures are recorded, not returned as a reconcile error")
+
+	require.Error(t, p.SharedRoleErrByCluster()[testClusterName], "the create failure is recorded for the binding cluster")
 }

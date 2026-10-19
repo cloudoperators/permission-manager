@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -71,7 +72,7 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 				p.orphanErrs = append(p.orphanErrs, err)
 				continue
 			}
-			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, t.TargetID); err != nil {
+			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, asr.Namespace, t.TargetID); err != nil {
 				p.Log.Error(err, "failed to clean up orphan RBAC", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
 				p.orphanStatuses = append(p.orphanStatuses, clusterStatus{name: t.TargetID, err: err})
 				p.orphanErrs = append(p.orphanErrs, err)
@@ -133,7 +134,7 @@ func (p *Phase) EnsureRbacRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 				errs = append(errs, err)
 				continue
 			}
-			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, clusterName); err != nil {
+			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, asr.Namespace, clusterName); err != nil {
 				p.Log.Error(err, "failed to delete RBAC during cleanup", "namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
 				errs = append(errs, err)
 				continue
@@ -150,9 +151,14 @@ func (p *Phase) EnsureRbacRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 }
 
 // deleteRBACByLabel deletes every pm-managed RBAC resource owned by the named
-// ASR on a remote cluster.
-func (p *Phase) deleteRBACByLabel(ctx context.Context, remoteClient client.Client, asrName, clusterName string) error {
-	labelSel := client.MatchingLabels{pmapis.LabelASR: asrName}
+// ASR on a remote cluster. Selection is namespace-precise: two ASRs that share a
+// name in different namespaces own disjoint objects, so the LabelSourceNamespace
+// selector keeps one ASR's cleanup from revoking the other's RBAC.
+func (p *Phase) deleteRBACByLabel(ctx context.Context, remoteClient client.Client, asrName, asrNamespace, clusterName string) error {
+	labelSel := client.MatchingLabels{
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
+	}
 	var errs []error
 
 	var crList rbacv1.ClusterRoleList
@@ -250,8 +256,8 @@ func appliedRefKey(r pmmeta.AppliedResourceRef) string {
 
 // deleteSpecificRBAC deletes a single RBAC resource identified by ref.
 func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Client, ref pmmeta.AppliedResourceRef, asrName, clusterName string) error {
-	if ref.Name != resourceNamePrefix+asrName {
-		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedName", resourceNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
+	if !strings.HasPrefix(ref.Name, perASRNamePrefix+asrName) {
+		p.Log.Info("skipping orphan cleanup for unexpected resource name", "cluster", clusterName, "expectedPrefix", perASRNamePrefix+asrName, "kind", ref.Kind, "resourceNamespace", ref.Namespace, "resourceName", ref.Name)
 		return nil
 	}
 	switch ref.Kind {
@@ -270,4 +276,88 @@ func (p *Phase) deleteSpecificRBAC(ctx context.Context, remoteClient client.Clie
 	default:
 		return fmt.Errorf("unknown RBAC kind %q", ref.Kind)
 	}
+}
+
+// EnsureSharedClusterRoleOrphansRemoved deletes shared ClusterRoles (labelled by
+// CB) on each target cluster whose capability no longer exists in that CB's
+// current capabilityMapping. This reclaims roles when a CB author drops a
+// capability. Runs after EnsureRbacApplied. Continue-only and per-cluster
+// non-fatal: a delete failure is logged and retried next reconcile.
+//
+// Runs even under InvalidConfig: a dropped capability sets
+// InvalidConfig/UnknownCapability yet still carries a trustworthy per-CB keep
+// set, so the stale shared roles must still be reclaimed. The unsafe reason,
+// MissingConnectorBinding, never reaches here because EnsureConnectorBindings
+// breaks the chain first.
+func (p *Phase) EnsureSharedClusterRoleOrphansRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
+	return func(ctx context.Context) (lifecycle.Result, error) {
+		// desired[cb][sharedRoleName] holds every shared-role name each CB
+		// currently defines (both root and baseline child), so any labelled
+		// ClusterRole not in the set is an orphan.
+		desired := make(map[string]map[string]struct{})
+		for _, cb := range p.cbs {
+			def, err := ParseConnectorDefinition(cb.Spec.Definition)
+			if err != nil {
+				continue
+			}
+			names := make(map[string]struct{})
+			add := func(scope, capability string, entry CapabilityEntry) {
+				if entry.ClusterRoleName != "" {
+					return // direct binding: no shared role
+				}
+				names[sharedRoleName(cb.Spec.Name, scope, capability)] = struct{}{}
+				names[baselineChildName(cb.Spec.Name, scope, capability)] = struct{}{}
+			}
+			for capn, e := range def.CapabilityMapping.Cluster {
+				add(scopeCluster, strings.ToUpper(capn), e)
+			}
+			for capn, e := range def.CapabilityMapping.Namespace {
+				add(scopeNamespace, strings.ToUpper(capn), e)
+			}
+			desired[cb.Spec.Name] = names
+		}
+
+		for _, clusterName := range p.sharedOrphanClusters(asr) {
+			remoteClient, err := p.RemoteClient(ctx, p.Client, clusterName, asr.Namespace)
+			if err != nil {
+				p.Log.Error(err, "cluster unreachable for shared ClusterRole orphan cleanup, will retry",
+					"namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
+				continue
+			}
+			for cbName, keep := range desired {
+				var list rbacv1.ClusterRoleList
+				if err := remoteClient.List(ctx, &list, client.MatchingLabels{pmapis.LabelCB: cbName}); err != nil {
+					p.Log.Error(err, "failed to list shared ClusterRoles", "cluster", clusterName, "cb", cbName)
+					continue
+				}
+				for i := range list.Items {
+					name := list.Items[i].Name
+					if _, ok := keep[name]; ok {
+						continue
+					}
+					if err := p.deleteIfExists(ctx, remoteClient, &list.Items[i], asr.Name, clusterName, kindClusterRole); err != nil {
+						p.Log.Error(err, "failed to delete orphan shared ClusterRole", "cluster", clusterName, "role", name)
+					}
+				}
+			}
+		}
+		return lifecycle.Continue(), nil
+	}
+}
+
+// sharedOrphanClusters returns the clusters to sweep for orphaned shared
+// ClusterRoles: the de-duplicated union of the clusters this reconcile compiled
+// to and the clusters previously targeted. Including prior targets lets a
+// dropped capability be reclaimed even when the ASR compiles to nothing this
+// reconcile (e.g. it has gone InvalidConfig). Unreachable clusters are handled
+// by the RemoteClient error path at the call site.
+func (p *Phase) sharedOrphanClusters(asr *v1alpha1.ApplicationSpecificRole) []string {
+	set := make(map[string]struct{}, len(p.compiled))
+	for _, t := range p.compiled {
+		set[t.clusterName] = struct{}{}
+	}
+	for _, name := range previouslyTargetedClusters(asr) {
+		set[name] = struct{}{}
+	}
+	return sortedKeys(set)
 }

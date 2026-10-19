@@ -102,16 +102,23 @@ CB (see below), not a per-ASR resource.
 For all capabilities except `cluster:MANAGE`, the controller creates two ClusterRoles on
 each target cluster per capability per CB:
 
-1. **Aggregated root ClusterRole** (`pm-<cb-name>-<scope>-<capability>`) - has only an
+1. **Aggregated root ClusterRole** (`pm-s-<cb-name>-<scope>-<capability>`) - has only an
    `aggregationRule`, no inline `rules`. The Kubernetes aggregation controller owns and
    overwrites the `rules` field of any ClusterRole with `aggregationRule`, so inline rules
    on the root are not durable and must not be used.
 
-2. **Baseline child ClusterRole** (`pm-<cb-name>-<scope>-<capability>-baseline`) - carries
-   the CB-defined baseline rules and is labelled with the auto-derived
-   `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"` label so it is
-   selected by the aggregated root. CRD-owning teams can add their own ClusterRoles with
-   the same label to extend the capability.
+2. **Baseline child ClusterRole** (`pm-s-<cb-name>-<scope>-<capability>-baseline`) - carries
+   the CB-defined baseline rules and is labelled with the CB-private
+   `pm.cloudoperators.dev/aggregate-to-<cb-hash>-<scope>-<capability>: "true"` label so it is
+   selected only by its own CB's aggregated root. `<cb-hash>` is `ShortHash(cb-name)`. CRD-owning
+   teams extend a capability by labelling their ClusterRoles with the shared
+   `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"` label (see below), not the
+   CB-private one.
+
+All shared-role names are defensively wrapped so an over-long `<cb-name>` cannot exceed the 253
+character Kubernetes name limit: a name over the limit is truncated and suffixed with a hash of
+the full name. The `pm-s-` prefix is disjoint from the per-ASR `pm-a-` prefix (decision 12), so a
+shared object and a per-ASR object can never collide on name.
 
 Both ClusterRoles carry `pm.cloudoperators.dev/cb: <cb-name>` and
 `app.kubernetes.io/managed-by: pm-controller`.
@@ -119,8 +126,12 @@ Both ClusterRoles carry `pm.cloudoperators.dev/cb: <cb-name>` and
 The aggregated root's `aggregationRule` combines:
 - The `clusterRoleSelectors` from the CB definition (may include built-in Kubernetes
   aggregation labels such as `rbac.authorization.k8s.io/aggregate-to-admin: "true"`)
-- The auto-derived `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"`
-  selector, which selects the baseline child ClusterRole and any team-supplied extensions
+- The shared `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>: "true"` selector, which
+  selects any team-supplied extension ClusterRole for this scope/capability
+- The CB-private `pm.cloudoperators.dev/aggregate-to-<cb-hash>-<scope>-<capability>: "true"`
+  selector, which selects this CB's own baseline child. Keeping the baseline label CB-private
+  stops one CB's baseline from leaking into another CB's root when both define the same
+  scope/capability.
 
 **Secrets semantics by capability:**
 
@@ -144,12 +155,19 @@ a direct ClusterRoleBinding to the built-in `cluster-admin` ClusterRole.
 | CCRN type | Capability | Output on target cluster |
 |---|---|---|
 | `cluster.k8s` | `MANAGE` | ClusterRoleBinding to `cluster-admin` |
-| `cluster.k8s` | `READ` | ClusterRoleBinding to `pm-<cb-name>-cluster-read` |
-| `namespace.k8s` | `MANAGE` | RoleBinding (namespace-scoped) to `pm-<cb-name>-namespace-manage` |
-| `namespace.k8s` | `OPERATE` | RoleBinding (namespace-scoped) to `pm-<cb-name>-namespace-operate` |
-| `namespace.k8s` | `READ` | RoleBinding (namespace-scoped) to `pm-<cb-name>-namespace-read` |
+| `cluster.k8s` | `READ` | ClusterRoleBinding to `pm-s-<cb-name>-cluster-read` |
+| `namespace.k8s` | `MANAGE` | RoleBinding (namespace-scoped) to `pm-s-<cb-name>-namespace-manage` |
+| `namespace.k8s` | `OPERATE` | RoleBinding (namespace-scoped) to `pm-s-<cb-name>-namespace-operate` |
+| `namespace.k8s` | `READ` | RoleBinding (namespace-scoped) to `pm-s-<cb-name>-namespace-read` |
 
 No per-ASR ClusterRole or Role is created for `cluster.k8s` or `namespace.k8s` CCRNs.
+
+These coarse bindings are named
+`pm-a-<asr-name>-<cb-name>-<scope>-<capability>-<hash>`, where `<hash>` is
+`ShortHash(asr-namespace, asr-name, cb-name, scope, capability)`. The hash suffix
+disambiguates bindings whose readable fields collide after truncation, so two distinct
+(ASR, CB, scope, capability) tuples can never resolve to the same binding name. Like all
+pm object names, the result is wrapped against the 253-character limit.
 
 ### 5. Resource CCRNs unchanged
 
@@ -160,8 +178,8 @@ rules moved to shared ClusterRole bindings.
 
 A mixed ASR (e.g. `cluster.k8s` + `READ` and a `cluster-resource` + `WRITE`) produces on
 the target cluster:
-- 1 ClusterRoleBinding to the shared `pm-<cb-name>-cluster-read`
-- 1 per-ASR ClusterRole `pm-<asr-name>` + 1 ClusterRoleBinding to it
+- 1 ClusterRoleBinding to the shared `pm-s-<cb-name>-cluster-read`
+- 1 per-ASR ClusterRole `pm-a-<asr-name>` + 1 ClusterRoleBinding to it
 
 These are independent grants. Two ClusterRoleBindings for the same ASR on the same cluster
 is intentional.
@@ -192,10 +210,10 @@ READ:
 ```
 
 The controller creates two ClusterRoles: an aggregated root with `aggregationRule` only,
-and a baseline child ClusterRole carrying the `rules` content labelled with the
-auto-derived `pm.cloudoperators.dev/aggregate-to-<scope>-<capability>` label. The `rules`
-field describes what goes into the child; the root's `rules` field is owned by Kubernetes
-and must not be set directly.
+and a baseline child ClusterRole carrying the `rules` content labelled with the auto-derived
+CB-private `pm.cloudoperators.dev/aggregate-to-<cb-hash>-<scope>-<capability>` label (selected
+only by this CB's own root). The `rules` field describes what goes into the child; the root's
+`rules` field is owned by Kubernetes and must not be set directly.
 
 **Full example:**
 
@@ -262,13 +280,27 @@ spec:
 
 | Object | Label | Managed by |
 |---|---|---|
-| Per-ASR ClusterRole, ClusterRoleBinding, RoleBinding | `pm.cloudoperators.dev/asr: <asr-name>` | ASR reconciler - per-ASR orphan cleanup |
+| Per-ASR ClusterRole, ClusterRoleBinding, RoleBinding | `pm.cloudoperators.dev/asr: <asr-name>` + `pm.cloudoperators.dev/source-namespace: <asr-namespace>` | ASR reconciler - per-ASR orphan cleanup |
 | Shared aggregated root ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` | ASR reconciler - shared orphan cleanup |
-| Shared baseline child ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` | ASR reconciler - shared orphan cleanup |
+| Shared baseline child ClusterRoles | `pm.cloudoperators.dev/cb: <cb-name>` + CB-private `pm.cloudoperators.dev/aggregate-to-<cb-hash>-<scope>-<capability>: "true"` | ASR reconciler - shared orphan cleanup |
 
 Per-ASR orphan cleanup (`EnsureOrphansRemoved`) only touches objects carrying the `asr`
 label. It never deletes shared ClusterRoles. A separate subroutine handles shared ClusterRole
 orphan cleanup.
+
+The per-ASR `source-namespace` label makes cleanup namespace-precise: two ASRs that share a
+name in different namespaces own disjoint objects, so revoking one never removes the other's
+RBAC. Label values derived from a name are themselves wrapped against the 63-character label
+limit with the same transform in both the builders and the delete selector, so the value stays
+label-valid and the selector still matches.
+
+**Ownership guards.** Before patching an object that already exists, the controller refuses to
+overwrite one owned by a different principal: a per-ASR object whose existing `asr` /
+`source-namespace` labels name a different (ASR, namespace), or a shared object whose existing
+`cb` label names a different CB. A refused patch fails that cluster (surfaced via provisioning
+status) rather than silently hijacking another owner's object. Combined with the disjoint
+`pm-s-`/`pm-a-` prefixes, this makes name collisions across owners both unreachable and, if one
+somehow occurred, non-destructive.
 
 ### 8. ASR reconciler subroutine sequence
 
@@ -276,10 +308,10 @@ Two new subroutines are added around the existing pipeline:
 
 | Step | Subroutine | Change |
 |---|---|---|
-| 1 | `EnsureConnectorBindings` | Unchanged |
-| 2 | `EnsureSharedClusterRoles` | New - ensures shared ClusterRoles exist per CB per target cluster |
+| 1 | `EnsureConnectorBindings` | Rejects a CB whose `spec.name` is not a DNS-1123 label (the name seeds object names and labels); when every referenced CB is rejected this way the ASR goes `InvalidConfig`/`InvalidConnectorBinding` |
+| 2 | `EnsureSharedClusterRoles` | New - ensures shared ClusterRoles exist per CB per target cluster. A create/patch failure is recorded per cluster and folded into that cluster's provisioning outcome by `EnsureRbacApplied`, so a binding to a shared role that failed to create fails the cluster rather than being silently swallowed |
 | 3 | `EnsureRbacCompiled` | Changed - `cluster.k8s`/`namespace.k8s` CCRNs compile to binding references, not inline rules |
-| 4 | `EnsureRbacApplied` | Changed - applies bindings only for `cluster.k8s`/`namespace.k8s` |
+| 4 | `EnsureRbacApplied` | Changed - applies bindings only for `cluster.k8s`/`namespace.k8s`; consumes recorded shared-role failures into per-cluster provisioning status |
 | 5 | `EnsureOrphansRemoved` | Unchanged - per-ASR label only |
 | 6 | `EnsureSharedClusterRoleOrphansRemoved` | New - per-CB label cleanup |
 
@@ -288,11 +320,16 @@ ClusterRoles that are guaranteed to exist. It is a no-op for `cluster:MANAGE` (n
 ClusterRole to create).
 
 `EnsureSharedClusterRoleOrphansRemoved` lists ClusterRoles on each target cluster labelled
-`pm.cloudoperators.dev/cb: <cb-name>`, parses the capability from the name
-(`pm-<cb-name>-<scope>-<capability>`), and deletes any whose capability no longer exists in
-the CB's current `capabilityMapping`. This handles the case where a CB author removes a
-capability (e.g. drops `cluster:READ`): the orphaned shared ClusterRole is cleaned up on
-the next ASR reconcile for any ASR referencing that CB.
+`pm.cloudoperators.dev/cb: <cb-name>` and deletes any whose shared-role name is no longer in
+the keep-set derived from the CB's current `capabilityMapping` (both the `pm-s-<cb-name>-<scope>-<capability>`
+root and its `-baseline` child). This handles the case where a CB author removes a capability
+(e.g. drops `cluster:READ`): the orphaned shared ClusterRoles are cleaned up on the next ASR
+reconcile for any ASR referencing that CB. It sweeps the union of the clusters compiled this
+reconcile and the clusters previously targeted, and runs even when the ASR is `InvalidConfig`:
+dropping a capability sets `InvalidConfig`/`UnknownCapability`, yet the CB still parses, so the
+per-CB keep-set is trustworthy and the stale roles must still be reclaimed. The one unsafe reason,
+`MissingConnectorBinding`, never reaches this subroutine because `EnsureConnectorBindings` breaks
+the chain first.
 
 ### 9. Migration: hard cut
 
@@ -310,8 +347,11 @@ The following code is removed entirely:
 - `ResourceSelector` type
 - `internal/provider/k8s/expand.go` and its test file
 - `ensure_compiled_exclude_test.go`
-- `rulesNeedExpansion`, `expandRulesForCluster`, `discoveryFor` functions in `ensure_compiled.go`
-- `RemoteDiscovery` factory field on `Phase`
+- `rulesNeedExpansion` and `expandRulesForCluster` functions in `ensure_compiled.go`
+
+The `discoveryFor` helper and the `RemoteDiscovery` factory field on `Phase` are
+retained: the kind-vs-scope warning (ADR-017) resolves a resource's scope on the
+target cluster via the same discovery client, so they outlive `excludeResources`.
 
 `CapabilityRule` in the new model only carries `apiGroups`, `resources`, and `verbs`.
 
@@ -336,9 +376,36 @@ that dependency; splitting the implementation keeps the higher-risk machinery un
 review. `excludeResources` removal (decision 10) can land with Phase 1, since it is a pure
 deletion independent of the aggregation work.
 
-### Examples
+### 12. Object identity: disjoint prefixes, hashes, ownership guards
 
-**Cluster admin:**
+Object names and label values are derived from operator-controlled strings (`asr.Name`,
+`cb.Spec.Name`, scope, capability). Left naive, that derivation can collide two distinct
+owners onto one name or leak one owner's rules into another's role. Four rules close those
+gaps.
+
+**Disjoint prefixes.** Per-ASR objects are prefixed `pm-a-`; shared aggregated objects are
+prefixed `pm-s-`. The prefixes are disjoint, so a per-ASR object and a shared object can
+never collide on name regardless of how an ASR or CB is named.
+
+**Hash suffix on coarse bindings.** A coarse binding name
+`pm-a-<asr-name>-<cb-name>-<scope>-<capability>-<hash>` ends in
+`ShortHash(asr-namespace, asr-name, cb-name, scope, capability)` (8 hex chars). Without it,
+two distinct tuples whose readable fields coincide after truncation could resolve to the same
+binding; the hash is taken over the field-delimited tuple, so it distinguishes them even when
+the readable prefix is identical. All pm names are additionally wrapped against the
+253-character Kubernetes limit (truncate-and-hash when over length).
+
+**CB-private baseline label.** A baseline child carries only the CB-private
+`aggregate-to-<cb-hash>-<scope>-<capability>` label, not the shared
+`aggregate-to-<scope>-<capability>` label. Two CBs defining the same scope/capability therefore
+never aggregate each other's baselines; the shared label remains reserved for intentional
+team extensions selected by every CB's root.
+
+**Ownership guards + namespace-scoped labels.** Per-ASR objects carry both `asr` and
+`source-namespace` labels; cleanup and the ownership guard both match on the pair, so same-named
+ASRs in different namespaces own disjoint objects. Before overwriting an existing object the
+controller refuses to patch across owners (different (ASR, namespace) for per-ASR objects,
+different CB for shared objects), failing the cluster instead of hijacking the object.
 ```yaml
 permissions:
 - resource: urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/s-eu-de-1

@@ -77,7 +77,7 @@ How the Custom Resources relate to each other and what each provider produces.
 │      - resource: urn:ccrn:cluster.k8s.../v1/nw-a-*                │
 │        capability: READ                                           │
 │      - resource: urn:ccrn:namespace.k8s.../v1/nw-a-prod/monitoring│
-│        capability: WRITE                                          │
+│        capability: OPERATE                                        │
 └──────────────────────────┬────────────────────────────────────────┘
                            │ connectorRefs
                            ▼
@@ -87,15 +87,20 @@ How the Custom Resources relate to each other and what each provider produces.
 │  spec:                                                            │
 │    provider: kubernetes | github                                  │
 │    definition:                                                    │
-│      capabilityMapping: {READ: [...rules...], WRITE: [...]}       │
+│      capabilityMapping:                                           │
+│        cluster:   {MANAGE, READ}                                  │
+│        namespace: {MANAGE, OPERATE, READ}                         │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-The `capabilityMapping` is the only source of a capability's meaning. There is
-no built-in capability taxonomy in the controller: `READ`, `WRITE`, and any
-other capability name are defined entirely by the ConnectorBinding referenced by
-the ASR. Whatever verbs and resources the binding maps a capability to are what
-that capability grants.
+For the kubernetes provider, `capabilityMapping` is nested by the CCRN's scope
+and each scope has a **closed** capability vocabulary enforced by the controller:
+`cluster` accepts `MANAGE`/`READ`, `namespace` accepts `MANAGE`/`OPERATE`/`READ`.
+Each capability maps either to a named ClusterRole (cluster `MANAGE` →
+`cluster-admin`) or to `clusterRoleSelectors` (+ optional `rules`) from which the
+controller builds a shared aggregated ClusterRole. Resource CCRNs
+(`resource.k8s`) are the exception: their verbs are hardcoded by capability
+(`READ`/`WRITE`/`MANAGE`) and the `capabilityMapping` is not consulted.
 
 ### Processing: provider routing
 
@@ -114,15 +119,24 @@ flowchart LR
 
 | Provider | Where | Resources created |
 |----------|-------|-------------------|
-| **kubernetes** | Remote target clusters | `ClusterRole pm-‹asr›` + `ClusterRoleBinding pm-‹asr›` (cluster-scoped permissions) <br/> `Role pm-‹asr›` + `RoleBinding pm-‹asr›` per namespace (namespace-scoped permissions) |
+| **kubernetes** (coarse CCRN) | Remote target clusters | CB-owned shared aggregated `ClusterRole pm-‹cb›-‹scope›-‹cap›` (+ `-baseline` child) <br/> per-ASR `ClusterRoleBinding pm-‹asr›-‹cb›-‹scope›-‹cap›` (cluster scope) or namespaced `RoleBinding` (namespace scope), both referencing the shared ClusterRole; cluster `MANAGE` binds `cluster-admin` directly |
+| **kubernetes** (resource CCRN) | Remote target clusters | per-ASR `ClusterRole pm-‹asr›` + `ClusterRoleBinding pm-‹asr›` (cluster-scoped) <br/> per-ASR `Role pm-‹asr›` + `RoleBinding pm-‹asr›` per namespace (namespace-scoped) |
 | **github** | Provider namespace (management cluster) | `GithubTeam` <br/> `GithubTeamRepository` |
 
-Kubernetes RBAC objects carry ownership labels for discovery and cleanup:
+Kubernetes RBAC objects carry ownership labels for discovery and cleanup.
+Per-ASR objects (resource-CCRN roles, and the coarse bindings) are keyed to the
+ASR; the shared aggregated ClusterRoles are keyed to the ConnectorBinding so they
+survive ASR deletion and are reclaimed only when no ASR references them:
 
 ```yaml
+# per-ASR objects
 labels:
   app.kubernetes.io/managed-by: pm-controller
   permission-manager.cloudoperators.dev/asr: <asr-name>
+# shared aggregated ClusterRoles
+labels:
+  app.kubernetes.io/managed-by: pm-controller
+  permission-manager.cloudoperators.dev/cb: <connector-binding-name>
 ```
 
 The RBAC subject is always `Kind: Group, Name: <asr.spec.name>`. GitHub-owned
@@ -177,7 +191,7 @@ Each subroutine returns a `Result`, mapped to a `ReconcileResult`:
 
 ## 4. Kubernetes Provider - Create/Update
 
-`reconcileKubernetes` builds a fresh `Phase` and runs six subroutines in order.
+`reconcileKubernetes` builds a fresh `Phase` and runs eight subroutines in order.
 The `Phase` fetches its own ConnectorBindings; the controller passes only the
 ASR.
 
@@ -187,19 +201,23 @@ flowchart TD
 
     START --> VALID["EnsureASRValidity<br/>parse each k8s CCRN"]
     VALID --> BIND["EnsureConnectorBindings<br/>load kubernetes CBs"]
-    BIND --> COMPILE["EnsureRbacCompiled<br/>capability rules → RBAC per cluster"]
-    COMPILE --> ORPHAN["EnsureOrphansCleanedUp<br/>delete RBAC no longer compiled"]
+    BIND --> SHARED["EnsureSharedClusterRoles<br/>create-or-patch CB-owned shared roles"]
+    SHARED --> COMPILE["EnsureRbacCompiled<br/>CCRNs → per-ASR rules + coarse bindings"]
+    COMPILE --> ORPHAN["EnsureOrphansCleanedUp<br/>delete per-ASR RBAC no longer compiled"]
     ORPHAN --> APPLY["EnsureRbacApplied<br/>CreateOrPatch, write Provisioned"]
-    APPLY --> STATUS["EnsureProviderStatus<br/>fold status, CalculateReady"]
+    APPLY --> SHAREDORPHAN["EnsureSharedClusterRoleOrphansRemoved<br/>GC unreferenced shared roles"]
+    SHAREDORPHAN --> STATUS["EnsureProviderStatus<br/>fold status, CalculateReady"]
     STATUS --> DONE["Success / Pending / Failed"]
 
     BIND -->|"no usable CB"| FAILCB["failMissingCB:<br/>revoke RBAC, InvalidConfig=MissingConnectorBinding, Break"]
 
     click VALID "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_validity.go" "EnsureASRValidity"
     click BIND "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go" "EnsureConnectorBindings"
+    click SHARED "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go" "EnsureSharedClusterRoles"
     click COMPILE "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go" "EnsureRbacCompiled"
     click ORPHAN "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go" "EnsureOrphansCleanedUp"
     click APPLY "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go" "EnsureRbacApplied"
+    click SHAREDORPHAN "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go" "EnsureSharedClusterRoleOrphansRemoved"
     click STATUS "https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go" "EnsureProviderStatus"
 
     style DONE fill:#e8f5e9,stroke:#2e7d32
@@ -219,57 +237,66 @@ non-empty `capabilityMapping`. If none is usable, `failMissingCB` revokes RBAC
 from previously-targeted clusters, stamps `InvalidConfig=True` with reason
 `MissingConnectorBinding`, removes `Provisioned`, and `Break`s.
 
-**`EnsureRbacCompiled`** ([`ensure_compiled.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go))
-turns each permission into RBAC. It looks the capability up in the binding
-(`UnionRulesForCapability`), matches the CCRN's cluster pattern against the
-Greenhouse `Cluster` store (`matchClusterPattern`, exact key or trailing-`*`
-glob), and splits by scope: a cluster CCRN (empty namespace) accumulates
-cluster-scoped rules into `ClusterRole pm-‹asr›`; a namespace CCRN accumulates
-per-namespace rules into `Role pm-‹asr›` in that namespace. This is the design
-chosen in [ADR-015](adr/015-scope-separated-clusterroles.md). Three failure
-accumulators are set here and each stamps `InvalidConfig=True` + `Ready=False`
-directly in this subroutine: capabilities not found in any binding
-(`unmappedCaps` -> reason `UnknownCapability`); nothing compiled at all because
-every referenced cluster pattern matched no cluster or only not-ready ones
-(`unmatchedClusterPatterns` / not-ready clusters -> reason `NoTargetsResolved`);
-and clusters whose deny-driven rules could not be expanded because discovery was
-unavailable (`discoveryDegraded` -> `DiscoveryUnavailable`). The subroutine still
-`Continue`s.
+**`EnsureSharedClusterRoles`** ([`ensure_bindings.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go))
+create-or-patches, on every Ready target cluster, the CB-owned shared roles each
+coarse capability needs: an aggregated root `ClusterRole pm-‹cb›-‹scope›-‹cap›`
+(an `AggregationRule` of the CB's `clusterRoleSelectors` plus the auto-derived
+aggregation label, empty `.Rules`) and, when the capability defines `rules`, a
+`-baseline` child carrying them under that aggregation label. A direct-binding
+capability (cluster `MANAGE` → `cluster-admin`) has no shared role and is
+skipped. Per-cluster failures are recorded but never fatal.
 
-> **Deny-driven capabilities (`excludeResources`).** A capability rule may carry
-> `excludeResources` instead of literal resources (see
-> [Concepts → Deny-driven rules](concepts.md#deny-driven-rules-excluderesources)). For each target
-> cluster, `expandRuleForCluster` ([`expand.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/expand.go))
-> reads the cluster's discovered API groups from
-> `Cluster.status.discoveryCache.groups` and performs live discovery
-> (`ServerResourcesForGroupVersion`) to enumerate each denied group's resources
-> minus the excluded ones. It is **fail-closed**: if discovery is unavailable it
-> returns an error and no rules, so a denied resource can never leak through a
-> partial expansion. The cluster is recorded in `discoveryDegraded`.
+**`EnsureRbacCompiled`** ([`ensure_compiled.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go))
+turns each permission into RBAC, matching the CCRN's cluster pattern against the
+Greenhouse `Cluster` store (`matchClusterPattern`, exact key or trailing-`*`
+glob) and splitting by CCRN kind:
+
+- A **resource CCRN** (`resource.k8s`) compiles to per-ASR rules with verbs
+  hardcoded by capability (`resourceRulesFor`), accumulated by scope into
+  `ClusterRole pm-‹asr›` (cluster-scoped) or `Role pm-‹asr›` per namespace — the
+  scope separation from [ADR-015](adr/015-scope-separated-clusterroles.md).
+- A **coarse CCRN** (`cluster.k8s` / `namespace.k8s`) resolves the capability in
+  the binding (`resolveCapability`) to a shared or external ClusterRole and emits
+  only a per-ASR binding referencing it: a `ClusterRoleBinding` for cluster scope,
+  a namespaced `RoleBinding` for namespace scope — the model from
+  [ADR-018](adr/018-capability-mapping-rework.md).
+
+Two failure accumulators stamp `InvalidConfig=True` + `Ready=False` directly in
+this subroutine: capabilities no binding maps for the CCRN's scope
+(`unmappedCaps` -> reason `UnknownCapability`); and nothing compiled at all
+because every referenced cluster pattern matched no cluster or only not-ready
+ones (`unmatchedClusterPatterns` / not-ready clusters -> reason
+`NoTargetsResolved`). The subroutine still `Continue`s. Discovery is consulted
+only to warn when a namespace-resource CCRN names a cluster-scoped resource
+(`warnIfScopeMismatch`, a non-fatal `ScopeMismatch` config warning).
 
 **`EnsureOrphansCleanedUp`** ([`ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go))
 runs before apply. For a cluster no longer targeted at all, it deletes every
 RBAC object carrying this ASR's `permission-manager.cloudoperators.dev/asr`
-label. Within a still-targeted cluster, it removes sub-resources that dropped
-out of the compiled set via `deleteSpecificRBAC`, which only deletes objects
-named exactly `pm-‹asr›`; a differently-named legacy object is left for the
-delete path.
+label. Within a still-targeted cluster, it removes per-ASR objects that dropped
+out of the compiled set via `deleteSpecificRBAC`.
 
 **`EnsureRbacApplied`** ([`ensure_applied.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go))
-applies the compiled RBAC with `CreateOrPatch`. A `RoleBinding`'s `roleRef` is
+applies the compiled RBAC with `CreateOrPatch`. A binding's `roleRef` is
 immutable, so a roleRef change forces delete-and-recreate. It writes the
 `Provisioned` condition with reason `ProvisioningSucceeded`, `NoTargets`,
 `ProvisioningFailed`, or `PartialProvisioning`. When `InvalidConfig=True`, apply
 is skipped and any stale `Provisioned` condition is removed.
 
+**`EnsureSharedClusterRoleOrphansRemoved`** ([`ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go))
+runs after apply. On each targeted cluster it lists shared ClusterRoles by their
+`permission-manager.cloudoperators.dev/cb` label and deletes any whose name is no
+longer in the set of shared roles this reconcile needs — reclaiming CB-owned
+roles once no ASR references them. A cluster that is unreachable is logged and
+retried rather than treated as fatal.
+
 **`EnsureProviderStatus`** ([`ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go))
 is terminal. If either `unmappedCaps` or `invalidCCRNs` is non-empty it writes a
 degraded `status.providers.kubernetes` in place of the per-target view (note this
 fold is driven only by those two accumulators: `unmatchedClusterPatterns` surface
-as per-target `Error` entries instead, and `discoveryDegraded` already set
-`InvalidConfig` in the compile step); otherwise it writes the per-cluster target
-statuses. It then calls `asr.CalculateReady()` and aggregates provision/orphan
-errors; a non-nil aggregate `Break`s the chain.
+as per-target `Error` entries instead); otherwise it writes the per-cluster
+target statuses. It then calls `asr.CalculateReady()` and aggregates
+provision/orphan errors; a non-nil aggregate `Break`s the chain.
 
 ---
 
@@ -369,8 +396,8 @@ Quick reference for the implementation files behind each section:
 | **K8s - validity** | [`internal/provider/k8s/ensure_validity.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_validity.go) | `EnsureASRValidity` |
 | **K8s - bindings** | [`internal/provider/k8s/ensure_bindings.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_bindings.go) | `EnsureConnectorBindings`, `failMissingCB` |
 | **K8s - compile** | [`internal/provider/k8s/ensure_compiled.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_compiled.go) | `EnsureRbacCompiled`, `buildClusterScopedRBAC`, `buildNamespaceScopedRBAC`, `matchClusterPattern` |
-| **K8s - deny expansion** | [`internal/provider/k8s/expand.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/expand.go) | `expandRuleForCluster` |
-| **K8s - orphans / delete** | [`internal/provider/k8s/ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go) | `EnsureOrphansCleanedUp`, `EnsureRbacRemoved`, `deleteRBACByLabel` |
+| **K8s - shared roles** | [`internal/provider/k8s/shared_roles.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/shared_roles.go) | `buildAggregatedRoot`, `buildBaselineChild`, `buildCoarseClusterRoleBinding`, `buildCoarseRoleBinding`, `coarseBindingName` |
+| **K8s - orphans / delete** | [`internal/provider/k8s/ensure_orphans_removed.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_orphans_removed.go) | `EnsureOrphansCleanedUp`, `EnsureSharedClusterRoleOrphansRemoved`, `deleteRBACByLabel`, `deleteSpecificRBAC` |
 | **K8s - apply** | [`internal/provider/k8s/ensure_applied.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_applied.go) | `EnsureRbacApplied` |
 | **K8s - status** | [`internal/provider/k8s/ensure_status.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/k8s/ensure_status.go) | `EnsureProviderStatus`, `writeProviderStatus` |
 | **GitHub** | [`internal/provider/github/phase.go`](https://github.com/cloudoperators/permission-manager/blob/main/internal/provider/github/phase.go) | `Reconcile`, `ReconcileDelete` |

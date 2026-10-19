@@ -140,6 +140,35 @@ func Test_EnsureASRValidity_Remove_Stale_Condition(t *testing.T) {
 	require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
 }
 
+// Test_EnsureASRValidity_Clears_Obsolete_DiscoveryUnavailable covers migration
+// from the removed deny-expansion path: an ASR carrying the now-unproduced
+// InvalidConfig=True/DiscoveryUnavailable must have it cleared once its config
+// is valid, otherwise HasInvalidConfig wedges provisioning forever.
+func Test_EnsureASRValidity_Clears_Obsolete_DiscoveryUnavailable(t *testing.T) {
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec: v1alpha1.ApplicationSpecificRoleSpec{
+			Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "read"}},
+		},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.InvalidConfigCondition,
+		pmmeta.DiscoveryUnavailableReason,
+		"discovery unavailable",
+	))
+
+	p := &pmk8s.Phase{
+		AuditLog:   audit.Disabled(),
+		Log:        ctrl.Log.WithName("test"),
+		CCRNParser: ccrn.NewParser(nil),
+	}
+
+	result, err := p.EnsureASRValidity(asr)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.Continue(), result)
+	require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
+}
+
 func Test_EnsureASRValidity_CustomCCRNGroup(t *testing.T) {
 	customGroupCluster := "urn:ccrn:cluster.k8s.ccrn.mycompany.dev/v1/remote-cluster"
 	customGroupNamespace := "urn:ccrn:namespace.k8s.ccrn.mycompany.dev/v1/remote-cluster/demo"
@@ -251,9 +280,14 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 			wantInvalidConfig: true,
 		},
 		{
-			name:              "capability other than read/write is invalid",
-			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			name:              "capability other than read/write/manage is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "operate"}},
 			wantInvalidConfig: true,
+		},
+		{
+			name:              "manage capability is valid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			wantInvalidConfig: false,
 		},
 		{
 			name:              "valid resource ccrn passes",

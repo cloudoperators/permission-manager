@@ -98,7 +98,11 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			return lifecycle.Continue(), nil
 		}
 
-		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason)
+		// InvalidCCRN is this subroutine's reason. DiscoveryUnavailable is swept
+		// too: it is obsolete (the deny-expansion path that set it was removed)
+		// and nothing else clears a legacy condition still carrying it, which
+		// would otherwise wedge provisioning via HasInvalidConfig.
+		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason, pmmeta.DiscoveryUnavailableReason)
 		return lifecycle.Continue(), nil
 	}
 }
@@ -179,7 +183,7 @@ func resourceStructureInvalid(parsed *ccrn.ParsedCCRN) bool {
 // invalidates that one (resource, capability) permission.
 func resourceCapabilitySupported(capability string) bool {
 	switch strings.ToUpper(capability) {
-	case "READ", "WRITE":
+	case "READ", "WRITE", "MANAGE":
 		return true
 	default:
 		return false
