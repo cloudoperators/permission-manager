@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
+	"github.com/cloudoperators/permission-manager/internal/naming"
 )
 
 // Scope tokens for the two coarse Kubernetes CCRN kinds. They name the section
@@ -49,4 +50,12 @@ func baselineChildName(cbName, scope, capability string) string {
 // "permission-manager.cloudoperators.dev/aggregate-to-cluster-read".
 func aggregateToLabel(scope, capability string) string {
 	return pmapis.LabelDomain + "aggregate-to-" + scope + "-" + strings.ToLower(capability)
+}
+
+// asrLabelValue renders an ASR name for use as a Kubernetes label value. Label
+// values are capped at 63 characters, so a longer name is truncated with a
+// stable hash suffix. The orphan-cleanup selector applies the identical
+// transform, so label-based selection stays exact.
+func asrLabelValue(asrName string) string {
+	return naming.TruncateWithHash(asrName, 63)
 }

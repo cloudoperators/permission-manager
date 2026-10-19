@@ -5,6 +5,7 @@ package k8s
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -59,6 +60,38 @@ func Test_ParseConnectorDefinition_ClosedVocabulary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseConnectorDefinition(rawDef(t, tc.mapping))
 			require.Error(t, err)
+		})
+	}
+}
+
+func Test_ValidateConnectorBinding_Name(t *testing.T) {
+	okDef := rawDef(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	cases := []struct {
+		name    string
+		cbName  string
+		wantErr bool
+	}{
+		{"valid dns label", "kubernetes-prod", false},
+		{"uppercase and space rejected", "Kubernetes Production", true},
+		{"too long rejected", strings.Repeat("a", 64), true},
+		{"leading hyphen rejected", "-x", true},
+		{"trailing hyphen rejected", "x-", true},
+		{"empty rejected", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cb := &v1alpha1.ConnectorBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "cb"},
+				Spec:       v1alpha1.ConnectorBindingSpec{Name: tc.cbName, Provider: "kubernetes", Definition: okDef},
+			}
+			_, err := ValidateConnectorBinding(cb)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

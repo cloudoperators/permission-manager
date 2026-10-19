@@ -68,13 +68,14 @@ func coarseBindingName(asrName, cbName, scope, capability string) string {
 // buildCoarseClusterRoleBinding binds the ASR's subject group to a ClusterRole
 // (a shared pm role, or an external role such as cluster-admin). The binding is
 // per-ASR and carries the asr label for per-ASR orphan cleanup.
-func buildCoarseClusterRoleBinding(asrName, specName, bindingName, roleName string) rbacv1.ClusterRoleBinding {
+func buildCoarseClusterRoleBinding(asrName, asrNamespace, specName, bindingName, roleName string) rbacv1.ClusterRoleBinding {
 	return rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: bindingName,
 			Labels: map[string]string{
-				pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-				pmapis.LabelASR:          asrName,
+				pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+				pmapis.LabelASR:             asrLabelValue(asrName),
+				pmapis.LabelSourceNamespace: asrNamespace,
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
@@ -88,14 +89,15 @@ func buildCoarseClusterRoleBinding(asrName, specName, bindingName, roleName stri
 
 // buildCoarseRoleBinding binds the ASR's subject group to a ClusterRole within a
 // single namespace, confining the shared role's rules to that namespace.
-func buildCoarseRoleBinding(asrName, specName, ns, bindingName, clusterRoleName string) rbacv1.RoleBinding {
+func buildCoarseRoleBinding(asrName, asrNamespace, specName, ns, bindingName, clusterRoleName string) rbacv1.RoleBinding {
 	return rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      bindingName,
 			Namespace: ns,
 			Labels: map[string]string{
-				pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-				pmapis.LabelASR:          asrName,
+				pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+				pmapis.LabelASR:             asrLabelValue(asrName),
+				pmapis.LabelSourceNamespace: asrNamespace,
 			},
 		},
 		RoleRef: rbacv1.RoleRef{

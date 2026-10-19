@@ -26,7 +26,7 @@ import (
 // references and stashes them on p.cbs. Skips refs that fail to Get or have
 // no usable definition (parseable + non-empty capabilityMapping).
 //
-// Breaks the chain when no usable CB is available: failMissingCB revokes RBAC
+// Breaks the chain when no usable CB is available: failUnusableCB revokes RBAC
 // from every previously-targeted cluster, then stamps the misconfig conditions.
 func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) lifecycle.SubRoutine {
 	return func(ctx context.Context) (lifecycle.Result, error) {
@@ -43,16 +43,20 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 
 		if len(p.cbs) == 0 {
 			msg := "no kubernetes ConnectorBindings referenced by ASR"
-			return p.failMissingCB(ctx, asr, msg)
+			return p.failUnusableCB(ctx, asr, pmmeta.MissingConnectorBindingReason, msg)
 		}
 
 		resourceOnly := asrIsResourceOnly(p.CCRNParser, asr)
 
 		usable := 0
+		var invalidNames []string
 		for _, cb := range p.cbs {
-			def, err := ParseConnectorDefinition(cb.Spec.Definition)
+			def, err := ValidateConnectorBinding(cb)
 			if err != nil {
-				p.Log.Error(err, "skipping unparseable ConnectorBinding definition", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
+				p.Log.Error(err, "skipping unusable ConnectorBinding", "namespace", asr.Namespace, "name", asr.Name, "connectorBinding", cb.Name)
+				if nameErr := validateConnectorBindingName(cb.Spec.Name); nameErr != nil {
+					invalidNames = append(invalidNames, cb.Spec.Name)
+				}
 				continue
 			}
 			if def.CapabilityMapping.empty() && !resourceOnly {
@@ -63,23 +67,28 @@ func (p *Phase) EnsureConnectorBindings(asr *v1alpha1.ApplicationSpecificRole) l
 		}
 
 		if usable == 0 {
+			if len(invalidNames) > 0 {
+				msg := fmt.Sprintf("ConnectorBinding names are not valid DNS-1123 labels: %v", invalidNames)
+				return p.failUnusableCB(ctx, asr, pmmeta.InvalidConnectorBindingReason, msg)
+			}
 			msg := fmt.Sprintf("no usable ConnectorBinding definitions among %d referenced", len(p.cbs))
-			return p.failMissingCB(ctx, asr, msg)
+			return p.failUnusableCB(ctx, asr, pmmeta.MissingConnectorBindingReason, msg)
 		}
 
-		asr.ClearInvalidConfigIfReason(pmmeta.MissingConnectorBindingReason)
+		asr.ClearInvalidConfigIfReason(pmmeta.MissingConnectorBindingReason, pmmeta.InvalidConnectorBindingReason)
 		return lifecycle.Continue(), nil
 	}
 }
 
-// failMissingCB is the Break path when no usable kubernetes ConnectorBinding
+// failUnusableCB is the Break path when no usable kubernetes ConnectorBinding
 // is available. It revokes RBAC from every previously-targeted cluster, stamps
-// InvalidConfig=True/MissingConnectorBinding (mirrored on Ready=False), and
-// removes the stale Provisioned condition.
+// InvalidConfig=True/<reason> (mirrored on Ready=False), and removes the stale
+// Provisioned condition. reason distinguishes an absent/empty binding from one
+// rejected for a label-unsafe name.
 //
 // Clusters where revoke fails (unreachable, delete error) remain in
 // status.providers.kubernetes.targets so the next reconcile retries them.
-func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, msg string) (lifecycle.Result, error) {
+func (p *Phase) failUnusableCB(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole, reason pmmeta.ConditionReason, msg string) (lifecycle.Result, error) {
 	prior := previouslyTargetedClusters(asr)
 	stillTargeted := make([]pmmeta.TargetStatus, 0, len(prior))
 	for _, clusterName := range prior {
@@ -89,7 +98,7 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 			stillTargeted = append(stillTargeted, pmmeta.TargetStatus{TargetID: clusterName, Status: pmmeta.TargetStatusError, Message: err.Error()})
 			continue
 		}
-		if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, clusterName); err != nil {
+		if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, asr.Namespace, clusterName); err != nil {
 			p.Log.Error(err, "failed to revoke RBAC during CB-missing revoke, will retry", "namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
 			stillTargeted = append(stillTargeted, pmmeta.TargetStatus{TargetID: clusterName, Status: pmmeta.TargetStatusError, Message: err.Error()})
 			continue
@@ -99,12 +108,12 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 
 	asr.SetCondition(pmmeta.TrueCondition(
 		pmmeta.InvalidConfigCondition,
-		pmmeta.MissingConnectorBindingReason,
+		reason,
 		msg,
 	))
 	asr.SetCondition(pmmeta.FalseCondition(
 		pmmeta.ReadyCondition,
-		pmmeta.MissingConnectorBindingReason,
+		reason,
 		msg,
 	))
 	asr.RemoveCondition(pmmeta.ProvisionedCondition)

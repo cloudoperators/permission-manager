@@ -72,7 +72,7 @@ func (p *Phase) EnsureOrphansCleanedUp(asr *v1alpha1.ApplicationSpecificRole) li
 				p.orphanErrs = append(p.orphanErrs, err)
 				continue
 			}
-			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, t.TargetID); err != nil {
+			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, asr.Namespace, t.TargetID); err != nil {
 				p.Log.Error(err, "failed to clean up orphan RBAC", "namespace", asr.Namespace, "name", asr.Name, "cluster", t.TargetID)
 				p.orphanStatuses = append(p.orphanStatuses, clusterStatus{name: t.TargetID, err: err})
 				p.orphanErrs = append(p.orphanErrs, err)
@@ -134,7 +134,7 @@ func (p *Phase) EnsureRbacRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 				errs = append(errs, err)
 				continue
 			}
-			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, clusterName); err != nil {
+			if err := p.deleteRBACByLabel(ctx, remoteClient, asr.Name, asr.Namespace, clusterName); err != nil {
 				p.Log.Error(err, "failed to delete RBAC during cleanup", "namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
 				errs = append(errs, err)
 				continue
@@ -151,9 +151,14 @@ func (p *Phase) EnsureRbacRemoved(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 }
 
 // deleteRBACByLabel deletes every pm-managed RBAC resource owned by the named
-// ASR on a remote cluster.
-func (p *Phase) deleteRBACByLabel(ctx context.Context, remoteClient client.Client, asrName, clusterName string) error {
-	labelSel := client.MatchingLabels{pmapis.LabelASR: asrName}
+// ASR on a remote cluster. Selection is namespace-precise: two ASRs that share a
+// name in different namespaces own disjoint objects, so the LabelSourceNamespace
+// selector keeps one ASR's cleanup from revoking the other's RBAC.
+func (p *Phase) deleteRBACByLabel(ctx context.Context, remoteClient client.Client, asrName, asrNamespace, clusterName string) error {
+	labelSel := client.MatchingLabels{
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
+	}
 	var errs []error
 
 	var crList rbacv1.ClusterRoleList

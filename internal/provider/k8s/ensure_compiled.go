@@ -188,10 +188,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 							roleName = sharedRoleName(rc.cbName, scope, up)
 						}
 						c.crbs = append(c.crbs, buildCoarseClusterRoleBinding(
-							asr.Name, asr.Spec.Name, coarseBindingName(asr.Name, rc.cbName, scope, up), roleName))
+							asr.Name, asr.Namespace, asr.Spec.Name, coarseBindingName(asr.Name, rc.cbName, scope, up), roleName))
 					} else {
 						c.rbs = append(c.rbs, buildCoarseRoleBinding(
-							asr.Name, asr.Spec.Name, parsed.Namespace,
+							asr.Name, asr.Namespace, asr.Spec.Name, parsed.Namespace,
 							coarseBindingName(asr.Name, rc.cbName, scope, up),
 							sharedRoleName(rc.cbName, scope, up)))
 					}
@@ -213,12 +213,12 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			target := compiledTarget{clusterName: clusterName}
 			if s, ok := scopes[clusterName]; ok {
 				if !s.clusterRules.empty() {
-					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Spec.Name, s.clusterRules)
+					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, s.clusterRules)
 					target.clusterRoles = append(target.clusterRoles, *cr)
 					target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
 				}
 				for _, ns := range sortedKeys(s.namespaceRules) {
-					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Spec.Name, ns, s.namespaceRules[ns])
+					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, ns, s.namespaceRules[ns])
 					target.roles = append(target.roles, *role)
 					target.roleBindings = append(target.roleBindings, *rb)
 				}
@@ -436,11 +436,12 @@ func getClusterFromStore(store cache.Store, namespace, name string) (*greenhouse
 }
 
 // buildClusterScopedRBAC materializes a cluster-wide ClusterRole + ClusterRoleBinding.
-func buildClusterScopedRBAC(asrName, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
+func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
 	resourceName := resourceNamePrefix + asrName
 	labels := map[string]string{
-		pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-		pmapis.LabelASR:          asrName,
+		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
 	}
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Labels: labels},
@@ -463,11 +464,12 @@ func buildClusterScopedRBAC(asrName, specName string, rules *policyRuleSet) (*rb
 }
 
 // buildNamespaceScopedRBAC materializes a namespace-scoped Role + RoleBinding.
-func buildNamespaceScopedRBAC(asrName, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
+func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
 	resourceName := resourceNamePrefix + asrName
 	labels := map[string]string{
-		pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-		pmapis.LabelASR:          asrName,
+		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
 	}
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: ns, Labels: labels},

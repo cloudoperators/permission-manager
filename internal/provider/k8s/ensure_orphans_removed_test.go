@@ -419,6 +419,55 @@ func Test_EnsureRbacRemoved_VanishedClusterSkipped(t *testing.T) {
 	require.False(t, has, "provider status must clear once vanished clusters are skipped")
 }
 
+// Test_EnsureRbacRemoved_NamespacePrecise asserts cleanup is scoped by source
+// namespace: two ASRs that share a name in different namespaces own disjoint
+// RBAC, so revoking one must not delete the other's objects.
+func Test_EnsureRbacRemoved_NamespacePrecise(t *testing.T) {
+	const sharedName = "shared-asr"
+	const nsOther = "other"
+
+	labelsFor := func(ns string) map[string]string {
+		return map[string]string{
+			pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+			pmapis.LabelASR:             pmk8s.ASRLabelValue(sharedName),
+			pmapis.LabelSourceNamespace: ns,
+		}
+	}
+	// Two RoleBindings sharing the LabelASR value but owned by ASRs in different
+	// namespaces, living in distinct target namespaces so names do not collide.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pm-shared-asr", Namespace: "alpha", Labels: labelsFor(testNamespace)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pm-shared-asr", Namespace: "beta", Labels: labelsFor(nsOther)}},
+	).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: sharedName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+
+	_, err := p.EnsureRbacRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var remaining rbacv1.RoleBindingList
+	require.NoError(t, remote.List(context.Background(), &remaining))
+	require.Len(t, remaining.Items, 1, "only the other namespace's RoleBinding survives")
+	require.Equal(t, "beta", remaining.Items[0].Namespace)
+	require.Equal(t, nsOther, remaining.Items[0].Labels[pmapis.LabelSourceNamespace])
+}
+
 func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *testing.T) {
 	// Cluster already carries READ shared roles, but the CB now defines only
 	// MANAGE as a direct binding, so the READ shared roles are orphans.

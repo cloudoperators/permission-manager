@@ -79,6 +79,7 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 		wantErr           bool
 		wantStashed       int
 		wantInvalidConfig bool
+		wantReason        pmmeta.ConditionReason
 	}{
 		{
 			name:          "should stash a single usable kubernetes connector binding",
@@ -146,6 +147,25 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 			wantStashed:       1,
 			wantInvalidConfig: true,
 		},
+		{
+			name:          "should break with InvalidConnectorBinding when every binding name is label-unsafe",
+			connectorRefs: []string{"cb-badname"},
+			seeded: []client.Object{
+				&v1alpha1.ConnectorBinding{
+					ObjectMeta: metav1.ObjectMeta{Name: "cb-badname", Namespace: testNamespace},
+					Spec: v1alpha1.ConnectorBindingSpec{
+						Name:       "Bad Name",
+						Provider:   string(pmmeta.ProviderKubernetes),
+						Definition: &runtime.RawExtension{Raw: usableDef},
+					},
+				},
+			},
+			wantResult:        lifecycle.Break(),
+			wantErr:           true,
+			wantStashed:       1,
+			wantInvalidConfig: true,
+			wantReason:        pmmeta.InvalidConnectorBindingReason,
+		},
 	}
 
 	for _, tc := range cases {
@@ -179,7 +199,11 @@ func Test_EnsureConnectorBindings(t *testing.T) {
 			invalid := pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition)
 			if tc.wantInvalidConfig {
 				require.NotNil(t, invalid)
-				require.Equal(t, string(pmmeta.MissingConnectorBindingReason), invalid.Reason)
+				wantReason := tc.wantReason
+				if wantReason == "" {
+					wantReason = pmmeta.MissingConnectorBindingReason
+				}
+				require.Equal(t, string(wantReason), invalid.Reason)
 			} else {
 				require.Nil(t, invalid)
 			}

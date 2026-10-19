@@ -30,6 +30,11 @@ func (p *Phase) SetCBs(cbs []*v1alpha1.ConnectorBinding) {
 	p.cbs = cbs
 }
 
+// ASRLabelValue exposes asrLabelValue to the external test package.
+func ASRLabelValue(asrName string) string {
+	return asrLabelValue(asrName)
+}
+
 func (p *Phase) SetInvalidCCRNs(ccrns []string) {
 	p.invalidCCRNs = ccrns
 }

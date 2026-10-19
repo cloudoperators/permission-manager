@@ -11,6 +11,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 )
@@ -147,6 +148,27 @@ func ParseConnectorDefinition(raw *runtime.RawExtension) (*ConnectorDefinition, 
 	return &def, nil
 }
 
+// validateConnectorBindingName reports whether a ConnectorBinding spec.name is a
+// valid DNS-1123 label, so it can be embedded in shared ClusterRole names and used
+// as the LabelCB value.
+func validateConnectorBindingName(name string) error {
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		return fmt.Errorf("connector binding name %q is not a valid DNS-1123 label: %s", name, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// ValidateConnectorBinding checks that the ConnectorBinding's spec.name is usable
+// as a Kubernetes resource-name segment and label value, then parses and validates
+// its definition. spec.name is embedded verbatim in shared ClusterRole names and
+// carried as the LabelCB value, both of which require a DNS-1123 label.
+func ValidateConnectorBinding(cb *v1alpha1.ConnectorBinding) (*ConnectorDefinition, error) {
+	if err := validateConnectorBindingName(cb.Spec.Name); err != nil {
+		return nil, err
+	}
+	return ParseConnectorDefinition(cb.Spec.Definition)
+}
+
 // resolvedCapability pairs a capability entry with the ConnectorBinding that
 // defined it, so the compiler can name shared roles per CB.
 type resolvedCapability struct {
@@ -162,7 +184,7 @@ func resolveCapability(cbs []*v1alpha1.ConnectorBinding, scope, capability strin
 	var out []resolvedCapability
 
 	for _, cb := range cbs {
-		def, err := ParseConnectorDefinition(cb.Spec.Definition)
+		def, err := ValidateConnectorBinding(cb)
 		if err != nil {
 			continue
 		}
