@@ -212,8 +212,8 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 	if ps == nil {
 		t.Fatal("expected github provider status on the ASR")
 	}
-	if pmmeta.GetTargetStatus(ps.Targets, "github-example-com/my-org") == nil {
-		t.Errorf("expected target github-example-com/my-org, got %+v", ps.Targets)
+	if pmmeta.GetTargetStatus(ps.Targets, "ghe/my-org") == nil {
+		t.Errorf("expected target ghe/my-org, got %+v", ps.Targets)
 	}
 }
 

@@ -153,13 +153,13 @@ func TestOrgResolver_Resolve_CachesNotFound(t *testing.T) {
 }
 
 func TestOrgTargetID(t *testing.T) {
-	// Matches the SanitizeInstance(instance)+"/"+org id computeProviderStatus records.
+	// Matches the SanitizeInstance(instanceKey)+"/"+org id computeProviderStatus records.
 	org := newGithubOrgWithMeta("default", "gh--my-org", "github.example.com", "ghe", "", "", "my-org")
-	if got := OrgTargetID(org); got != "github-example-com/my-org" {
-		t.Errorf("OrgTargetID = %q, want github-example-com/my-org", got)
+	if got := OrgTargetID(org); got != "ghe/my-org" {
+		t.Errorf("OrgTargetID = %q, want ghe/my-org", got)
 	}
 
-	// No instance label -> empty, so watch matching treats it as "no target".
+	// No instance-key label -> empty, so watch matching treats it as "no target".
 	noLabel := newGithubOrgWithMeta("default", "gh--my-org", "", "", "", "", "my-org")
 	if got := OrgTargetID(noLabel); got != "" {
 		t.Errorf("OrgTargetID without instance label = %q, want empty", got)

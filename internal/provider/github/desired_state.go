@@ -21,7 +21,9 @@ const (
 
 // DesiredTeam represents the desired state of a GithubTeam CR.
 type DesiredTeam struct {
-	// Instance is the GitHub Enterprise hostname.
+	// Instance is initially the CCRN hostname; resolveDesiredNames overwrites it with
+	// the instance key from the GithubOrganization's github-instance-key label so that
+	// spec.github matches the Github CR name repo-guard expects.
 	Instance string
 	// Org is the GitHub organization name.
 	Org string
@@ -36,7 +38,9 @@ type DesiredTeam struct {
 
 // DesiredTeamRepo represents the desired state of a GithubTeamRepository CR.
 type DesiredTeamRepo struct {
-	// Instance is the GitHub Enterprise hostname.
+	// Instance is initially the CCRN hostname; resolveDesiredNames overwrites it with
+	// the instance key from the GithubOrganization's github-instance-key label so that
+	// spec.github matches the Github CR name repo-guard expects.
 	Instance string
 	// Org is the GitHub organization name.
 	Org string
