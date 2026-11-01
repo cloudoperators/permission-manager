@@ -206,6 +206,14 @@ func TestPhaseReconcile_EndToEnd(t *testing.T) {
 	if len(repos.Items) != 1 {
 		t.Errorf("expected 1 team repository, got %d", len(repos.Items))
 	}
+	// spec.github must be the instance key, not the CCRN hostname, so repo-guard can look
+	// up the Github CR by name.
+	if len(teams.Items) == 1 && teams.Items[0].Spec.Github != "ghe" {
+		t.Errorf("GithubTeam.spec.github = %q, want ghe (instance key)", teams.Items[0].Spec.Github)
+	}
+	if len(repos.Items) == 1 && repos.Items[0].Spec.Github != "ghe" {
+		t.Errorf("GithubTeamRepository.spec.github = %q, want ghe (instance key)", repos.Items[0].Spec.Github)
+	}
 
 	// Provider status was written on the ASR with the expected target.
 	ps := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderGithub)
