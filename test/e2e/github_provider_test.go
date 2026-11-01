@@ -419,9 +419,6 @@ spec:
 const (
 	// testGithubInstance is the GitHub Enterprise instance used in tests.
 	testGithubInstance = "github.example.com"
-	// testGithubInstanceKey is the short instance key stamped on the GithubOrganization CR
-	// via github-instance-key label; used as the TargetID prefix after the spec.github fix.
-	testGithubInstanceKey = "ghe"
 	// testGithubOrg is the pre-seeded organization name.
 	testGithubOrg = "e2e-org"
 )
