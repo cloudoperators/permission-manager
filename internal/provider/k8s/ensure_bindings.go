@@ -118,12 +118,9 @@ func (p *Phase) failMissingCB(ctx context.Context, asr *v1alpha1.ApplicationSpec
 
 // asrIsResourceOnly reports whether the ASR's kubernetes permissions are served
 // entirely by resource-scoped CCRNs, which never consult the ConnectorBinding
-// capabilityMapping — so an empty mapping is acceptable. Non-kubernetes and
-// unparseable permissions are skipped: the former are served by other providers,
-// and the latter are reported by the validator. A coarse cluster.k8s/namespace.k8s
-// CCRN needs the mapping, so it makes the ASR not resource-only. At least one
-// resource CCRN must be present; an ASR with no kubernetes resource CCRNs has
-// nothing to relax the mapping requirement for.
+// capabilityMapping — so an empty mapping is acceptable. A coarse
+// cluster.k8s/namespace.k8s CCRN needs the mapping and makes the ASR not
+// resource-only; an ASR with no kubernetes resource CCRN is not resource-only either.
 func asrIsResourceOnly(parser *ccrn.Parser, asr *v1alpha1.ApplicationSpecificRole) bool {
 	if parser == nil {
 		parser = ccrn.NewParser(nil)
