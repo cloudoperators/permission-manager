@@ -24,9 +24,6 @@ const (
 	ReadyCondition         ConditionType = "Ready"
 	ProvisionedCondition   ConditionType = "Provisioned"
 	InvalidConfigCondition ConditionType = "InvalidConfig"
-	// ConfigWarningCondition is informational: it flags non-fatal configuration
-	// issues and never feeds Ready/InvalidConfig.
-	ConfigWarningCondition ConditionType = "ConfigWarning"
 )
 
 // Condition reasons are reused across types and providers.
@@ -46,11 +43,6 @@ const (
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"
 	PartialProvisioningReason   ConditionReason = "PartialProvisioning"
 	NoTargetsReason             ConditionReason = "NoTargets"
-
-	// ConfigWarning reasons (non-fatal).
-	ConfigurationWarningReason ConditionReason = "ConfigurationWarning"
-	ScopeMismatchReason        ConditionReason = "ScopeMismatch"
-	WriteWithoutReadReason     ConditionReason = "WriteWithoutRead"
 )
 
 // TrueCondition returns a condition with status True and zero LastTransitionTime.
