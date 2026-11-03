@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Example: resource-scoped CCRN types (ADR-017)
+# cluster-resource / namespace-resource embed the apiGroup/resource target in the
+# CCRN address, so the ConnectorBinding capabilityMapping is not consulted -
+# capabilities map to hardcoded verb sets (READ -> get/list/watch,
+# WRITE -> create/update/patch/delete).
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ApplicationSpecificRole
+metadata:
+  name: team-operator-resource-access
+spec:
+  name: TEAM_OPERATOR_RESOURCE_ACCESS
+  description: "Targeted resource access via cluster-resource and namespace-resource CCRNs"
+  connectorRefs:
+    - k8s-connector
+  permissions:
+    # cluster-scoped resource: write CRDs across the cluster
+    - resource: "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/apiextensions.k8s.io/customresourcedefinitions"
+      capability: WRITE
+    # namespaced resource + subresource: read pod logs in one namespace
+    - resource: "urn:ccrn:namespace-resource.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/monitoring/v1/pods:log"
+      capability: READ
+    # mixed: coarse namespace read alongside the resource CCRNs above
+    - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/kind-greenhouse-remote/monitoring"
+      capability: READ
+  tags:
+    - prod
