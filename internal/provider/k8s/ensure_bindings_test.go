@@ -21,6 +21,7 @@ import (
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
+	"github.com/cloudoperators/permission-manager/internal/ccrn"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle"
 	"github.com/cloudoperators/permission-manager/internal/lifecycle/mocks"
 	pmk8s "github.com/cloudoperators/permission-manager/internal/provider/k8s"
@@ -251,4 +252,61 @@ func Test_EnsureConnectorBindings_Preserve_Unreachable(t *testing.T) {
 	require.Len(t, ps.Targets, 1)
 	require.Equal(t, testUnreachableClusterName, ps.Targets[0].TargetID)
 	require.Equal(t, pmmeta.TargetStatusError, ps.Targets[0].Status)
+}
+
+func Test_EnsureConnectorBindings_ResourceOnlyASR(t *testing.T) {
+	const resourceCCRN = "urn:ccrn:cluster-resource.k8s.ccrn.cloudoperators.dev/v1/remote-cluster/apps/deployments"
+	const coarseCCRN = "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/remote-cluster"
+	const githubCCRN = "urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/github.com/myorg"
+
+	emptyMapDef := mustMarshal(map[string]any{"capabilityMapping": map[string]any{}})
+
+	cases := []struct {
+		name        string
+		permissions []v1alpha1.Permission
+		wantResult  lifecycle.Result
+	}{
+		{
+			name:        "resource-only ASR accepts empty-mapping CB",
+			permissions: []v1alpha1.Permission{{Resource: resourceCCRN, Capability: "read"}},
+			wantResult:  lifecycle.Continue(),
+		},
+		{
+			name:        "mixed ASR still requires non-empty mapping",
+			permissions: []v1alpha1.Permission{{Resource: resourceCCRN, Capability: "read"}, {Resource: coarseCCRN, Capability: "read"}},
+			wantResult:  lifecycle.Break(),
+		},
+		{
+			name:        "github plus resource CCRN accepts empty-mapping CB",
+			permissions: []v1alpha1.Permission{{Resource: githubCCRN, Capability: "read"}, {Resource: resourceCCRN, Capability: "read"}},
+			wantResult:  lifecycle.Continue(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asr := &v1alpha1.ApplicationSpecificRole{
+				ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+				Spec: v1alpha1.ApplicationSpecificRoleSpec{
+					ConnectorRefs: []string{"cb-empty"},
+					Permissions:   tc.permissions,
+				},
+			}
+			local := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+				cbWithProvider("cb-empty", string(pmmeta.ProviderKubernetes), emptyMapDef),
+			).Build()
+
+			p := &pmk8s.Phase{
+				Client: local,
+				RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) {
+					return mocks.NewMockClient(t), nil
+				},
+				AuditLog:   audit.Disabled(),
+				Log:        ctrl.Log.WithName("test"),
+				CCRNParser: ccrn.NewParser(nil),
+			}
+
+			result, _ := p.EnsureConnectorBindings(asr)(context.Background())
+			require.Equal(t, tc.wantResult, result)
+		})
+	}
 }

@@ -145,6 +145,11 @@ The following are hard validation failures, consistent with the existing fail-cl
 - Empty `<apigroup>` or `<resource>` segment
 - Capability other than `READ` or `WRITE`
 
+A literal `/` inside the `<resource>` segment is rejected (it overflows the URN segment
+count); use `:` for subresources. A literal `,` in the `<apigroup>`, `<resource>`, or
+`<subresource>` token is rejected: commas are never valid in Kubernetes group/resource names
+and would collide with the comma-joined RBAC rule merge key.
+
 ### Examples
 
 Operator developer needing targeted cluster-wide write access:
@@ -209,6 +214,10 @@ permissions:
   segment and the API group segment both show `v1` (e.g. `.../v1/s-eu-de-1/v1/secrets`).
   The positions are unambiguous to the parser; the visual oddness is accepted as the lesser
   evil compared to an informal alias like `core` that has no Kubernetes API backing.
+- The two new types are handled by the parser/compiler but are **not registered** as catalog
+  CRDs — no `k8s-cluster-resource`/`k8s-namespace-resource` chart templates or
+  `ccrn-definitions` entries are added here (those list `cluster`/`namespace` only). They are
+  functional without registration; the catalog entries are deferred to a follow-up.
 
 **Related:**
 
