@@ -8,8 +8,9 @@
 #   - Provisioned condition removed
 #   - status.providers.kubernetes shows Degraded (no leftover targets
 #     unless a cluster was unreachable during revoke)
-#   - On the remote cluster: pm-managed ClusterRole and ClusterRoleBinding
-#     for this ASR are GONE (active revoke, not just status flip).
+#   - On the remote cluster: the pm-managed RoleBinding for this ASR in the
+#     monitoring namespace is GONE (active revoke, not just status flip). The
+#     shared ClusterRole it referenced is CB-owned and is not touched here.
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ApplicationSpecificRole
 metadata:

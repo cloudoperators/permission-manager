@@ -64,14 +64,16 @@ func (p *Phase) EnsureASRValidity(asr *v1alpha1.ApplicationSpecificRole) lifecyc
 			return lifecycle.Continue(), nil
 		}
 
-		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason)
+		// DiscoveryUnavailable is swept too: legacy, no longer produced, and left
+		// unset it wedges provisioning via HasInvalidConfig.
+		asr.ClearInvalidConfigIfReason(pmmeta.InvalidCCRNReason, pmmeta.DiscoveryUnavailableReason)
 		return lifecycle.Continue(), nil
 	}
 }
 
-// resourceCCRNInvalid reports whether a parsed resource-scoped CCRN violates a
-// hard rule and must be rejected as InvalidCCRN. Namespace-wildcard is handled
-// by the shared check in the main loop.
+// resourceCCRNInvalid reports whether a resource-scoped CCRN must be rejected as
+// InvalidCCRN. Namespace-wildcard is handled by the main loop. Valid capabilities:
+// READ, WRITE, MANAGE (MANAGE = READ ∪ WRITE verbs).
 func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
 	k := parsed.K8sResource
 	if ccrn.IsWildcard(k.APIGroup) {
@@ -86,7 +88,7 @@ func resourceCCRNInvalid(parsed *ccrn.ParsedCCRN, capability string) bool {
 		return true
 	}
 	switch strings.ToUpper(capability) {
-	case "READ", "WRITE":
+	case capRead, capWrite, capManage:
 		return false
 	default:
 		return true

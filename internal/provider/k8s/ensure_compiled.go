@@ -5,7 +5,6 @@ package k8s
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
@@ -41,17 +39,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 		unmappedSeen := make(map[string]struct{})
 		unmatchedSeen := make(map[string]struct{})
 		notReadySeen := make(map[string]struct{})
-		degradedSeen := make(map[string]struct{})
 		parser := p.CCRNParser
 		if parser == nil {
 			parser = ccrn.NewParser(nil)
 		}
-
-		// per-reconcile discovery caches for deny-driven expansion: a cluster's
-		// discovery client is built at most once, and a cluster whose discovery
-		// failed is not retried within this reconcile.
-		discoByCluster := make(map[string]discovery.DiscoveryInterface)
-		discoFailed := make(map[string]struct{})
 
 		// per-cluster scratch: cluster name → { cluster rules, ns → rules }
 		type scope struct {
@@ -71,6 +62,39 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			return s
 		}
 
+		// per-cluster coarse bindings keyed by cluster name: references to shared
+		// or external ClusterRoles emitted without a paired per-ASR role.
+		type coarse struct {
+			crbs []rbacv1.ClusterRoleBinding
+			rbs  []rbacv1.RoleBinding
+		}
+		coarseByCluster := make(map[string]*coarse)
+		ensureCoarse := func(name string) *coarse {
+			c, ok := coarseByCluster[name]
+			if !ok {
+				c = &coarse{}
+				coarseByCluster[name] = c
+			}
+			return c
+		}
+
+		recordSkips := func(pattern string, m *clusterMatches) {
+			for _, name := range m.notReady {
+				if _, seen := notReadySeen[name]; !seen {
+					notReadySeen[name] = struct{}{}
+					p.notReadyClusters = append(p.notReadyClusters, name)
+				}
+			}
+			// A pattern that matched no existing cluster at all is unmatched; one
+			// that matched only not-ready clusters is already recorded above.
+			if len(m.ready) == 0 && len(m.notReady) == 0 {
+				if _, seen := unmatchedSeen[pattern]; !seen {
+					unmatchedSeen[pattern] = struct{}{}
+					p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, pattern)
+				}
+			}
+		}
+
 		for _, perm := range asr.Spec.Permissions {
 			if _, bad := invalid[perm.Resource]; bad {
 				continue
@@ -80,91 +104,102 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 				continue
 			}
 
-			var rules []CapabilityRule
 			if parsed.K8sResource != nil {
-				rules = resourceRulesFor(parsed.K8sResource, perm.Capability)
+				rules := resourceRulesFor(parsed.K8sResource, perm.Capability)
 				if len(rules) == 0 {
 					continue
 				}
-			} else {
-				r, found := UnionRulesForCapability(p.cbs, perm.Capability)
-				if !found {
-					capability := perm.Capability
-					if _, seen := unmappedSeen[capability]; !seen {
-						unmappedSeen[capability] = struct{}{}
-						p.unmappedCaps = append(p.unmappedCaps, capability)
-					}
+				matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
+				recordSkips(parsed.ClusterName, &matches)
+				if len(matches.ready) == 0 {
 					continue
 				}
-				rules = r
-			}
-
-			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
-			for _, name := range matches.notReady {
-				if _, seen := notReadySeen[name]; !seen {
-					notReadySeen[name] = struct{}{}
-					p.notReadyClusters = append(p.notReadyClusters, name)
-				}
-			}
-			if len(matches.ready) == 0 {
-				// A pattern that matched no existing cluster at all is unmatched;
-				// one that matched only not-ready clusters is already recorded above.
-				if len(matches.notReady) == 0 {
-					if _, seen := unmatchedSeen[parsed.ClusterName]; !seen {
-						unmatchedSeen[parsed.ClusterName] = struct{}{}
-						p.unmatchedClusterPatterns = append(p.unmatchedClusterPatterns, parsed.ClusterName)
+				for _, clusterName := range matches.ready {
+					s := ensureScope(clusterName)
+					if parsed.Namespace == "" {
+						for _, r := range rules {
+							s.clusterRules.add(r)
+						}
+					} else {
+						nsSet, ok := s.namespaceRules[parsed.Namespace]
+						if !ok {
+							nsSet = newPolicyRuleSet()
+							s.namespaceRules[parsed.Namespace] = nsSet
+						}
+						for _, r := range rules {
+							nsSet.add(r)
+						}
 					}
 				}
 				continue
 			}
 
-			for _, clusterName := range matches.ready {
-				effectiveRules := rules
-				if rulesNeedExpansion(rules) {
-					expanded, err := p.expandRulesForCluster(ctx, rules, clusterName, asr.Namespace, discoByCluster, discoFailed)
-					if err != nil {
-						p.Log.Error(err, "deny-driven expansion failed, skipping cluster",
-							"namespace", asr.Namespace, "name", asr.Name, "cluster", clusterName)
-						if _, seen := degradedSeen[clusterName]; !seen {
-							degradedSeen[clusterName] = struct{}{}
-							p.discoveryDegraded = append(p.discoveryDegraded, clusterName)
-						}
-						continue
-					}
-					effectiveRules = expanded
+			// coarse cluster.k8s / namespace.k8s: resolve to shared or external
+			// ClusterRoles and emit bindings only.
+			sc := scopeNamespace
+			if parsed.Namespace == "" {
+				sc = scopeCluster
+			}
+			resolved, found := resolveCapability(p.cbs, sc, perm.Capability)
+			if !found {
+				if _, seen := unmappedSeen[perm.Capability]; !seen {
+					unmappedSeen[perm.Capability] = struct{}{}
+					p.unmappedCaps = append(p.unmappedCaps, perm.Capability)
 				}
-
-				s := ensureScope(clusterName)
-				if parsed.Namespace == "" {
-					for _, r := range effectiveRules {
-						s.clusterRules.add(r)
-					}
-				} else {
-					nsSet, ok := s.namespaceRules[parsed.Namespace]
-					if !ok {
-						nsSet = newPolicyRuleSet()
-						s.namespaceRules[parsed.Namespace] = nsSet
-					}
-					for _, r := range effectiveRules {
-						nsSet.add(r)
+				continue
+			}
+			matches := matchClusterPattern(p.ClusterStore, parsed.ClusterName, asr.Namespace)
+			recordSkips(parsed.ClusterName, &matches)
+			if len(matches.ready) == 0 {
+				continue
+			}
+			up := strings.ToUpper(perm.Capability)
+			for _, clusterName := range matches.ready {
+				c := ensureCoarse(clusterName)
+				for _, rc := range resolved {
+					if sc == scopeCluster {
+						roleName := rc.entry.ClusterRoleName
+						if roleName == "" {
+							roleName = sharedRoleName(rc.cbName, sc, up)
+						}
+						c.crbs = append(c.crbs, buildCoarseClusterRoleBinding(
+							asr.Name, asr.Namespace, asr.Spec.Name, coarseBindingName(asr.Namespace, asr.Name, rc.cbName, sc, up), roleName))
+					} else {
+						c.rbs = append(c.rbs, buildCoarseRoleBinding(
+							asr.Name, asr.Namespace, asr.Spec.Name, parsed.Namespace,
+							coarseBindingName(asr.Namespace, asr.Name, rc.cbName, sc, up),
+							sharedRoleName(rc.cbName, sc, up)))
 					}
 				}
 			}
 		}
 
-		// Flatten into p.compiled. Rule sets materialize to deterministically
-		// ordered PolicyRules.
-		for clusterName, s := range scopes {
+		// Flatten into p.compiled; a cluster may carry resource-CCRN scopes, coarse
+		// bindings, or both. Rule sets materialize to deterministically ordered rules.
+		clusterNames := make(map[string]struct{})
+		for name := range scopes {
+			clusterNames[name] = struct{}{}
+		}
+		for name := range coarseByCluster {
+			clusterNames[name] = struct{}{}
+		}
+		for _, clusterName := range sortedKeys(clusterNames) {
 			target := compiledTarget{clusterName: clusterName}
-			if !s.clusterRules.empty() {
-				cr, crb := buildClusterScopedRBAC(asr.Name, asr.Spec.Name, s.clusterRules)
-				target.clusterRoles = append(target.clusterRoles, *cr)
-				target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
+			if s, ok := scopes[clusterName]; ok {
+				if !s.clusterRules.empty() {
+					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, s.clusterRules)
+					target.clusterRoles = append(target.clusterRoles, *cr)
+					target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
+				}
+				for _, ns := range sortedKeys(s.namespaceRules) {
+					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, ns, s.namespaceRules[ns])
+					target.roles = append(target.roles, *role)
+					target.roleBindings = append(target.roleBindings, *rb)
+				}
 			}
-			for _, ns := range sortedKeys(s.namespaceRules) {
-				role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Spec.Name, ns, s.namespaceRules[ns])
-				target.roles = append(target.roles, *role)
-				target.roleBindings = append(target.roleBindings, *rb)
+			if c, ok := coarseByCluster[clusterName]; ok {
+				target.coarseClusterRoleBindings = c.crbs
+				target.coarseRoleBindings = c.rbs
 			}
 			p.compiled = append(p.compiled, target)
 		}
@@ -203,22 +238,6 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			asr.ClearInvalidConfigIfReason(pmmeta.NoTargetsResolvedReason)
 		}
 
-		if len(p.discoveryDegraded) > 0 {
-			msg := fmt.Sprintf("discovery unavailable for cluster(s), deny rules cannot be safely expanded: %v", p.discoveryDegraded)
-			asr.SetCondition(pmmeta.TrueCondition(
-				pmmeta.InvalidConfigCondition,
-				pmmeta.DiscoveryUnavailableReason,
-				msg,
-			))
-			asr.SetCondition(pmmeta.FalseCondition(
-				pmmeta.ReadyCondition,
-				pmmeta.DiscoveryUnavailableReason,
-				msg,
-			))
-		} else {
-			asr.ClearInvalidConfigIfReason(pmmeta.DiscoveryUnavailableReason)
-		}
-
 		return lifecycle.Continue(), nil
 	}
 }
@@ -227,10 +246,12 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 // capability. The capabilityMapping is intentionally not consulted.
 func resourceVerbsFor(capability string) []string {
 	switch strings.ToUpper(capability) {
-	case "READ":
+	case capRead:
 		return []string{"get", "list", "watch"}
-	case "WRITE":
+	case capWrite:
 		return []string{"create", "update", "patch", "delete"}
+	case capManage:
+		return []string{"get", "list", "watch", "create", "update", "patch", "delete"}
 	default:
 		return nil
 	}
@@ -255,62 +276,6 @@ func resourceRulesFor(res *ccrn.K8sResource, capability string) []CapabilityRule
 	}}
 }
 
-// rulesNeedExpansion reports whether any rule is deny-driven (has
-// ExcludeResources) and therefore requires per-cluster discovery expansion.
-func rulesNeedExpansion(rules []CapabilityRule) bool {
-	for _, r := range rules {
-		if len(r.ExcludeResources) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// expandRulesForCluster resolves the cluster and its discovery client, then
-// expands every rule for that cluster. Returns an error (fail-closed) if the
-// cluster is missing from the store or discovery is unavailable.
-func (p *Phase) expandRulesForCluster(ctx context.Context, rules []CapabilityRule, clusterName, namespace string, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}) ([]CapabilityRule, error) {
-	cluster, ok := getClusterFromStore(p.ClusterStore, namespace, clusterName)
-	if !ok {
-		return nil, fmt.Errorf("cluster %q not found in store", clusterName)
-	}
-	disco, err := p.discoveryFor(ctx, clusterName, namespace, discoByCluster, discoFailed)
-	if err != nil {
-		return nil, err
-	}
-	var out []CapabilityRule
-	for _, r := range rules {
-		expanded, err := expandRuleForCluster(r, cluster, disco)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, expanded...)
-	}
-	return out, nil
-}
-
-// discoveryFor returns a discovery client for the cluster, building it at most
-// once per reconcile and short-circuiting clusters whose build already failed.
-func (p *Phase) discoveryFor(ctx context.Context, clusterName, namespace string, discoByCluster map[string]discovery.DiscoveryInterface, discoFailed map[string]struct{}) (discovery.DiscoveryInterface, error) {
-	if _, bad := discoFailed[clusterName]; bad {
-		return nil, fmt.Errorf("discovery previously failed for cluster %q", clusterName)
-	}
-	if d, ok := discoByCluster[clusterName]; ok {
-		return d, nil
-	}
-	if p.RemoteDiscovery == nil {
-		discoFailed[clusterName] = struct{}{}
-		return nil, errors.New("no discovery client factory configured")
-	}
-	d, err := p.RemoteDiscovery(ctx, p.Client, clusterName, namespace)
-	if err != nil {
-		discoFailed[clusterName] = struct{}{}
-		return nil, fmt.Errorf("build discovery client for cluster %q: %w", clusterName, err)
-	}
-	discoByCluster[clusterName] = d
-	return d, nil
-}
-
 // getClusterFromStore looks up a greenhouse Cluster object by "namespace/name".
 func getClusterFromStore(store cache.Store, namespace, name string) (*greenhousev1alpha1.Cluster, bool) {
 	obj, exists, err := store.GetByKey(namespace + "/" + name)
@@ -322,11 +287,12 @@ func getClusterFromStore(store cache.Store, namespace, name string) (*greenhouse
 }
 
 // buildClusterScopedRBAC materializes a cluster-wide ClusterRole + ClusterRoleBinding.
-func buildClusterScopedRBAC(asrName, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
-	resourceName := resourceNamePrefix + asrName
+func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
+	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
-		pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-		pmapis.LabelASR:          asrName,
+		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
 	}
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Labels: labels},
@@ -335,25 +301,26 @@ func buildClusterScopedRBAC(asrName, specName string, rules *policyRuleSet) (*rb
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Labels: labels},
 		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
+			APIGroup: rbacAPIGroup,
 			Kind:     kindClusterRole,
 			Name:     resourceName,
 		},
 		Subjects: []rbacv1.Subject{{
 			Kind:     "Group",
 			Name:     specName,
-			APIGroup: "rbac.authorization.k8s.io",
+			APIGroup: rbacAPIGroup,
 		}},
 	}
 	return cr, crb
 }
 
 // buildNamespaceScopedRBAC materializes a namespace-scoped Role + RoleBinding.
-func buildNamespaceScopedRBAC(asrName, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
-	resourceName := resourceNamePrefix + asrName
+func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
+	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
-		pmapis.LabelManagedByKey: pmapis.ManagedByPMController,
-		pmapis.LabelASR:          asrName,
+		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+		pmapis.LabelASR:             asrLabelValue(asrName),
+		pmapis.LabelSourceNamespace: asrNamespace,
 	}
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: ns, Labels: labels},
@@ -362,14 +329,14 @@ func buildNamespaceScopedRBAC(asrName, specName, ns string, rules *policyRuleSet
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: ns, Labels: labels},
 		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
+			APIGroup: rbacAPIGroup,
 			Kind:     kindRole,
 			Name:     resourceName,
 		},
 		Subjects: []rbacv1.Subject{{
 			Kind:     "Group",
 			Name:     specName,
-			APIGroup: "rbac.authorization.k8s.io",
+			APIGroup: rbacAPIGroup,
 		}},
 	}
 	return role, rb

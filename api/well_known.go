@@ -19,6 +19,9 @@ const (
 	// LabelASR is the label key for the ASR name (used by kubernetes provider).
 	LabelASR = LabelDomain + "asr"
 
+	// LabelCB is the owning ConnectorBinding name on shared ClusterRoles (kubernetes provider).
+	LabelCB = LabelDomain + "cb"
+
 	// LabelManagedByKey is the standard Kubernetes managed-by label key.
 	LabelManagedByKey = "app.kubernetes.io/managed-by"
 
