@@ -101,6 +101,12 @@ const (
 	ccrnVersion = "v1"
 	// coreGroupToken is the apiGroup segment value that denotes the core group ("").
 	coreGroupToken = "v1"
+
+	// k8s CCRN type-name prefixes (the "<kind>.k8s." part, before the domain).
+	typeClusterPrefix           = "cluster.k8s."
+	typeNamespacePrefix         = "namespace.k8s."
+	typeClusterResourcePrefix   = "cluster-resource.k8s."
+	typeNamespaceResourcePrefix = "namespace-resource.k8s."
 )
 
 // Parser parses CCRN URNs against a set of registered k8s domain groups.
@@ -133,10 +139,10 @@ func NewParser(k8sGroups []string) *Parser {
 	}
 	k8sTypes := make(map[string]ResourceType, len(groups)*2)
 	for _, g := range groups {
-		k8sTypes["cluster.k8s."+g] = ResourceTypeCluster
-		k8sTypes["namespace.k8s."+g] = ResourceTypeNamespace
-		k8sTypes["cluster-resource.k8s."+g] = ResourceTypeClusterResource
-		k8sTypes["namespace-resource.k8s."+g] = ResourceTypeNamespaceResource
+		k8sTypes[typeClusterPrefix+g] = ResourceTypeCluster
+		k8sTypes[typeNamespacePrefix+g] = ResourceTypeNamespace
+		k8sTypes[typeClusterResourcePrefix+g] = ResourceTypeClusterResource
+		k8sTypes[typeNamespaceResourcePrefix+g] = ResourceTypeNamespaceResource
 	}
 	return &Parser{k8sTypes: k8sTypes}
 }
@@ -197,13 +203,13 @@ func Parse(urn string) (*ParsedCCRN, error) {
 	}
 
 	switch ccrnName {
-	case "cluster.k8s." + DefaultDomain:
+	case typeClusterPrefix + DefaultDomain:
 		return parseK8sCluster(urn, parts)
-	case "namespace.k8s." + DefaultDomain:
+	case typeNamespacePrefix + DefaultDomain:
 		return parseK8sNamespace(urn, parts)
-	case "cluster-resource.k8s." + DefaultDomain:
+	case typeClusterResourcePrefix + DefaultDomain:
 		return parseK8sClusterResource(urn, parts)
-	case "namespace-resource.k8s." + DefaultDomain:
+	case typeNamespaceResourcePrefix + DefaultDomain:
 		return parseK8sNamespaceResource(urn, parts)
 	default:
 		return parseGithub(ccrnName, urn, parts)
