@@ -137,7 +137,7 @@ func NewParser(k8sGroups []string) *Parser {
 			groups = append(groups, g)
 		}
 	}
-	k8sTypes := make(map[string]ResourceType, len(groups)*2)
+	k8sTypes := make(map[string]ResourceType, len(groups)*4)
 	for _, g := range groups {
 		k8sTypes[typeClusterPrefix+g] = ResourceTypeCluster
 		k8sTypes[typeNamespacePrefix+g] = ResourceTypeNamespace

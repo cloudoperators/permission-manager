@@ -214,6 +214,10 @@ permissions:
   segment and the API group segment both show `v1` (e.g. `.../v1/s-eu-de-1/v1/secrets`).
   The positions are unambiguous to the parser; the visual oddness is accepted as the lesser
   evil compared to an informal alias like `core` that has no Kubernetes API backing.
+- The two new types are handled by the parser/compiler but are **not registered** as catalog
+  CRDs — no `k8s-cluster-resource`/`k8s-namespace-resource` chart templates or
+  `ccrn-definitions` entries are added here (those list `cluster`/`namespace` only). They are
+  functional without registration; the catalog entries are deferred to a follow-up.
 
 **Related:**
 

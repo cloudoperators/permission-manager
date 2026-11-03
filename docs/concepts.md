@@ -192,6 +192,8 @@ urn:ccrn:<resource-type>.<domain>.<api-group>/v1/<resource-path>
 |--------|------|--------|----------|
 | k8s | cluster | `.../v1/<cluster>` | Cluster-scoped RBAC |
 | k8s | namespace | `.../v1/<cluster>/<namespace>` | Namespace-scoped RBAC |
+| k8s | cluster-resource | `.../v1/<cluster>/<apigroup>/<resource>[:<sub>]` | Targeted cluster-scoped resource RBAC |
+| k8s | namespace-resource | `.../v1/<cluster>/<namespace>/<apigroup>/<resource>[:<sub>]` | Targeted namespaced resource RBAC |
 | github | organization | `.../v1/<instance>/<org>` | GitHub org membership |
 | github | repository | `.../v1/<instance>/<org>/<repo>` | Repository access |
 | github | repository_type | `.../v1/<instance>/<org>/<visibility>` | Repo class access |
