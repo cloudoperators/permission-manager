@@ -29,6 +29,7 @@ func resolveDesiredNames(ctx context.Context, r *orgResolver, team string, ds *D
 			return nil, resErr
 		}
 		t.CRName = TeamCRName(lookup.InstanceKey, lookup.Org, team)
+		t.Instance = lookup.InstanceKey
 		t.LDAPProvider = lookup.LDAPProvider
 		t.TTLs = lookup.TTLs
 		keptTeams = append(keptTeams, t)
@@ -50,6 +51,7 @@ func resolveDesiredNames(ctx context.Context, r *orgResolver, team string, ds *D
 			tr.Permission = repoguardv1.GithubTeamPermissionAdminOndemand
 		}
 		tr.CRName = TeamRepoCRName(lookup.InstanceKey, lookup.Org, team, tr.Permission)
+		tr.Instance = lookup.InstanceKey
 		keptRepos = append(keptRepos, tr)
 	}
 	ds.TeamRepos = keptRepos
