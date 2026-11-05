@@ -7,6 +7,7 @@ package naming
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -28,15 +29,20 @@ func TruncateWithHash(name string, maxLen int) string {
 		return name
 	}
 
-	// Compute hash of the full (untruncated) name for uniqueness.
 	hash := sha256.Sum256([]byte(name))
 	suffix := fmt.Sprintf("-%x", hash[:4]) // 8 hex chars = 4 bytes
 
-	// Leave room for the suffix.
 	truncLen := max(maxLen-len(suffix), 0)
 
 	// Trim trailing hyphens from the truncated prefix to avoid invalid K8s names.
 	truncated := strings.TrimRight(name[:truncLen], "-")
 
 	return truncated + suffix
+}
+
+// ShortHash returns 8 lowercase hex chars of a SHA256 over the NUL-joined parts.
+// The NUL separator keeps distinct tuples from colliding on a shared concatenation.
+func ShortHash(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:4])
 }

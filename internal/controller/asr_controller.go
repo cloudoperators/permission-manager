@@ -15,7 +15,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
 	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -219,31 +218,27 @@ func defaultRemoteClientFactory(ctx context.Context, c client.Client, clusterNam
 	return pmutils.NewRemoteClient(ctx, c, clusterName, namespace)
 }
 
-// defaultRemoteDiscoveryFactory adapts pmutils.NewRemoteDiscoveryClient to the
-// pmk8s.RemoteDiscoveryFactory signature.
-func defaultRemoteDiscoveryFactory(ctx context.Context, c client.Client, clusterName, namespace string) (discovery.DiscoveryInterface, error) {
-	return pmutils.NewRemoteDiscoveryClient(ctx, c, clusterName, namespace)
-}
-
 // reconcileKubernetes constructs a fresh k8s Phase and runs the create/update
 // subroutine chain. The Phase fetches its own ConnectorBindings via
 // EnsureConnectorBindings — the controller passes nothing beyond the ASR.
 func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.ApplicationSpecificRole) (ctrl.Result, lifecycle.ReconcileResult, error) {
 	p := &pmk8s.Phase{
-		Client:          r.Client,
-		RemoteClient:    defaultRemoteClientFactory,
-		RemoteDiscovery: defaultRemoteDiscoveryFactory,
-		AuditLog:        r.AuditLog,
-		Log:             r.Log,
-		ClusterStore:    r.k8sClusterStore,
-		CCRNParser:      r.K8sCCRNParser,
+		Client:       r.Client,
+		RemoteClient: defaultRemoteClientFactory,
+		AuditLog:     r.AuditLog,
+		Log:          r.Log,
+		ClusterStore: r.k8sClusterStore,
+		CCRNParser:   r.K8sCCRNParser,
 	}
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),
 		p.EnsureConnectorBindings(asr),
+		p.EnsureSharedClusterRoles(asr),
 		p.EnsureRbacCompiled(asr),
 		p.EnsureOrphansCleanedUp(asr),
 		p.EnsureRbacApplied(asr),
+		p.EnsureSharedClusterRoleOrphansRemoved(asr),
+		p.EnsureLegacyRBACRemoved(asr),
 		p.EnsureProviderStatus(asr),
 	}
 	return lifecycle.ExecuteSubRoutine(ctx, routines)

@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
 	"github.com/cloudoperators/permission-manager/api/v1alpha1"
 	"github.com/cloudoperators/permission-manager/internal/audit"
@@ -34,7 +35,7 @@ const (
 	testClusterNameA           = "remote-cluster-a"
 	testClusterNameB           = "remote-cluster-b"
 	testUnreachableClusterName = "unreachable-cluster"
-	testResource               = "pm-test-asr"
+	testResource               = "pm-a-test-asr"
 )
 
 func Test_EnsureRbacRemoved(t *testing.T) {
@@ -74,7 +75,11 @@ func Test_EnsureRbacRemoved(t *testing.T) {
 			remote: func() *mocks.MockClient {
 				m := mocks.NewMockClient(t)
 				m.On("List", mock.Anything, mock.Anything, mock.Anything).Return(
-					func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+					func(_ context.Context, list client.ObjectList, opts ...client.ListOption) error {
+						// The legacy pass uses a requirement selector; no legacy objects here.
+						if _, legacy := opts[0].(client.MatchingLabelsSelector); legacy {
+							return nil
+						}
 						switch l := list.(type) {
 						case *rbacv1.ClusterRoleList:
 							l.Items = []rbacv1.ClusterRole{{ObjectMeta: metav1.ObjectMeta{Name: testResource}}}
@@ -416,4 +421,337 @@ func Test_EnsureRbacRemoved_VanishedClusterSkipped(t *testing.T) {
 	require.Equal(t, lifecycle.Continue(), result)
 	_, has := asr.Status.Providers[pmmeta.ProviderKubernetes]
 	require.False(t, has, "provider status must clear once vanished clusters are skipped")
+}
+
+// Test_EnsureRbacRemoved_NamespacePrecise asserts cleanup is scoped by source
+// namespace: two ASRs that share a name in different namespaces own disjoint
+// RBAC, so revoking one must not delete the other's objects.
+func Test_EnsureRbacRemoved_NamespacePrecise(t *testing.T) {
+	const sharedName = "shared-asr"
+	const nsOther = "other"
+
+	labelsFor := func(ns string) map[string]string {
+		return map[string]string{
+			pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+			pmapis.LabelASR:             pmk8s.ASRLabelValue(sharedName),
+			pmapis.LabelSourceNamespace: ns,
+		}
+	}
+	// Two RoleBindings sharing the LabelASR value but owned by ASRs in different
+	// namespaces, living in distinct target namespaces so names do not collide.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pm-shared-asr", Namespace: "alpha", Labels: labelsFor(testNamespace)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pm-shared-asr", Namespace: "beta", Labels: labelsFor(nsOther)}},
+	).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: sharedName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+
+	_, err := p.EnsureRbacRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var remaining rbacv1.RoleBindingList
+	require.NoError(t, remote.List(context.Background(), &remaining))
+	require.Len(t, remaining.Items, 1, "only the other namespace's RoleBinding survives")
+	require.Equal(t, "beta", remaining.Items[0].Namespace)
+	require.Equal(t, nsOther, remaining.Items[0].Labels[pmapis.LabelSourceNamespace])
+}
+
+// Test_EnsureRbacRemoved_LeavesSharedClusterRoles asserts per-ASR cleanup, which
+// selects on the asr label, never deletes CB-labelled shared ClusterRoles.
+func Test_EnsureRbacRemoved_LeavesSharedClusterRoles(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		// A shared ClusterRole owned by the ConnectorBinding (cb label, no asr label).
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: "pm-s-cb-cluster-read",
+			Labels: map[string]string{
+				pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+				pmapis.LabelCB:              "cb",
+				pmapis.LabelSourceNamespace: testNamespace,
+			},
+		}},
+		// A per-ASR ClusterRoleBinding (asr label) that cleanup should remove.
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+			Name: "pm-a-test-asr-cb-cluster-read-abc",
+			Labels: map[string]string{
+				pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
+				pmapis.LabelASR:             pmk8s.ASRLabelValue(testASRName),
+				pmapis.LabelSourceNamespace: testNamespace,
+			},
+		}},
+	).Build()
+
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+
+	_, err := p.EnsureRbacRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var crbs rbacv1.ClusterRoleBindingList
+	require.NoError(t, remote.List(context.Background(), &crbs))
+	require.Empty(t, crbs.Items, "per-ASR ClusterRoleBinding removed")
+
+	var crs rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &crs))
+	require.Len(t, crs.Items, 1, "shared ClusterRole must survive per-ASR cleanup")
+	require.Equal(t, "pm-s-cb-cluster-read", crs.Items[0].Name)
+}
+
+func Test_EnsureSharedClusterRoleOrphansRemoved_DeletesDroppedCapability(t *testing.T) {
+	// Cluster already carries READ shared roles, but the CB now defines only
+	// MANAGE as a direct binding, so the READ shared roles are orphans.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+	).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{ClusterName: testClusterName}})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Empty(t, list.Items, "dropped READ shared roles deleted")
+}
+
+func Test_EnsureSharedClusterRoleOrphansRemoved_KeepsCurrentCapability(t *testing.T) {
+	// The CB still defines READ, so its shared roles must survive.
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+	).Build()
+
+	cb := newCB(t, "get")
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+	}
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	p.SetCompiled([]pmk8s.ExportCompiledTarget{{ClusterName: testClusterName}})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Len(t, list.Items, 2, "current READ shared roles retained")
+}
+
+// Test_EnsureSharedClusterRoleOrphansRemoved_ReclaimsUnderInvalidConfig asserts
+// that a dropped capability's shared roles are reclaimed even when the ASR is
+// InvalidConfig and compiles to no targets this reconcile: the previously
+// targeted cluster still carries the orphaned roles and must be cleaned up.
+func Test_EnsureSharedClusterRoleOrphansRemoved_ReclaimsUnderInvalidConfig(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read-baseline", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+	).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.InvalidConfigCondition,
+		pmmeta.UnknownCapabilityReason,
+		"capability no longer mapped",
+	))
+
+	p := &pmk8s.Phase{
+		Client:       remote,
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+	// No compiled targets this reconcile: the cluster is reached via the prior target.
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Empty(t, list.Items, "dropped READ shared roles reclaimed despite InvalidConfig")
+}
+
+// Test_EnsureSharedClusterRoleOrphansRemoved_UnreachablePriorNoDeletion asserts
+// that when the only prior target is unreachable, nothing is deleted: cleanup is
+// retried next reconcile rather than guessed at.
+func Test_EnsureSharedClusterRoleOrphansRemoved_UnreachablePriorNoDeletion(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "pm-s-cb-cluster-read", Labels: map[string]string{pmapis.LabelCB: "cb", pmapis.LabelSourceNamespace: testNamespace}}},
+	).Build()
+
+	cb := newCBRaw(t, map[string]any{
+		"cluster": map[string]any{"MANAGE": map[string]any{"clusterRoleName": "cluster-admin"}},
+	})
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Name: testSpecName},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{
+			Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+				pmmeta.ProviderKubernetes: {
+					Targets: []pmmeta.TargetStatus{{TargetID: testUnreachableClusterName, Status: pmmeta.TargetStatusReady}},
+				},
+			},
+		},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(
+		pmmeta.InvalidConfigCondition,
+		pmmeta.NoTargetsResolvedReason,
+		"no targets resolved",
+	))
+
+	p := &pmk8s.Phase{
+		Client:   remote,
+		AuditLog: audit.Disabled(),
+		Log:      ctrl.Log.WithName("test"),
+		RemoteClient: func(_ context.Context, _ client.Client, clusterName, _ string) (client.Client, error) {
+			if clusterName == testUnreachableClusterName {
+				return nil, errors.New("unreachable")
+			}
+			return remote, nil
+		},
+	}
+	p.SetCBs([]*v1alpha1.ConnectorBinding{cb})
+
+	_, err := p.EnsureSharedClusterRoleOrphansRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Len(t, list.Items, 1, "unreachable prior target is retried, not revoked")
+}
+
+// Test_EnsureLegacyRBACRemoved asserts legacy objects (asr label, no
+// source-namespace) are deleted, while namespace-qualified and other ASRs'
+// objects are kept.
+func Test_EnsureLegacyRBACRemoved(t *testing.T) {
+	crb := func(name, asrName string, withNS bool) *rbacv1.ClusterRoleBinding {
+		l := map[string]string{pmapis.LabelManagedByKey: pmapis.ManagedByPMController, pmapis.LabelASR: pmk8s.ASRLabelValue(asrName)}
+		if withNS {
+			l[pmapis.LabelSourceNamespace] = testNamespace
+		}
+		return &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: l}}
+	}
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		crb("pm-legacy-mine", testASRName, false),
+		crb("pm-a-test-asr", testASRName, true),
+		crb("pm-legacy-other", "other-asr", false),
+	).Build()
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+			pmmeta.ProviderKubernetes: {Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}}},
+		}},
+	}
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	_, err := p.EnsureLegacyRBACRemoved(asr)(context.Background())
+	require.NoError(t, err)
+
+	var list rbacv1.ClusterRoleBindingList
+	require.NoError(t, remote.List(context.Background(), &list))
+	got := map[string]bool{}
+	for i := range list.Items {
+		got[list.Items[i].Name] = true
+	}
+	require.False(t, got["pm-legacy-mine"], "this ASR's legacy object is deleted")
+	require.True(t, got["pm-a-test-asr"], "namespace-qualified object is kept")
+	require.True(t, got["pm-legacy-other"], "another ASR's legacy object is kept")
+}
+
+// Test_EnsureConnectorBindings_RevokesLegacyOnMissingCB asserts the missing-CB
+// revoke path (via deleteRBACByLabel) also sweeps legacy objects.
+func Test_EnsureConnectorBindings_RevokesLegacyOnMissingCB(t *testing.T) {
+	remote := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pm-legacy-mine", Labels: map[string]string{
+			pmapis.LabelManagedByKey: pmapis.ManagedByPMController, pmapis.LabelASR: pmk8s.ASRLabelValue(testASRName)}}},
+	).Build()
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{ConnectorRefs: []string{"missing-cb"}},
+		Status: v1alpha1.ApplicationSpecificRoleStatus{Providers: map[pmmeta.ProviderType]pmmeta.ProviderStatus{
+			pmmeta.ProviderKubernetes: {Targets: []pmmeta.TargetStatus{{TargetID: testClusterName, Status: pmmeta.TargetStatusReady}}},
+		}},
+	}
+	p := &pmk8s.Phase{
+		Client:       fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(),
+		RemoteClient: func(_ context.Context, _ client.Client, _, _ string) (client.Client, error) { return remote, nil },
+		AuditLog:     audit.Disabled(),
+		Log:          ctrl.Log.WithName("test"),
+	}
+	result, _ := p.EnsureConnectorBindings(asr)(context.Background())
+	require.Equal(t, lifecycle.Break(), result)
+
+	var list rbacv1.ClusterRoleBindingList
+	require.NoError(t, remote.List(context.Background(), &list))
+	require.Empty(t, list.Items, "missing-CB revoke sweeps legacy RBAC too")
 }
