@@ -12,7 +12,6 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -76,14 +75,4 @@ func NewRemoteClient(ctx context.Context, c client.Client, clusterName, namespac
 	}
 
 	return client.New(restConfig, client.Options{Scheme: scheme})
-}
-
-// NewRemoteDiscoveryClient builds a discovery client for the named cluster using the greenhouse lifecycle.NewRemoteKubeCfg.
-// Used to enumerate a denied API group's resources live during deny-driven RBAC expansion.
-func NewRemoteDiscoveryClient(ctx context.Context, c client.Client, clusterName, namespace string) (discovery.DiscoveryInterface, error) {
-	restConfig, err := restConfigForCluster(ctx, c, clusterName, namespace)
-	if err != nil {
-		return nil, err
-	}
-	return discovery.NewDiscoveryClientForConfig(restConfig)
 }

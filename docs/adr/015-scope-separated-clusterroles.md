@@ -2,7 +2,7 @@
 
 ## Status
 
-Pending review (supersedes implicit design in ADR-010)
+Pending review
 
 ## Context
 
@@ -66,6 +66,16 @@ Generate **scope-appropriate RBAC resources** per ASR per cluster:
 
 ### Namespace Wildcard Handling
 
+> **Superseded.** This section described namespace-wildcard expansion as
+> originally planned. The implementation does not do this. Namespace wildcards
+> are now **rejected** as invalid CCRNs in `EnsureASRValidity`
+> (`internal/provider/k8s/ensure_validity.go`): a CCRN with a wildcard namespace
+> is added to `invalidCCRNs` and the ASR is stamped `InvalidConfig=True` /
+> reason `InvalidCCRN` rather than expanded or promoted to cluster scope. The
+> scope-separation decision above is unchanged; only wildcard handling differs
+> from what this section proposed. The original text is kept below for the
+> historical record.
+
 - Bare wildcard `"*"` → promotes verbs to `clusterVerbs` (scope promotion via ClusterRoleBinding)
 - Prefix wildcards (e.g., `"kube-*"`) → expanded against live namespace list; each matched namespace gets its own Role with the wildcard's verbs
 - Overlapping patterns (e.g., `apps-*` READ + `apps-prod` WRITE) → verbs merge **per namespace** during expansion, so `apps-prod` gets READ+WRITE while `apps-staging` gets only READ
@@ -77,9 +87,9 @@ Existing clusters may have a legacy `pm-<asr>-ns` ClusterRole from the intermedi
 - RoleBindings must have their `roleRef` updated from `ClusterRole/pm-<asr>-ns` to `Role/pm-<asr>`. Since Kubernetes forbids patching `roleRef`, these are **deleted and recreated**.
 - The legacy `pm-<asr>-ns` ClusterRole is **deleted** as part of migration cleanup.
 
-### RBACCleaner Compatibility
+### Cleaner Compatibility
 
-The `RBACCleaner` uses `client.MatchingLabels{LabelASRName: asrName}` to find all RBAC resources for an ASR. It cleans up ClusterRoles, ClusterRoleBindings, Roles, and RoleBindings — all carry the ASR label. **No orphan resources are left behind.**
+RBAC for an ASR is discovered by the `permission-manager.cloudoperators.dev/asr` label. Two cleanup paths use it. On deletion, `EnsureRbacRemoved` (`internal/provider/k8s/ensure_orphans_removed.go`) deletes **every** label-matched ClusterRole, ClusterRoleBinding, Role, and RoleBinding, so nothing is left behind. During a normal reconcile, `EnsureOrphansCleanedUp` removes whole-cluster orphans (clusters no longer targeted) by label, but its within-cluster sub-resource cleanup uses `deleteSpecificRBAC`, which only deletes resources named exactly `pm-<asr>`. A legacy `pm-<asr>-ns` object from the intermediate design is therefore not removed by the reconcile path even though it carries the ASR label; it is cleaned up on deletion, or must be removed by the migration step below.
 
 ## Consequences
 
@@ -96,7 +106,7 @@ The `RBACCleaner` uses `client.MatchingLabels{LabelASRName: asrName}` to find al
 - **RoleBinding migration**: the first reconcile after deployment will delete and recreate all RoleBindings for namespace-scoped ASRs (due to `roleRef` Kind change from ClusterRole to Role). This causes a brief window where namespace-scoped permissions are absent. Acceptable because the reconcile is fast and self-healing.
 - **No cross-namespace deduplication**: if multiple namespaces happen to share the same verb set, each still gets its own Role. The cost is minimal (Roles are lightweight objects) and the design remains simpler.
 
-**Related ADRs:**
-- ADR-009 (Capability Mapping) — defines the verb sets that flow into Roles/ClusterRoles.
-- ADR-010 (Multi-Cluster Client Factory) — the pipeline that delivers clients to `applyRBACPlan`.
-- ADR-012 (Best-Effort Cleanup) — the orphan tracking that handles scope transitions.
+**Related:**
+- Capability mapping: the ConnectorBinding `capabilityMapping` defines the verb sets that flow into Roles/ClusterRoles (`internal/provider/k8s/ensure_compiled.go`, `UnionRulesForCapability`).
+- RBAC apply: `EnsureRbacApplied` (`internal/provider/k8s/ensure_applied.go`) applies the compiled Roles/ClusterRoles to each target cluster.
+- Orphan tracking: `EnsureOrphansCleanedUp` (`internal/provider/k8s/ensure_orphans_removed.go`) handles scope transitions.

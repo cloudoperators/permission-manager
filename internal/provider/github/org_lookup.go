@@ -157,13 +157,13 @@ func adminPermissionOrDefault(v string) string {
 }
 
 // OrgTargetID returns the provider target id for a GithubOrganization CR: the same
-// SanitizeInstance(instance)+"/"+org id computeProviderStatus records per team. The instance
-// comes from the github-instance label repo-guard stamps on the CR. Returns "" when the CR
-// lacks that label or spec.organization, so callers can treat it as "no match".
+// SanitizeInstance(instanceKey)+"/"+org id that computeProviderStatus records per team.
+// The instance key comes from the github-instance-key label repo-guard stamps on the CR.
+// Returns "" when the CR lacks that label or spec.organization, so callers can treat it as "no match".
 func OrgTargetID(org *repoguardv1.GithubOrganization) string {
-	host := org.Labels[labelGithubInstance]
-	if host == "" || org.Spec.Organization == "" {
+	key := org.Labels[labelGithubInstanceKey]
+	if key == "" || org.Spec.Organization == "" {
 		return ""
 	}
-	return SanitizeInstance(host) + "/" + org.Spec.Organization
+	return SanitizeInstance(key) + "/" + org.Spec.Organization
 }

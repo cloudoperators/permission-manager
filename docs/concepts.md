@@ -6,7 +6,7 @@ This document explains the core concepts of Permission Manager and how they rela
 
 Permission Manager is a **"Permissions as Code"** framework that uses Kubernetes Custom Resource Definitions (CRDs) to define access roles. All permission definitions live as YAML in Git, are validated in CI, and consumed by connector-specific operators that provision access on target systems.
 
-The source CRD schema (`permission-manager.cloudoperators.dev/v1`) is **vendor-neutral**. It defines WHAT access should exist — not HOW any specific system implements it.
+The source CRD schema (`permission-manager.cloudoperators.dev/v1alpha1`) is **vendor-neutral**. It defines WHAT access should exist — not HOW any specific system implements it.
 
 ## CRD Hierarchy
 
@@ -22,7 +22,7 @@ FunctionalRole (requestable bundle)
 The **atomic unit of access**. An ASR grants specific capabilities on specific resources through one or more connectors.
 
 ```yaml
-apiVersion: permission-manager.cloudoperators.dev/v1
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ApplicationSpecificRole
 metadata:
   name: team-alpha-k8s-monitoring
@@ -32,7 +32,7 @@ spec:
     - k8s-connector                         # ← Which provider(s) handle this
   permissions:
     - resource: "urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/prod-eu-1/monitoring"
-      capability: WRITE
+      capability: OPERATE
     - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-eu-1"
       capability: READ
   tags: [prod]
@@ -44,14 +44,14 @@ Key fields:
 - **`spec.name`** — OIDC group name + display identifier (case-sensitive)
 - **`connectorRefs[]`** — connectors self-select by their provider type
 - **`permissions[]`** — CCRN-based resource + capability pairs
-- **`deny[]`** — exclusions subtracted from the permission set
+- **`deny[]`**: present in the schema but **not enforced by the Kubernetes controller** — there is no code path that subtracts denied CCRNs from the expanded permission set.
 
 ## FunctionalRole (FR)
 
 A **bundle of ASRs** forming a requestable profile with approval workflows. End-users request FunctionalRoles; the system provisions access for all included ASRs.
 
 ```yaml
-apiVersion: permission-manager.cloudoperators.dev/v1
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: FunctionalRole
 metadata:
   name: team-alpha-platform
@@ -79,76 +79,54 @@ Key fields:
 Defines the **connection to an external system**. This is the seam between the open-source schema and provider-specific implementation.
 
 ```yaml
-apiVersion: permission-manager.cloudoperators.dev/v1
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ConnectorBinding
 metadata:
   name: k8s-connector
 spec:
-  name: Kubernetes Production
+  name: k8s-connector                       # ← embedded verbatim into shared role names
   provider: kubernetes                      # ← Controller filters by this
   definition:
     capabilityMapping:
-      READ:
-        - apiGroups: ["*"]
-          resources: ["*"]
-          verbs: [get, list, watch]
-      WRITE:
-        - apiGroups: ["*"]
-          resources: ["*"]
-          verbs: [create, update, patch, delete]
+      cluster:                              # whole-cluster CCRNs
+        MANAGE:
+          clusterRoleName: cluster-admin    # bind directly to a named ClusterRole
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+      namespace:                            # namespace CCRNs
+        MANAGE:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-admin: "true"
+        READ:
+          clusterRoleSelectors:
+            - matchLabels:
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
 ```
 
-Each capability maps to a list of rules mirroring the native Kubernetes
-`PolicyRule` shape (`apiGroups` + `resources` + `verbs`). All three fields are
-required per rule — there are no implicit wildcards, so operators must be
-explicit about what they grant.
+For the **kubernetes** provider, `capabilityMapping` is nested by scope. Each
+scope maps a **closed** set of capability names to the RBAC the controller
+provisions; a name outside its scope's set makes the ConnectorBinding invalid:
+
+- `cluster` — `MANAGE`, `READ`
+- `namespace` — `MANAGE`, `OPERATE`, `READ`
+
+Each capability entry takes one of two mutually exclusive shapes:
+
+- **`clusterRoleName`** — bind directly to an existing named ClusterRole. Valid
+  only for cluster `MANAGE` (binding to `cluster-admin`).
+- **`clusterRoleSelectors`** (+ optional `rules`) — the controller builds a
+  shared aggregated root ClusterRole from the selectors, plus a baseline child
+  ClusterRole from the rules that the root also aggregates.
+
+Other providers define their own `definition` shape: the **github** provider, for
+example, maps each capability to a string permission (`pull` / `push` / `admin`).
 
 Key fields:
 - **`provider`** — connector operators filter by this (self-select)
 - **`definition`** — provider-specific configuration (opaque payload)
-
-#### Deny-driven rules (`excludeResources`)
-
-Kubernetes RBAC is additive: there is no native "allow everything **except**
-secrets". To avoid forcing operators to hand-enumerate every apiGroup/resource
-across a fleet, a rule may declare `excludeResources` and let the controller
-compose the grant from the target cluster's discovered API groups, subtracting
-only the denied resources:
-
-```yaml
-capabilityMapping:
-  READ:
-    - apiGroups: ["*"]
-      resources: ["*"]
-      excludeResources:
-        - apiGroups: [""]
-          resources: [secrets]
-        - apiGroups: ["core.gardener.cloud"]
-          resources: [internalsecrets]
-      verbs: [get, list, watch]
-```
-
-At compile time, for each target cluster the controller reads the cluster's
-discovered API groups (`Cluster.status.discoveryCache.groups`) and splits them
-into *denied* groups (named in `excludeResources`) and *the rest*. It emits one
-wildcard rule (`resources: ["*"]`) for the rest, and for each denied group it
-**live-enumerates** that group's resources (via the cluster's discovery API) and
-grants them minus the denied ones. Verbs are copied onto every emitted rule.
-
-Rules and constraints:
-- `excludeResources` is only valid alongside `resources: ["*"]` — subtracting
-  from an explicit resource list is rejected as a configuration error.
-- Each selector must name non-empty `apiGroups` and `resources`; selectors carry
-  no verbs (they inherit the parent rule's).
-- Subresources are handled: excluding `secrets` also drops `secrets/status`.
-- The per-group resource lookup is **live** (not read from the discovery cache,
-  which holds group names only) so a newly-added secret-like resource cannot be
-  silently granted.
-- **Fail-closed**: if a target cluster's discovery is unavailable (no
-  `discoveryCache`, or the discovery API is unreachable), the ASR is marked
-  `InvalidConfig=True` / `Ready=False` with reason `DiscoveryUnavailable` and
-  **nothing is applied** — the controller never emits a grant that could leak a
-  denied resource. The ASR reconciles automatically once discovery recovers.
 
 ## Partial Provisioning & Cluster Readiness
 
@@ -190,65 +168,54 @@ urn:ccrn:<resource-type>.<domain>.<api-group>/v1/<resource-path>
 |--------|------|--------|----------|
 | k8s | cluster | `.../v1/<cluster>` | Cluster-scoped RBAC |
 | k8s | namespace | `.../v1/<cluster>/<namespace>` | Namespace-scoped RBAC |
+| k8s | cluster-resource | `.../v1/<cluster>/<apigroup>/<resource>[:<sub>]` | Targeted cluster-scoped resource RBAC |
+| k8s | namespace-resource | `.../v1/<cluster>/<namespace>/<apigroup>/<resource>[:<sub>]` | Targeted namespaced resource RBAC |
 | github | organization | `.../v1/<instance>/<org>` | GitHub org membership |
 | github | repository | `.../v1/<instance>/<org>/<repo>` | Repository access |
 | github | repository_type | `.../v1/<instance>/<org>/<visibility>` | Repo class access |
 
 ### Wildcards
 
-Wildcards (`*`) are supported for broad resource selection:
-- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*` — all clusters
-- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-*` — prefix matching
-- `urn:ccrn:namespace.k8s.ccrn.cloudoperators.dev/v1/prod-eu-1/*` — all namespaces on a cluster
+Cluster-name wildcards are supported for broad selection and matched against the Greenhouse `Cluster` inventory:
+- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*` (all clusters)
+- `urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/prod-*` (prefix matching)
 
-### Deny Rules
+A **wildcard in the namespace segment is not supported**: the Kubernetes provider rejects it as an invalid CCRN (`EnsureASRValidity`, reason `InvalidCCRN`) rather than expanding it to every namespace on the cluster. Target namespaces must be named explicitly.
 
-Deny rules subtract from the expanded permission set:
+### Exclusions
 
-```yaml
-permissions:
-  - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/*"
-    capability: READ
-deny:
-  - resource: "urn:ccrn:cluster.k8s.ccrn.cloudoperators.dev/v1/security-cluster"
-    capability: READ
-```
-
-Result: READ on all clusters **except** `security-cluster`.
+The schema carries an ASR-level `deny[]` field, but the Kubernetes controller
+does not act on it: there is no code path that subtracts denied CCRNs from the
+expanded permission set. Scope the grant instead — map each capability to only
+the ClusterRoles (via `clusterRoleSelectors`) or rules it should include.
 
 ## Capability Mapping (Per-Connector)
 
 Capabilities are abstract permission levels used in ASR `permissions[].capability` fields. **Each connector defines its own mapping** from these abstract capabilities to provider-specific actions via the `ConnectorBinding.spec.definition.capabilityMapping` field.
 
-There is no universal capability taxonomy — each downstream system has its own permission model, and the mapping is connector-specific:
+**Kubernetes connector.** The capability vocabulary is **closed** and nested by
+the CCRN's scope. The controller enforces it: a capability outside its scope's
+set, or mapped with the wrong entry shape, makes the ConnectorBinding invalid.
 
-**Kubernetes connector:**
+| Scope | Capabilities | Maps to |
+|-------|--------------|---------|
+| cluster | `MANAGE`, `READ` | `MANAGE` → bind to `cluster-admin` (via `clusterRoleName`); `READ` → aggregated ClusterRole from `clusterRoleSelectors` (+ optional `rules`) |
+| namespace | `MANAGE`, `OPERATE`, `READ` | aggregated ClusterRole from `clusterRoleSelectors` (+ optional `rules`), bound namespaced |
 
-| Capability | Verbs |
-|-----------|-------|
-| READ | get, list, watch |
-| WRITE | create, update, patch, delete |
-| OPERATE | exec, port-forward, proxy |
-| MANAGE | bind, escalate, impersonate |
-| * | * (all verbs) |
+A binding maps only the capabilities it needs; an ASR referencing an unmapped
+capability is reported as a configuration error rather than silently granted.
 
-**GitHub connector:**
+**GitHub connector (example mapping):** other providers define their own
+free-form mapping. The github provider, for example, maps each capability to a
+string permission:
 
 | Capability | Permission |
 |-----------|-----------|
 | READ | pull |
 | WRITE | push |
-| * | admin |
+| ADMIN | admin |
 
-**Greenhouse Teams connector:**
-
-| Capability | TeamRole |
-|-----------|----------|
-| READ | cluster:view |
-| WRITE | cluster:edit |
-| * | cluster:admin |
-
-When adding a new downstream connector (e.g., Vault, ArgoCD, a database), you define a new capability matrix in the ConnectorBinding that maps the abstract capabilities to that system's native permission model.
+When adding a new downstream connector (e.g., Vault, ArgoCD, a database), you define its capability mapping in the ConnectorBinding, mapping the abstract capability names to that system's native permission model.
 
 ## How Connectors Self-Select
 
@@ -280,7 +247,7 @@ The identity model is simple and universal:
 Technical/machine user template for service accounts:
 
 ```yaml
-apiVersion: permission-manager.cloudoperators.dev/v1
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ServiceIdentity
 metadata:
   name: monitoring-service

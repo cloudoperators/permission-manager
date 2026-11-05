@@ -19,6 +19,12 @@ const (
 	ResourceTypeCluster ResourceType = "cluster"
 	// ResourceTypeNamespace identifies a Kubernetes namespace resource.
 	ResourceTypeNamespace ResourceType = "namespace"
+	// ResourceTypeClusterResource identifies a cluster-scoped resource CCRN
+	// that embeds an apiGroup/resource target.
+	ResourceTypeClusterResource ResourceType = "cluster-resource"
+	// ResourceTypeNamespaceResource identifies a namespace-scoped resource CCRN
+	// that embeds an apiGroup/resource target.
+	ResourceTypeNamespaceResource ResourceType = "namespace-resource"
 )
 
 // Domain constants identify the provider domain of a CCRN.
@@ -55,6 +61,17 @@ type GithubResource struct {
 	ResourceType GithubResourceType
 }
 
+// K8sResource holds the resource target embedded in a resource-scoped CCRN
+// (cluster-resource / namespace-resource). It is nil for the coarse types.
+type K8sResource struct {
+	// APIGroup is the Kubernetes API group ("" for the core group).
+	APIGroup string
+	// Resource is the plural resource name (e.g. "deployments"), or "*".
+	Resource string
+	// SubResource is the subresource (e.g. "log"), or "" when absent.
+	SubResource string
+}
+
 // ParsedCCRN holds the parsed components of a CCRN URN.
 type ParsedCCRN struct {
 	// Type is the resource type (cluster, namespace, etc.).
@@ -67,6 +84,9 @@ type ParsedCCRN struct {
 	Namespace string
 	// Github holds GitHub-specific parsed data (only set for github domain CCRNs).
 	Github *GithubResource
+	// K8sResource holds the embedded resource target for resource-scoped
+	// Kubernetes CCRNs (nil otherwise).
+	K8sResource *K8sResource
 	// Raw is the original URN string.
 	Raw string
 }
@@ -79,6 +99,14 @@ var DefaultDomain = "ccrn.cloudoperators.dev"
 const (
 	urnPrefix   = "urn:ccrn:"
 	ccrnVersion = "v1"
+	// coreGroupToken is the apiGroup segment value that denotes the core group ("").
+	coreGroupToken = "v1"
+
+	// k8s CCRN type-name prefixes (the "<kind>.k8s." part, before the domain).
+	typeClusterPrefix           = "cluster.k8s."
+	typeNamespacePrefix         = "namespace.k8s."
+	typeClusterResourcePrefix   = "cluster-resource.k8s."
+	typeNamespaceResourcePrefix = "namespace-resource.k8s."
 )
 
 // Parser parses CCRN URNs against a set of registered k8s domain groups.
@@ -109,10 +137,12 @@ func NewParser(k8sGroups []string) *Parser {
 			groups = append(groups, g)
 		}
 	}
-	k8sTypes := make(map[string]ResourceType, len(groups)*2)
+	k8sTypes := make(map[string]ResourceType, len(groups)*4)
 	for _, g := range groups {
-		k8sTypes["cluster.k8s."+g] = ResourceTypeCluster
-		k8sTypes["namespace.k8s."+g] = ResourceTypeNamespace
+		k8sTypes[typeClusterPrefix+g] = ResourceTypeCluster
+		k8sTypes[typeNamespacePrefix+g] = ResourceTypeNamespace
+		k8sTypes[typeClusterResourcePrefix+g] = ResourceTypeClusterResource
+		k8sTypes[typeNamespaceResourcePrefix+g] = ResourceTypeNamespaceResource
 	}
 	return &Parser{k8sTypes: k8sTypes}
 }
@@ -130,6 +160,10 @@ func (p *Parser) Parse(urn string) (*ParsedCCRN, error) {
 		return parseK8sCluster(urn, parts)
 	case ResourceTypeNamespace:
 		return parseK8sNamespace(urn, parts)
+	case ResourceTypeClusterResource:
+		return parseK8sClusterResource(urn, parts)
+	case ResourceTypeNamespaceResource:
+		return parseK8sNamespaceResource(urn, parts)
 	}
 
 	return parseGithub(ccrnName, urn, parts)
@@ -169,10 +203,14 @@ func Parse(urn string) (*ParsedCCRN, error) {
 	}
 
 	switch ccrnName {
-	case "cluster.k8s." + DefaultDomain:
+	case typeClusterPrefix + DefaultDomain:
 		return parseK8sCluster(urn, parts)
-	case "namespace.k8s." + DefaultDomain:
+	case typeNamespacePrefix + DefaultDomain:
 		return parseK8sNamespace(urn, parts)
+	case typeClusterResourcePrefix + DefaultDomain:
+		return parseK8sClusterResource(urn, parts)
+	case typeNamespaceResourcePrefix + DefaultDomain:
+		return parseK8sNamespaceResource(urn, parts)
 	default:
 		return parseGithub(ccrnName, urn, parts)
 	}
@@ -229,6 +267,94 @@ func parseK8sNamespace(urn string, parts []string) (*ParsedCCRN, error) {
 		Namespace:   namespace,
 		Raw:         urn,
 	}, nil
+}
+
+// parseK8sClusterResource parses:
+// urn:ccrn:cluster-resource.k8s.<domain>/v1/<cluster>/<apigroup>/<resource>[:<subresource>]
+func parseK8sClusterResource(urn string, parts []string) (*ParsedCCRN, error) {
+	if len(parts) != 5 {
+		return nil, fmt.Errorf("cluster-resource CCRN URN must have exactly 5 segments, got %d", len(parts))
+	}
+	clusterName := parts[2]
+	if clusterName == "" {
+		return nil, errors.New("cluster name must not be empty")
+	}
+	res, err := parseResourceSegment(parts[3], parts[4])
+	if err != nil {
+		return nil, err
+	}
+	return &ParsedCCRN{
+		Type:        ResourceTypeClusterResource,
+		Domain:      DomainK8s,
+		ClusterName: clusterName,
+		K8sResource: res,
+		Raw:         urn,
+	}, nil
+}
+
+// parseK8sNamespaceResource parses:
+// urn:ccrn:namespace-resource.k8s.<domain>/v1/<cluster>/<namespace>/<apigroup>/<resource>[:<subresource>]
+func parseK8sNamespaceResource(urn string, parts []string) (*ParsedCCRN, error) {
+	if len(parts) != 6 {
+		return nil, fmt.Errorf("namespace-resource CCRN URN must have exactly 6 segments, got %d", len(parts))
+	}
+	clusterName := parts[2]
+	namespace := parts[3]
+	if clusterName == "" {
+		return nil, errors.New("cluster name must not be empty")
+	}
+	if namespace == "" {
+		return nil, errors.New("namespace must not be empty")
+	}
+	res, err := parseResourceSegment(parts[4], parts[5])
+	if err != nil {
+		return nil, err
+	}
+	return &ParsedCCRN{
+		Type:        ResourceTypeNamespaceResource,
+		Domain:      DomainK8s,
+		ClusterName: clusterName,
+		Namespace:   namespace,
+		K8sResource: res,
+		Raw:         urn,
+	}, nil
+}
+
+// parseResourceSegment splits "<apigroup>" + "<resource>[:<subresource>]" into a
+// K8sResource. The core-group token "v1" maps to "". A literal "/" in the
+// resource cannot reach here; it overflows the segment count upstream. Commas
+// are rejected: they are never valid in Kubernetes group/resource names and
+// would collide with the comma-joined RBAC rule merge key downstream.
+func parseResourceSegment(apiGroup, segment string) (*K8sResource, error) {
+	if apiGroup == "" {
+		return nil, errors.New("apiGroup must not be empty")
+	}
+	if strings.Contains(apiGroup, ",") {
+		return nil, errors.New("apiGroup must not contain a comma")
+	}
+	group := apiGroup
+	if group == coreGroupToken {
+		group = ""
+	}
+	resource, sub, hasSub := strings.Cut(segment, ":")
+	if resource == "" {
+		return nil, errors.New("resource must not be empty")
+	}
+	if strings.Contains(resource, ",") {
+		return nil, errors.New("resource must not contain a comma")
+	}
+	if hasSub {
+		if sub == "" {
+			return nil, errors.New("subresource must not be empty")
+		}
+		if strings.Contains(sub, ":") {
+			return nil, errors.New("resource must not contain more than one ':' subresource delimiter")
+		}
+		if strings.Contains(sub, ",") {
+			return nil, errors.New("subresource must not contain a comma")
+		}
+	}
+	return &K8sResource{APIGroup: group, Resource: resource, SubResource: sub}, nil
 }
 
 // parseGithubOrganization parses: urn:ccrn:organization.github.ccrn.cloudoperators.dev/v1/<instance>/<org>

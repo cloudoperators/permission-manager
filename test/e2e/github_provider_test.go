@@ -419,8 +419,6 @@ spec:
 const (
 	// testGithubInstance is the GitHub Enterprise instance used in tests.
 	testGithubInstance = "github.example.com"
-	// testGithubInstanceSanitized is the sanitized form of testGithubInstance.
-	testGithubInstanceSanitized = "github-example-com"
 	// testGithubOrg is the pre-seeded organization name.
 	testGithubOrg = "e2e-org"
 )
@@ -931,7 +929,7 @@ func TestGithub_Status_TeamComplete(t *testing.T) {
 	patchGithubTeamStatus(t, controllerNamespace, teamCRName, "complete")
 
 	// Verify provider status shows Success
-	targetID := testGithubInstanceSanitized + "/" + testGithubOrg
+	targetID := testGithubInstanceKey + "/" + testGithubOrg
 	expectProviderTargetStatus(t, ctx, c, controllerNamespace, asrName, "github", targetID, "Success")
 }
 
@@ -956,7 +954,7 @@ func TestGithub_Status_TeamFailed(t *testing.T) {
 	patchGithubTeamStatus(t, controllerNamespace, teamCRName, "failed")
 
 	// Verify provider status shows Error
-	targetID := testGithubInstanceSanitized + "/" + testGithubOrg
+	targetID := testGithubInstanceKey + "/" + testGithubOrg
 	expectProviderTargetStatus(t, ctx, c, controllerNamespace, asrName, "github", targetID, "Error")
 }
 
@@ -981,7 +979,7 @@ func TestGithub_Status_TeamRatelimited(t *testing.T) {
 	patchGithubTeamStatus(t, controllerNamespace, teamCRName, "ratelimited")
 
 	// Verify provider status shows Pending
-	targetID := testGithubInstanceSanitized + "/" + testGithubOrg
+	targetID := testGithubInstanceKey + "/" + testGithubOrg
 	expectProviderTargetStatus(t, ctx, c, controllerNamespace, asrName, "github", targetID, "Pending")
 }
 

@@ -20,6 +20,7 @@ import (
 
 // repo-guard's github-instance label; hard-coded here because it is unexported in the github package.
 const testGithubInstanceLabel = "repo-guard.cloudoperators.dev/github-instance"
+const testGithubInstanceKeyLabel = "repo-guard.cloudoperators.dev/github-instance-key"
 
 func ctrlTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
@@ -28,19 +29,22 @@ func ctrlTestScheme() *runtime.Scheme {
 	return s
 }
 
-func newTestOrg(name, hostname, org string) *repoguardv1.GithubOrganization {
+func newTestOrg(name, hostname, key, org string) *repoguardv1.GithubOrganization {
 	return &repoguardv1.GithubOrganization{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "default",
-			Labels:    map[string]string{testGithubInstanceLabel: hostname},
+			Labels: map[string]string{
+				testGithubInstanceLabel:    hostname,
+				testGithubInstanceKeyLabel: key,
+			},
 		},
 		Spec: repoguardv1.GithubOrganizationSpec{Organization: org},
 	}
 }
 
 func TestGithubOrgTriggersReconcile(t *testing.T) {
-	base := newTestOrg("gh--o", "github.example.com", "o")
+	base := newTestOrg("gh--o", "github.example.com", "ghe", "o")
 
 	// Status-only churn: identical labels + spec.organization must not re-trigger.
 	if githubOrgTriggersReconcile(event.UpdateEvent{ObjectOld: base, ObjectNew: base.DeepCopy()}) {
@@ -71,7 +75,7 @@ func TestGithubOrgTriggersReconcile(t *testing.T) {
 }
 
 func TestEnqueueASRsForGithubOrganization(t *testing.T) {
-	org := newTestOrg("gh--o", "github.example.com", "o")
+	org := newTestOrg("gh--o", "github.example.com", "ghe", "o")
 	targetID := github.OrgTargetID(org)
 
 	// Healthy ASR that targets the org -> enqueued so its team CRs pick up org label edits.
