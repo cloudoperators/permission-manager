@@ -19,7 +19,7 @@ jobs:
     env:
       SERVER: https://pm-remote-1.${{ secrets.REMOTE_DOMAIN }}
     steps:
-      - name: Fetch GitHub OIDC token (audience greenhouse)
+      - name: Identity Token
         id: token
         uses: actions/github-script@v7
         with:
