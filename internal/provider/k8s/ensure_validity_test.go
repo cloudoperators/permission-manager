@@ -249,9 +249,14 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 			wantInvalidConfig: true,
 		},
 		{
-			name:              "capability other than read/write is invalid",
-			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			name:              "capability other than read/write/manage is invalid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "operate"}},
 			wantInvalidConfig: true,
+		},
+		{
+			name:              "manage capability is valid",
+			permissions:       []v1alpha1.Permission{{Resource: validResourceCCRN, Capability: "manage"}},
+			wantInvalidConfig: false,
 		},
 		{
 			name:              "valid resource ccrn passes",
@@ -282,4 +287,20 @@ func Test_EnsureASRValidity_ResourceCCRNHardRules(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test_EnsureASRValidity_ClearsLegacyDiscoveryUnavailable asserts a stale
+// InvalidConfig=DiscoveryUnavailable (from the removed deny-expansion path) is
+// swept on a valid config so upgraded ASRs don't wedge.
+func Test_EnsureASRValidity_ClearsLegacyDiscoveryUnavailable(t *testing.T) {
+	asr := &v1alpha1.ApplicationSpecificRole{
+		ObjectMeta: metav1.ObjectMeta{Name: testASRName, Namespace: testNamespace},
+		Spec:       v1alpha1.ApplicationSpecificRoleSpec{Permissions: []v1alpha1.Permission{{Resource: validClusterCCRN, Capability: "read"}}},
+	}
+	asr.SetCondition(pmmeta.TrueCondition(pmmeta.InvalidConfigCondition, pmmeta.DiscoveryUnavailableReason, "legacy"))
+
+	p := &pmk8s.Phase{AuditLog: audit.Disabled(), Log: ctrl.Log.WithName("test"), CCRNParser: ccrn.NewParser(nil)}
+	_, err := p.EnsureASRValidity(asr)(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, pmmeta.GetConditionByType(asr.Status.Conditions, pmmeta.InvalidConfigCondition))
 }

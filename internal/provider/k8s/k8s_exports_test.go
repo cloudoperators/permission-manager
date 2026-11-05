@@ -14,11 +14,13 @@ func (p *Phase) SetCompiled(targets []ExportCompiledTarget) {
 	out := make([]compiledTarget, 0, len(targets))
 	for _, t := range targets {
 		out = append(out, compiledTarget{
-			clusterName:         t.ClusterName,
-			clusterRoles:        t.ClusterRoles,
-			clusterRoleBindings: t.ClusterRoleBindings,
-			roles:               t.Roles,
-			roleBindings:        t.RoleBindings,
+			clusterName:               t.ClusterName,
+			clusterRoles:              t.ClusterRoles,
+			clusterRoleBindings:       t.ClusterRoleBindings,
+			roles:                     t.Roles,
+			roleBindings:              t.RoleBindings,
+			coarseClusterRoleBindings: t.CoarseClusterRoleBindings,
+			coarseRoleBindings:        t.CoarseRoleBindings,
 		})
 	}
 	p.compiled = out
@@ -26,6 +28,11 @@ func (p *Phase) SetCompiled(targets []ExportCompiledTarget) {
 
 func (p *Phase) SetCBs(cbs []*v1alpha1.ConnectorBinding) {
 	p.cbs = cbs
+}
+
+// ASRLabelValue exposes asrLabelValue to the external test package.
+func ASRLabelValue(asrName string) string {
+	return asrLabelValue(asrName)
 }
 
 func (p *Phase) SetInvalidCCRNs(ccrns []string) {
@@ -64,6 +71,26 @@ func (p *Phase) SetProvisionErrs(errs []error) {
 	p.provisionErrs = errs
 }
 
+func (p *Phase) SetSharedRoleErrByCluster(m map[string]error) {
+	p.sharedRoleErrByCluster = m
+}
+
+func (p *Phase) ProvisionErrs() []error {
+	return p.provisionErrs
+}
+
+func (p *Phase) SharedRoleErrByCluster() map[string]error {
+	return p.sharedRoleErrByCluster
+}
+
+func (p *Phase) ProvisionStatuses() []ExportClusterStatus {
+	out := make([]ExportClusterStatus, 0, len(p.provisionStatuses))
+	for _, s := range p.provisionStatuses {
+		out = append(out, ExportClusterStatus{Name: s.name, Err: s.err, AppliedResources: s.appliedResources})
+	}
+	return out
+}
+
 func (p *Phase) SetOrphanErrs(errs []error) {
 	p.orphanErrs = errs
 }
@@ -78,20 +105,24 @@ func (p *Phase) Compiled() []ExportCompiledTarget {
 	out := make([]ExportCompiledTarget, 0, len(p.compiled))
 	for _, t := range p.compiled {
 		out = append(out, ExportCompiledTarget{
-			ClusterName:         t.clusterName,
-			ClusterRoles:        t.clusterRoles,
-			ClusterRoleBindings: t.clusterRoleBindings,
-			Roles:               t.roles,
-			RoleBindings:        t.roleBindings,
+			ClusterName:               t.clusterName,
+			ClusterRoles:              t.clusterRoles,
+			ClusterRoleBindings:       t.clusterRoleBindings,
+			Roles:                     t.roles,
+			RoleBindings:              t.roleBindings,
+			CoarseClusterRoleBindings: t.coarseClusterRoleBindings,
+			CoarseRoleBindings:        t.coarseRoleBindings,
 		})
 	}
 	return out
 }
 
 type ExportCompiledTarget struct {
-	ClusterName         string
-	ClusterRoles        []rbacv1.ClusterRole
-	ClusterRoleBindings []rbacv1.ClusterRoleBinding
-	Roles               []rbacv1.Role
-	RoleBindings        []rbacv1.RoleBinding
+	ClusterName               string
+	ClusterRoles              []rbacv1.ClusterRole
+	ClusterRoleBindings       []rbacv1.ClusterRoleBinding
+	Roles                     []rbacv1.Role
+	RoleBindings              []rbacv1.RoleBinding
+	CoarseClusterRoleBindings []rbacv1.ClusterRoleBinding
+	CoarseRoleBindings        []rbacv1.RoleBinding
 }
