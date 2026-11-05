@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+name: e2e-remote-cluster
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  retrieve:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    name: identity test
+    runs-on: ubuntu-latest
+    environment: e2e
+    env:
+      SERVER: https://pm-remote-1.${{ secrets.REMOTE_DOMAIN }}
+    steps:
+      - name: Identity Token
+        id: token
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('greenhouse')
+            core.setSecret(token)
+            core.setOutput('token', token)
+
+      - name: Build kubeconfig
+        run: |
+          cat > kubeconfig.yaml <<EOF
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - cluster:
+                server: ${SERVER}
+              name: pm-remote-1
+          contexts:
+            - context:
+                cluster: pm-remote-1
+                user: github-oidc
+              name: pm-remote-1
+          current-context: pm-remote-1
+          users:
+            - name: github-oidc
+              user:
+                token: ${{ steps.token.outputs.token }}
+          EOF
+
+      - name: Setup kube tools
+        uses: yokawasa/action-setup-kube-tools@9d39563c24d4a419d1a8289c34d6da5a6171252c
+        with:
+          setup-tools: |
+            kubectl
+          kubectl: "1.36.0"
+
+      - name: Test
+        run: kubectl --kubeconfig kubeconfig.yaml get clusterroles
