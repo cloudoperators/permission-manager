@@ -74,8 +74,11 @@ spec:
   `"ci1:" + claims.sub.replace("/", ":")`).
 - `spec.roles` is a list of ApplicationSpecificRole references, by bare name, resolved in
   the ServiceIdentity's own namespace.
-- `spec.connectorRefs`, `spec.description` are carried from the prior art. See the open
-  question on `connectorRefs` below.
+- `spec.connectorRefs` names the ConnectorBindings that select which provider operators act on
+  this ServiceIdentity, exactly as it does on an ApplicationSpecificRole. The Kubernetes
+  operator processes a ServiceIdentity only when `connectorRefs` resolves to a
+  `provider: kubernetes` ConnectorBinding (see section 7). `spec.description` is carried from
+  the prior art as free-form documentation.
 
 The `approvers` and `issuer` fields from earlier drafts of the prior-art spec are **not**
 ported. `approvers` is a CAM-specific concept with no meaning for a ServiceIdentity here;
@@ -109,6 +112,19 @@ event self-heals on the next reconcile of the affected ASRs, because the subject
 recomputed from scratch each time. This mirrors how the provider already re-fetches
 ConnectorBindings live each reconcile rather than trusting cached state.
 
+Two distinct operations act on a per-ASR binding, and they have different preconditions:
+
+- **Compiling roles and rules** into the binding's `roleRef` and any backing ClusterRoles.
+  This needs usable ConnectorBindings and a valid capability mapping, and is skipped when the
+  ASR is `InvalidConfig`.
+- **Reconciling the binding's `subjects` list** to the live-derived set. This needs only the
+  live ServiceIdentity list and the binding object that already exists; it does not depend on
+  a successful compile.
+
+The provider keeps these separable. Removing an obsolete `User` subject from a binding that
+was previously applied never requires recompiling that binding's roles, which is what makes
+revocation hold even when the referenced ASR is itself unreconcilable (see section 10).
+
 ### 4. Subjects are `User`, never `ServiceAccount`
 
 A ServiceIdentity compiles to:
@@ -122,18 +138,25 @@ A ServiceIdentity compiles to:
 Kubernetes represents an identity authenticated via OIDC / structured authentication as a
 `User`, regardless of whether the token originated from a ServiceAccount on some other
 cluster. The in-cluster `ServiceAccount` subject kind (username
-`system:serviceaccount:<namespace>:<name>`) is a different concept and is **out of scope**:
+`system:serviceaccount:<namespace>:<name>`) is a different concept and is deliberately **out
+of scope** as a support-policy choice, not an authorization boundary:
 
-- In-cluster ServiceAccounts receive access through RBAC manifests shipped with the
-  application they run, not through a central permission manager.
-- A `system:serviceaccount:...` subject only resolves on the one cluster where that
-  ServiceAccount object exists, which fits poorly with permission-manager's fleet-wide,
-  CCRN-addressed model.
+- In-cluster ServiceAccounts receive their access through the RBAC manifests shipped with the
+  application they run, which that application owns. permission-manager deliberately does not
+  centrally manage those subjects, so it does not emit a `ServiceAccount` subject kind.
+- This is an ownership/scoping decision about which subjects permission-manager is responsible
+  for, not a security guarantee enforced by the subject kind. Kubernetes RBAC matches both
+  `User` and `ServiceAccount` subjects by name alone, with no cluster or object-UID binding, so
+  any subject a binding lists matches that name on every cluster the binding exists on. A
+  `User` subject whose name happens to be `system:serviceaccount:<namespace>:<name>` would in
+  fact match that in-cluster ServiceAccount's authenticated username. Choosing `User` does not
+  fence the grant to a particular cluster; the fleet-wide reach of a subject is a property of
+  RBAC name matching that applies to every subject kind equally.
 
 The provider therefore never emits a `ServiceAccount` subject and never parses
-`spec.name` for a `system:serviceaccount:` prefix. If a future use case genuinely needs to
-target an in-cluster ServiceAccount, that is a separately motivated addition, not an
-overload of this field.
+`spec.name` for a `system:serviceaccount:` prefix. If a future use case genuinely needs
+permission-manager to manage an in-cluster ServiceAccount's access, that is a separately
+motivated addition, not an overload of this field.
 
 ### 5. One binding, mixed subjects
 
@@ -159,7 +182,17 @@ the provider. Encoding it as a per-capability carve-out would invent a second po
 that is both ungrounded and trivially circumvented (a ConnectorBinding author can define a
 non-MANAGE capability that is effectively admin).
 
-### 7. ServiceIdentity reconciler: validation and status only
+### 7. The Kubernetes operator self-selects on `connectorRefs`; the reconciler validates and writes status only
+
+The Kubernetes operator processes a ServiceIdentity only when its `spec.connectorRefs`
+resolves to a ConnectorBinding with `provider: kubernetes`, and ignores every ServiceIdentity
+whose refs name no Kubernetes connector. This is the same self-selection every provider
+operator already performs on an ASR (`internal/provider/k8s/ensure_bindings.go` filters
+`asr.Spec.ConnectorRefs` to `provider: kubernetes` bindings), applied to the new type: one
+ServiceIdentity can carry refs to several providers' connectors, and each provider acts only on
+the subset addressed to it. `connectorRefs` thus selects which operators handle the object; it
+does not change how the Kubernetes subject is built, which keys off `spec.roles` only (sections
+2 and 3 are unchanged).
 
 ServiceIdentity gets its own reconciler whose sole job is to validate the object and write
 its own status. It **never writes RBAC**. The clean split is:
@@ -177,19 +210,31 @@ it is the direct consequence of surfacing reference validity (below).
 ### 8. Validity is reference well-formedness, not referenced-ASR health
 
 The ServiceIdentity reconciler reports a `roles` entry as **resolved** iff an ASR with that
-name exists in the ServiceIdentity's namespace **and** has at least one `provider: kubernetes`
-ConnectorRef. It does **not** reflect the referenced ASR's own health onto the
-ServiceIdentity:
+name exists in the ServiceIdentity's namespace, has at least one `provider: kubernetes`
+ConnectorRef, **and** that Kubernetes ConnectorBinding is one the ServiceIdentity also lists in
+its own `connectorRefs` (the two share a Kubernetes sync connector). It does **not** reflect
+the referenced ASR's own health onto the ServiceIdentity:
 
 - An ASR that exists and is a Kubernetes ASR but is itself in `InvalidConfig`, or resolves to
   zero target clusters, still counts as resolved. Those problems surface on the ASR's own
   status.
 
-This keeps ServiceIdentity status answering one question - "do my references point at real
-Kubernetes ASRs?" - and avoids cascading, flapping status that would mirror every ASR
-transition onto every ServiceIdentity that references it.
+Only the Kubernetes **sync** connector has to match. The authentication connector that provisions
+the identity upstream (IAS, AD, etc.) is a separate concern and may differ between the
+ServiceIdentity and the ASR without affecting resolution.
 
-Unresolved references are surfaced as a single rollup condition, not a per-reference
+This keeps ServiceIdentity status answering one question - "do my references point at real
+Kubernetes ASRs I share a connector with?" - and avoids cascading, flapping status that would
+mirror every ASR transition onto every ServiceIdentity that references it.
+
+Two distinct reference failures are reported as separate rollup conditions:
+
+- **`DanglingRoleRef`** - a `roles` entry names no Kubernetes ASR in the namespace at all.
+- **`ConnectorMismatch`** - the named ASR exists and is a Kubernetes ASR, but it does not share
+  a Kubernetes connector with this ServiceIdentity, so the identity's grant would never land
+  anywhere this operator writes.
+
+Each is a single rollup condition naming the offending references, not a per-reference
 structured array, consistent with how every other type in this repository reports problems:
 
 ```yaml
@@ -199,6 +244,15 @@ status:
     status: "False"
     reason: DanglingRoleRef
     message: 'roles not found as kubernetes ASRs: some-asr-name, another-asr-name'
+```
+
+```yaml
+status:
+  conditions:
+  - type: Ready
+    status: "False"
+    reason: ConnectorMismatch
+    message: 'roles do not share a kubernetes connector with this ServiceIdentity: some-asr-name'
 ```
 
 A per-reference machine-readable status array is deliberately not introduced; nothing
@@ -228,10 +282,30 @@ identity once the cluster is reachable. If the ASR itself is deleted, its own
 finalizer-protected delete path (`pm.cloudoperators.dev/cleanup`) tears down the whole
 binding.
 
-The residual property is latency, not correctness: in the pathological missed-event case the
-stale `User` subject persists until the next reconcile of the affected ASRs. Bounding that
-window is a resync-interval tuning question, not a reason to introduce a finalizer that could
-wedge ServiceIdentity deletion behind a stuck ASR.
+Revocation must hold even when the referenced ASR is itself `InvalidConfig`. The ASR apply
+and orphan-cleanup phases both bail early on `HasInvalidConfig()`
+(`internal/provider/k8s/ensure_applied.go`, `internal/provider/k8s/ensure_orphans_removed.go`),
+so a design that only removed a subject by recompiling and re-applying the whole binding would
+leave a deleted identity's `User` subject in place indefinitely on a healthy cluster: grant an
+identity, drive the ASR invalid, then delete the identity, and the stale subject survives every
+subsequent reconcile. That is a revocation failure, not a latency bound.
+
+The provider therefore reconciles the `subjects` of an ASR's **previously applied** bindings to
+the live-derived set on every reconcile, including when the ASR is `InvalidConfig`. This step is
+the subject-only operation from section 3: it reads the live ServiceIdentity list and rewrites the
+`subjects` of bindings the ASR has already applied, and it is **not** gated on
+`HasInvalidConfig()` the way role compilation and binding creation are. Crucially it only
+narrows: while invalid, the provider rewrites `subjects` on bindings that already exist but does
+not create new bindings (that still requires a valid compile), so the invalid-config path can
+only remove access, never widen it. This matches the existing "tighten before expand" ordering
+and the orphan-cleanup safety rationale: revocation is always safe to run, expansion is gated on
+a trustworthy view of intent.
+
+The residual property is then genuinely latency, not correctness, and the bound holds in the
+`InvalidConfig` case too: in the pathological missed-event case the stale `User` subject persists
+only until the next reconcile of the affected ASRs. Bounding that window is a resync-interval
+tuning question, not a reason to introduce a finalizer that could wedge ServiceIdentity deletion
+behind a stuck ASR.
 
 ### Examples
 
@@ -274,16 +348,15 @@ spec:
 
 ## Open questions
 
-- **Purpose of `spec.connectorRefs` for the Kubernetes provider.** In the reverse-lookup
-  model the referenced ASRs' own `connectorRefs` fully determine where RBAC lands, so the
-  ServiceIdentity's own `connectorRefs` has nothing left to decide for the Kubernetes RBAC
-  path. Two readings remain: it is an intersection/filter that narrows a linked ASR's
-  connectors to a subset (load-bearing - would change the subject derivation), or it is
-  identity-domain scoping that matters only for other providers where the identity must be
-  provisioned, and is inert for Kubernetes. This ADR records the **inert-for-Kubernetes**
-  behavior (the subject derivation keys off `spec.roles` only; `connectorRefs` is used only by
-  the ServiceIdentity reconciler for its own validity reporting) and flags the question for the
-  original CRD author. Revisit if `connectorRefs` was intended as a grant gate.
+- **`spec.connectorRefs` as a per-ASR connector intersection.** `connectorRefs` is resolved as
+  the self-selection filter (section 7): it decides which provider operators act on the
+  ServiceIdentity and gates reference validity (section 8). What it does **not** currently do is
+  narrow an individually referenced ASR's connector set to a subset - a ServiceIdentity's user
+  lands on every Kubernetes connector its referenced ASRs target, following each ASR's own
+  resolution (section 9). If a future use case needs a ServiceIdentity to receive an ASR's access
+  on only some of that ASR's Kubernetes connectors, `connectorRefs` is the natural place to
+  express it, and subject derivation would then become connector-aware. That is a separately
+  motivated extension, not part of this ADR.
 
 ## Consequences
 
@@ -307,9 +380,11 @@ spec:
   additive but is a divergence from the ported CRD.
 - A deleted ServiceIdentity's stale subject is removed eventually, not atomically with the
   object's deletion; the removal latency on an unavailable-then-recovered cluster is bounded by
-  the reconcile/resync interval.
-- The meaning of `spec.connectorRefs` for the Kubernetes provider is unresolved (see open
-  questions). The recorded behavior treats it as inert for Kubernetes.
+  the reconcile/resync interval. Because subject reconciliation runs even when the referenced
+  ASR is `InvalidConfig` (section 10), this is a true latency bound rather than a revocation gap.
+- `spec.connectorRefs` is the Kubernetes operator's self-selection filter and gates reference
+  validity, but does not narrow a referenced ASR's connector set per identity (see open
+  questions).
 
 **Related:**
 
@@ -322,5 +397,10 @@ spec:
   depends on that per-ASR-binding invariant and is sequenced after ADR-018's implementation.
 - `internal/provider/k8s/ensure_compiled.go` - `buildClusterScopedRBAC` /
   `buildNamespaceScopedRBAC` to be extended to append `User` subjects.
+- `internal/provider/k8s/ensure_applied.go` / `internal/provider/k8s/ensure_orphans_removed.go`
+  - both bail on `HasInvalidConfig()`; the subject-reconciliation step (section 10) must rewrite
+  `subjects` on already-applied bindings without that guard so revocation holds on an invalid ASR.
+- `internal/provider/k8s/ensure_bindings.go` - the existing `provider: kubernetes` self-selection
+  filter on `asr.Spec.ConnectorRefs`, mirrored for ServiceIdentity (section 7).
 - `internal/controller/asr_controller.go` - to gain a ServiceIdentity watch that re-enqueues
   referenced ASRs.
