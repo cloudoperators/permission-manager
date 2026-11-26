@@ -267,6 +267,19 @@ graph TB
 
 ---
 
+### T13: Privilege Grant to an Arbitrary Username via ServiceIdentity
+
+| Field | Value |
+|-------|-------|
+| **ID** | T13 |
+| **STRIDE** | Elevation of Privilege / Spoofing |
+| **Attack Vector** | A `ServiceIdentity` (ADR-019) adds its `spec.name` as a `User` subject on the bindings of every ASR it references. Whoever can create or edit a ServiceIdentity can therefore bind any referenced ASR's access — up to `cluster-admin` — to an arbitrary Kubernetes username. Two sub-vectors: (a) naming a built-in principal — e.g. `system:anonymous` (every unauthenticated request) or `system:serviceaccount:<ns>:<sa>` (any pod running as that ServiceAccount) — to hand it the ASR's access; (b) choosing a username that, on some target cluster, collides with a real principal minted by a different issuer, since RBAC matches `User` subjects by name alone across all clusters. |
+| **Impact** | An attacker who can write ServiceIdentities grants the access of any ASR, on every cluster that ASR targets, to a name they control at authentication time or to a built-in principal — with no GitOps review if admission is not enforced. |
+| **Mitigation** | **Admission (TB-4) must cover `serviceidentities`** — the same allowlist that gates ASR/ConnectorBinding writes applies, so grants flow only through Git-reviewed automation. `system:` usernames are rejected by the CRD (CEL `!startsWith('system:')`) and skipped by the provider, so a ServiceIdentity cannot name a built-in principal. Each target cluster's structured-auth `claimMappings.username` must prefix usernames per issuer (e.g. `ci1:`) so a name minted by one issuer cannot match a different principal elsewhere. The prior-art `approvers` field is intentionally not ported; authorization is GitOps review + webhook policy. |
+| **Residual Risk** | **Low** with admission + issuer-unique prefixes. Without the webhook covering `serviceidentities`, **High** — equivalent to unrestricted ASR authorship (T12). |
+
+---
+
 ## 6. Controller's Own RBAC
 
 The Kubernetes provider's ServiceAccount (`pm-controller-kubernetes`) is granted a ClusterRole with the following permissions on the **management cluster**:
