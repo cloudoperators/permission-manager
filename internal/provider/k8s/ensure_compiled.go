@@ -163,10 +163,10 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 							roleName = sharedRoleName(rc.cbName, sc, up)
 						}
 						c.crbs = append(c.crbs, buildCoarseClusterRoleBinding(
-							asr.Name, asr.Namespace, asr.Spec.Name, coarseBindingName(asr.Namespace, asr.Name, rc.cbName, sc, up), roleName))
+							asr.Name, asr.Namespace, asr.Spec.Name, p.extraUsers, coarseBindingName(asr.Namespace, asr.Name, rc.cbName, sc, up), roleName))
 					} else {
 						c.rbs = append(c.rbs, buildCoarseRoleBinding(
-							asr.Name, asr.Namespace, asr.Spec.Name, parsed.Namespace,
+							asr.Name, asr.Namespace, asr.Spec.Name, p.extraUsers, parsed.Namespace,
 							coarseBindingName(asr.Namespace, asr.Name, rc.cbName, sc, up),
 							sharedRoleName(rc.cbName, sc, up)))
 					}
@@ -187,12 +187,12 @@ func (p *Phase) EnsureRbacCompiled(asr *v1alpha1.ApplicationSpecificRole) lifecy
 			target := compiledTarget{clusterName: clusterName}
 			if s, ok := scopes[clusterName]; ok {
 				if !s.clusterRules.empty() {
-					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, s.clusterRules)
+					cr, crb := buildClusterScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, p.extraUsers, s.clusterRules)
 					target.clusterRoles = append(target.clusterRoles, *cr)
 					target.clusterRoleBindings = append(target.clusterRoleBindings, *crb)
 				}
 				for _, ns := range sortedKeys(s.namespaceRules) {
-					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, ns, s.namespaceRules[ns])
+					role, rb := buildNamespaceScopedRBAC(asr.Name, asr.Namespace, asr.Spec.Name, ns, p.extraUsers, s.namespaceRules[ns])
 					target.roles = append(target.roles, *role)
 					target.roleBindings = append(target.roleBindings, *rb)
 				}
@@ -286,8 +286,15 @@ func getClusterFromStore(store cache.Store, namespace, name string) (*greenhouse
 	return cluster, ok
 }
 
+// bindingSubjects returns the ASR's Group subject followed by any ServiceIdentity User subjects.
+func bindingSubjects(specName string, extraUsers []rbacv1.Subject) []rbacv1.Subject {
+	subjects := make([]rbacv1.Subject, 0, 1+len(extraUsers))
+	subjects = append(subjects, rbacv1.Subject{Kind: "Group", Name: specName, APIGroup: rbacAPIGroup})
+	return append(subjects, extraUsers...)
+}
+
 // buildClusterScopedRBAC materializes a cluster-wide ClusterRole + ClusterRoleBinding.
-func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
+func buildClusterScopedRBAC(asrName, asrNamespace, specName string, extraUsers []rbacv1.Subject, rules *policyRuleSet) (*rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding) {
 	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
 		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
@@ -305,17 +312,13 @@ func buildClusterScopedRBAC(asrName, asrNamespace, specName string, rules *polic
 			Kind:     kindClusterRole,
 			Name:     resourceName,
 		},
-		Subjects: []rbacv1.Subject{{
-			Kind:     "Group",
-			Name:     specName,
-			APIGroup: rbacAPIGroup,
-		}},
+		Subjects: bindingSubjects(specName, extraUsers),
 	}
 	return cr, crb
 }
 
 // buildNamespaceScopedRBAC materializes a namespace-scoped Role + RoleBinding.
-func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
+func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, extraUsers []rbacv1.Subject, rules *policyRuleSet) (*rbacv1.Role, *rbacv1.RoleBinding) {
 	resourceName := perASRNamePrefix + asrName
 	labels := map[string]string{
 		pmapis.LabelManagedByKey:    pmapis.ManagedByPMController,
@@ -333,11 +336,7 @@ func buildNamespaceScopedRBAC(asrName, asrNamespace, specName, ns string, rules 
 			Kind:     kindRole,
 			Name:     resourceName,
 		},
-		Subjects: []rbacv1.Subject{{
-			Kind:     "Group",
-			Name:     specName,
-			APIGroup: rbacAPIGroup,
-		}},
+		Subjects: bindingSubjects(specName, extraUsers),
 	}
 	return role, rb
 }

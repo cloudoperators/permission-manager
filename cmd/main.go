@@ -214,6 +214,11 @@ func main() {
 		auditLogger = audit.New(os.Stdout, "asr-controller", version)
 	}
 
+	if err := pmcontroller.SetupIndexes(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up field indexes")
+		os.Exit(1)
+	}
+
 	if err := (&pmcontroller.ASRReconciler{
 		Client:                  mgr.GetClient(),
 		Cfg:                     providerCfg,

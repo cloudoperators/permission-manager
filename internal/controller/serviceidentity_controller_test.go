@@ -13,6 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	pmapis "github.com/cloudoperators/permission-manager/api"
 	pmmeta "github.com/cloudoperators/permission-manager/api/meta"
@@ -215,6 +216,47 @@ func TestServiceIdentity_EnqueueForASR(t *testing.T) {
 	reqs := r.enqueueServiceIdentitiesForASR(context.Background(), siASR("my-asr", "sci-k8s"))
 	if len(reqs) != 1 || reqs[0].Name != "ref" {
 		t.Errorf("expected exactly the referencing ServiceIdentity 'ref', got %+v", reqs)
+	}
+}
+
+// TestASR_EnqueueForServiceIdentity: the ASR controller maps a changed ServiceIdentity to one
+// request per referenced role.
+func TestASR_EnqueueForServiceIdentity(t *testing.T) {
+	r := &ASRReconciler{}
+	si := serviceIdentity("ci1", []string{"sci-k8s"}, []string{"asr-a", "asr-b"})
+
+	reqs := r.enqueueASRsForServiceIdentity(context.Background(), si)
+	got := map[string]bool{}
+	for _, req := range reqs {
+		if req.Namespace != "default" {
+			t.Errorf("request namespace = %q, want default", req.Namespace)
+		}
+		got[req.Name] = true
+	}
+	if len(reqs) != 2 || !got["asr-a"] || !got["asr-b"] {
+		t.Errorf("expected requests for asr-a and asr-b, got %+v", reqs)
+	}
+}
+
+// TestServiceIdentityTriggersReconcile: the watch predicate fires on role/username changes but
+// not on status-only churn.
+func TestServiceIdentityTriggersReconcile(t *testing.T) {
+	base := serviceIdentity("ci1", []string{"sci-k8s"}, []string{"asr-a"})
+
+	if serviceIdentityTriggersReconcile(event.UpdateEvent{ObjectOld: base, ObjectNew: base.DeepCopy()}) {
+		t.Error("status-only churn should not trigger reconcile")
+	}
+
+	rolesChanged := base.DeepCopy()
+	rolesChanged.Spec.Roles = []string{"asr-a", "asr-b"}
+	if !serviceIdentityTriggersReconcile(event.UpdateEvent{ObjectOld: base, ObjectNew: rolesChanged}) {
+		t.Error("spec.roles change should trigger reconcile")
+	}
+
+	nameChanged := base.DeepCopy()
+	nameChanged.Spec.Name = "ci1:eu-de-1"
+	if !serviceIdentityTriggersReconcile(event.UpdateEvent{ObjectOld: base, ObjectNew: nameChanged}) {
+		t.Error("spec.name change should trigger reconcile")
 	}
 }
 

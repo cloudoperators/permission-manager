@@ -34,6 +34,10 @@ type Phase struct {
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding
 
+	// extraUsers are User subjects from ServiceIdentities referencing this ASR, appended to
+	// every binding alongside the ASR's Group subject (ADR-019).
+	extraUsers []rbacv1.Subject
+
 	// compiled RBAC objects, one entry per matched cluster.
 	compiled []compiledTarget
 

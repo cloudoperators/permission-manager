@@ -38,29 +38,9 @@ type ServiceIdentityReconciler struct {
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=serviceidentities,verbs=get;list;watch
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=serviceidentities/status,verbs=get;update;patch
 
-// SetupWithManager registers the ServiceIdentity controller and its field indexes.
+// SetupWithManager registers the ServiceIdentity controller. Field indexes are registered once in
+// SetupIndexes.
 func (r *ServiceIdentityReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.ServiceIdentity{}, pmapis.ServiceIdentityRolesField,
-		func(obj client.Object) []string {
-			si, ok := obj.(*v1alpha1.ServiceIdentity)
-			if !ok {
-				return nil
-			}
-			return si.Spec.Roles
-		}); err != nil {
-		return err
-	}
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.ServiceIdentity{}, pmapis.ServiceIdentityConnectorRefsField,
-		func(obj client.Object) []string {
-			si, ok := obj.(*v1alpha1.ServiceIdentity)
-			if !ok {
-				return nil
-			}
-			return si.Spec.ConnectorRefs
-		}); err != nil {
-		return err
-	}
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ServiceIdentity{}).
 		Watches(

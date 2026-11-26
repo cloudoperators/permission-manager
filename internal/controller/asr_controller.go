@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 
 	greenhousev1alpha1 "github.com/cloudoperators/greenhouse/api/v1alpha1"
 	repoguardv1 "github.com/cloudoperators/repo-guard/api/v1"
@@ -58,6 +59,7 @@ type ASRReconciler struct {
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=applicationspecificroles/finalizers,verbs=update
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=connectorbindings,verbs=get;list;watch
 // +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=functionalroles,verbs=get;list;watch
+// +kubebuilder:rbac:groups=permission-manager.cloudoperators.dev,resources=serviceidentities,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="events.k8s.io",resources=events,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=greenhouse.sap,resources=clusters,verbs=get;list;watch
@@ -80,21 +82,6 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.k8sClusterStore = sharedInformer.GetStore()
 	r.ghPhase = github.New(r.Client, r.AuditLog, r.Log)
 	r.ghPhase.APIReader = mgr.GetAPIReader()
-
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&v1alpha1.ApplicationSpecificRole{},
-		pmapis.ASRConnectorRefsField,
-		func(obj client.Object) []string {
-			asr, ok := obj.(*v1alpha1.ApplicationSpecificRole)
-			if !ok {
-				return nil
-			}
-			return asr.Spec.ConnectorRefs
-		},
-	); err != nil {
-		return err
-	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ApplicationSpecificRole{}).
@@ -129,6 +116,18 @@ func (r *ASRReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&greenhousev1alpha1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueASRsForCluster),
+		).
+		Watches(
+			// Re-enqueue the ASRs a ServiceIdentity references so they recompute subjects.
+			// Fires on Create/Delete and on spec.roles/spec.name change, not status churn.
+			&v1alpha1.ServiceIdentity{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueASRsForServiceIdentity),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return true },
+				UpdateFunc:  serviceIdentityTriggersReconcile,
+				DeleteFunc:  func(event.DeleteEvent) bool { return true },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			}),
 		).
 		Complete(r)
 }
@@ -233,6 +232,7 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 	routines := []lifecycle.SubRoutine{
 		p.EnsureASRValidity(asr),
 		p.EnsureConnectorBindings(asr),
+		p.EnsureSubjects(asr),
 		p.EnsureSharedClusterRoles(asr),
 		p.EnsureRbacCompiled(asr),
 		p.EnsureOrphansCleanedUp(asr),
@@ -264,6 +264,39 @@ func (r *ASRReconciler) cleanUpKubernetes(ctx context.Context, asr *v1alpha1.App
 // GetEventRecorder returns the event recorder.
 func (r *ASRReconciler) GetEventRecorder() events.EventRecorder {
 	return r.recorder
+}
+
+// enqueueASRsForServiceIdentity enqueues the ASRs a ServiceIdentity references so they
+// recompute their binding subjects. Uses the object's own spec.roles (present even on delete).
+func (r *ASRReconciler) enqueueASRsForServiceIdentity(_ context.Context, obj client.Object) []ctrl.Request {
+	si, ok := obj.(*v1alpha1.ServiceIdentity)
+	if !ok {
+		return nil
+	}
+	requests := make([]ctrl.Request, 0, len(si.Spec.Roles))
+	for _, role := range si.Spec.Roles {
+		requests = append(requests, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: role, Namespace: si.Namespace},
+		})
+	}
+	return requests
+}
+
+// serviceIdentityTriggersReconcile fires when a change affects derived subjects: the referenced
+// roles, the username, the connector set, or the identity entering deletion. Status-only churn is
+// ignored.
+func serviceIdentityTriggersReconcile(e event.UpdateEvent) bool {
+	oldSI, ok1 := e.ObjectOld.(*v1alpha1.ServiceIdentity)
+	newSI, ok2 := e.ObjectNew.(*v1alpha1.ServiceIdentity)
+	if !ok1 || !ok2 {
+		return false
+	}
+	if oldSI.DeletionTimestamp.IsZero() != newSI.DeletionTimestamp.IsZero() {
+		return true
+	}
+	return oldSI.Spec.Name != newSI.Spec.Name ||
+		!slices.Equal(oldSI.Spec.Roles, newSI.Spec.Roles) ||
+		!slices.Equal(oldSI.Spec.ConnectorRefs, newSI.Spec.ConnectorRefs)
 }
 
 // reconcileAllASRs reloads pm-provider-cm and enqueues all ASRs.

@@ -30,6 +30,14 @@ func (p *Phase) SetCBs(cbs []*v1alpha1.ConnectorBinding) {
 	p.cbs = cbs
 }
 
+func (p *Phase) SetExtraUsers(s []rbacv1.Subject) {
+	p.extraUsers = s
+}
+
+func (p *Phase) ExtraUsers() []rbacv1.Subject {
+	return p.extraUsers
+}
+
 // ASRLabelValue exposes asrLabelValue to the external test package.
 func ASRLabelValue(asrName string) string {
 	return asrLabelValue(asrName)
