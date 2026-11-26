@@ -78,6 +78,22 @@ rules:
       - list
       - watch
   - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - serviceidentities
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - permission-manager.cloudoperators.dev
+    resources:
+      - serviceidentities/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
       - repo-guard.cloudoperators.dev
     resources:
       - githuborganizations

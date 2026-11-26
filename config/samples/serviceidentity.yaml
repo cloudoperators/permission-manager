@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and Greenhouse contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Example: ServiceIdentity granting a CI pipeline user the access of a kubernetes ASR.
+# spec.name is the literal Kubernetes username the pipeline authenticates as (e.g. an OIDC
+# token's username claim); it becomes a User subject on the referenced ASRs' bindings, beside
+# the Group subject. connectorRefs selects the kubernetes connector; roles reference ASRs by
+# name in this namespace.
+apiVersion: permission-manager.cloudoperators.dev/v1alpha1
+kind: ServiceIdentity
+metadata:
+  name: ci1-core-openstack-neutron
+spec:
+  name: ci1:core:openstack-neutron
+  description: Neutron pipeline user on Ci1
+  connectorRefs:
+    - k8s-connector
+  roles:
+    - team-platform-monitoring-viewer

@@ -214,6 +214,11 @@ func main() {
 		auditLogger = audit.New(os.Stdout, "asr-controller", version)
 	}
 
+	if err := pmcontroller.SetupIndexes(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up field indexes")
+		os.Exit(1)
+	}
+
 	if err := (&pmcontroller.ASRReconciler{
 		Client:                  mgr.GetClient(),
 		Cfg:                     providerCfg,
@@ -225,6 +230,14 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "asr")
+		os.Exit(1)
+	}
+
+	if err := (&pmcontroller.ServiceIdentityReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("serviceidentity"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "serviceidentity")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

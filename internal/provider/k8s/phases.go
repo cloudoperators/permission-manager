@@ -34,6 +34,10 @@ type Phase struct {
 	// kubernetes ConnectorBindings referenced by the ASR.
 	cbs []*v1alpha1.ConnectorBinding
 
+	// extraUsers are User subjects from ServiceIdentities referencing this ASR, appended to
+	// every binding alongside the ASR's Group subject (ADR-019).
+	extraUsers []rbacv1.Subject
+
 	// compiled RBAC objects, one entry per matched cluster.
 	compiled []compiledTarget
 
@@ -54,6 +58,10 @@ type Phase struct {
 	// errors collected from each phase; aggregated by EnsureProviderStatus.
 	provisionErrs []error
 	orphanErrs    []error
+
+	// subjectErrs are ServiceIdentity subject-reconcile failures; aggregated by
+	// EnsureProviderStatus so they requeue without aborting the chain (status must still be written).
+	subjectErrs []error
 
 	// shared ClusterRole ensure failures keyed by cluster; folded into each
 	// cluster's outcome so a binding to a failed shared role fails the cluster.

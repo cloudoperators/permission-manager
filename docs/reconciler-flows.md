@@ -140,8 +140,13 @@ labels:
   permission-manager.cloudoperators.dev/cb: <connector-binding-name>
 ```
 
-The RBAC subject is always `Kind: Group, Name: <asr.spec.name>`. GitHub-owned
-resources are labelled `app.kubernetes.io/managed-by: github` plus
+Each binding's subjects are the ASR's `Kind: Group, Name: <asr.spec.name>` plus one
+`Kind: User` per ServiceIdentity that references the ASR and shares one of its kubernetes
+connectors (ADR-019). The subject set is re-derived from the live ServiceIdentity list every
+reconcile and applied wholesale; a dedicated subject-reconcile step also removes a deleted
+identity's `User` from already-applied bindings even when the ASR is `InvalidConfig` (revocation
+holds on an unreconcilable ASR, and only ever narrows). GitHub-owned resources are labelled
+`app.kubernetes.io/managed-by: github` plus
 `permission-manager.cloudoperators.dev/source-asr` and
 `.../source-namespace`.
 
