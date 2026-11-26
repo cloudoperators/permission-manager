@@ -244,16 +244,35 @@ The identity model is simple and universal:
 
 ## ServiceIdentity
 
-Technical/machine user template for service accounts:
+Grants a **named non-group identity** (e.g. a CI pipeline authenticating via OIDC) the access of
+the ASRs it references. Where an ASR binds a `Group` named after `spec.name`, a ServiceIdentity
+adds a `User` subject — its `spec.name` is the literal Kubernetes username — to the bindings of
+every ASR it lists.
 
 ```yaml
 apiVersion: permission-manager.cloudoperators.dev/v1alpha1
 kind: ServiceIdentity
 metadata:
-  name: monitoring-service
+  name: ci1-core-openstack-neutron
 spec:
-  name: MONITORING_SERVICE
-  connectorRefs: [k8s-connector]
-  roles:
-    - name: team-alpha-k8s-monitoring
+  name: ci1:core:openstack-neutron   # the Kubernetes username; may not start with "system:"
+  connectorRefs: [k8s-connector]      # selects the provider operator (kubernetes here)
+  roles:                              # ASR references, by bare name, in this namespace
+    - team-platform-monitoring-viewer
 ```
+
+Key properties (see ADR-019):
+
+- **Reverse lookup.** The ServiceIdentity points at ASRs; the ASR stays the sole owner/writer of
+  its RBAC. A ServiceIdentity owns no RBAC objects and has no finalizer.
+- **Subjects are `User`, never `ServiceAccount`.** An OIDC-authenticated identity is a `User` to
+  the target cluster regardless of its origin.
+- **Level-triggered.** The ASR re-derives its subjects from the live ServiceIdentity list every
+  reconcile; a watch makes convergence prompt but is not required for correctness.
+- **Validity = reference well-formedness.** Status reports `DanglingRoleRef` (role names no
+  kubernetes ASR) or `ConnectorMismatch` (ASR exists but shares no kubernetes connector), not the
+  referenced ASR's own health.
+- **Revocation holds under InvalidConfig.** Deleting a ServiceIdentity removes its `User` from the
+  bindings even when the referenced ASR is itself unreconcilable — the subject reconcile only ever
+  narrows access.
+

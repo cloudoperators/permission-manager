@@ -227,6 +227,14 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "asr")
 		os.Exit(1)
 	}
+
+	if err := (&pmcontroller.ServiceIdentityReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("serviceidentity"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "serviceidentity")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

@@ -40,6 +40,12 @@ const (
 	InvalidGithubCCRNReason        ConditionReason = "InvalidGithubCCRN"
 	UnmappedGithubCapabilityReason ConditionReason = "UnmappedGithubCapability"
 
+	// ServiceIdentity reference-validity reasons.
+	DanglingRoleRefReason   ConditionReason = "DanglingRoleRef"
+	ConnectorMismatchReason ConditionReason = "ConnectorMismatch"
+	RolesResolvedReason     ConditionReason = "RolesResolved"
+	InvalidUsernameReason   ConditionReason = "InvalidUsername"
+
 	ProvisioningSucceededReason ConditionReason = "ProvisioningSucceeded"
 	ProvisioningFailedReason    ConditionReason = "ProvisioningFailed"
 	PartialProvisioningReason   ConditionReason = "PartialProvisioning"

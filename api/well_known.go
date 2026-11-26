@@ -33,4 +33,11 @@ const (
 
 	// ASRConnectorRefsField is the field indexer path for ASR.spec.connectorRefs.
 	ASRConnectorRefsField = ".spec.connectorRefs"
+
+	// ServiceIdentityRolesField is the field indexer path for ServiceIdentity.spec.roles.
+	ServiceIdentityRolesField = ".spec.roles"
+
+	// ServiceIdentityConnectorRefsField is the field indexer path for ServiceIdentity.spec.connectorRefs.
+	// Field indexes are scoped per object type, so sharing the path string with ASR is fine.
+	ServiceIdentityConnectorRefsField = ".spec.connectorRefs"
 )

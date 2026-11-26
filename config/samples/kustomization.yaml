@@ -25,4 +25,5 @@ resources:
   - connector-binding-k8s.yaml
   - connector-binding-k8s-revoke-test.yaml
   - functional-role.yaml
+  - serviceidentity.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
