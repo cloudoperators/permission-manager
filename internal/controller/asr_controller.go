@@ -237,6 +237,7 @@ func (r *ASRReconciler) reconcileKubernetes(ctx context.Context, asr *v1alpha1.A
 		p.EnsureRbacCompiled(asr),
 		p.EnsureOrphansCleanedUp(asr),
 		p.EnsureRbacApplied(asr),
+		p.EnsureSubjectsReconciled(asr),
 		p.EnsureSharedClusterRoleOrphansRemoved(asr),
 		p.EnsureLegacyRBACRemoved(asr),
 		p.EnsureProviderStatus(asr),

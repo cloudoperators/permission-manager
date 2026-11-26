@@ -59,6 +59,10 @@ type Phase struct {
 	provisionErrs []error
 	orphanErrs    []error
 
+	// subjectErrs are ServiceIdentity subject-reconcile failures; aggregated by
+	// EnsureProviderStatus so they requeue without aborting the chain (status must still be written).
+	subjectErrs []error
+
 	// shared ClusterRole ensure failures keyed by cluster; folded into each
 	// cluster's outcome so a binding to a failed shared role fails the cluster.
 	sharedRoleErrByCluster map[string]error

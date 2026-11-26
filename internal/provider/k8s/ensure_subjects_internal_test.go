@@ -69,3 +69,28 @@ func TestBuilders_NoServiceIdentityUnchanged(t *testing.T) {
 	crb2 := buildCoarseRoleBinding("a", "ns", "grp", nil, "team-ns", "bind", "role")
 	onlyGroup(t, "buildCoarseRoleBinding", crb2.Subjects)
 }
+
+func TestNarrowSubjects(t *testing.T) {
+	subjects := []rbacv1.Subject{
+		{Kind: "Group", Name: "my-asr", APIGroup: rbacAPIGroup},
+		{Kind: "User", Name: "ci1", APIGroup: rbacAPIGroup},
+		{Kind: "User", Name: "ci2", APIGroup: rbacAPIGroup},
+	}
+
+	// ci2 no longer granted: dropped; Group and ci1 kept.
+	got, changed := narrowSubjects(subjects, map[string]struct{}{"ci1": {}})
+	if !changed || len(got) != 2 || got[0].Kind != "Group" || got[1].Name != "ci1" {
+		t.Errorf("narrow = %+v (changed=%v), want [Group, User ci1]", got, changed)
+	}
+
+	// All still granted: unchanged.
+	if _, stillChanged := narrowSubjects(subjects, map[string]struct{}{"ci1": {}, "ci2": {}}); stillChanged {
+		t.Error("no stale users should mean no change")
+	}
+
+	// Never adds: a lone Group stays a lone Group even though ci1 is wanted.
+	got, changed = narrowSubjects([]rbacv1.Subject{{Kind: "Group", Name: "my-asr", APIGroup: rbacAPIGroup}}, map[string]struct{}{"ci1": {}})
+	if changed || len(got) != 1 {
+		t.Errorf("narrow must never add subjects, got %+v (changed=%v)", got, changed)
+	}
+}

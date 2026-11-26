@@ -24,7 +24,10 @@ func (p *Phase) EnsureProviderStatus(asr *v1alpha1.ApplicationSpecificRole) life
 		p.writeProviderStatus(asr)
 		asr.CalculateReady()
 
-		if err := utilerrors.NewAggregate(append(p.provisionErrs, p.orphanErrs...)); err != nil {
+		errs := append([]error{}, p.provisionErrs...)
+		errs = append(errs, p.orphanErrs...)
+		errs = append(errs, p.subjectErrs...)
+		if err := utilerrors.NewAggregate(errs); err != nil {
 			return lifecycle.Break(), err
 		}
 		return lifecycle.Continue(), nil
@@ -44,10 +47,17 @@ func (p *Phase) writeProviderStatus(asr *v1alpha1.ApplicationSpecificRole) {
 		if len(p.invalidCCRNs) > 0 {
 			parts = append(parts, fmt.Sprintf("invalid CCRNs: %v", p.invalidCCRNs))
 		}
+		degraded := pmmeta.DegradedProviderStatus(strings.Join(parts, "; "))
+		// Keep the existing Targets so the clusters this ASR applied to remain known while
+		// invalid: subject revocation (EnsureSubjectsReconciled) and delete-path cleanup both
+		// read status.providers.kubernetes.targets to find those clusters.
+		if existing := pmmeta.GetProviderStatus(asr.Status.Providers, pmmeta.ProviderKubernetes); existing != nil {
+			degraded.Targets = existing.Targets
+		}
 		asr.Status.Providers = pmmeta.SetProviderStatus(
 			asr.Status.Providers,
 			pmmeta.ProviderKubernetes,
-			pmmeta.DegradedProviderStatus(strings.Join(parts, "; ")),
+			degraded,
 		)
 		return
 	}
